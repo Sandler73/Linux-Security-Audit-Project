@@ -1,4 +1,4 @@
-# Linux-Security-Audit-and-Remediation-Script
+# Linux Security Audit and Remediation Script
 
 # Linux Security Audit Script v3.1
 
