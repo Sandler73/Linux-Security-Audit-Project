@@ -17,16 +17,16 @@ Audit a Linux system against **CIS Benchmark, NIST 800-53, DISA STIG, NSA Harden
 
 ## 🎯 Overview
 
-`linux_security_audit.py` is an attempt at a comprehensive security auditing tool that evaluates the Linux system against multiple compliance frameworks simultaneously. Whether you're hardening a new server, maintaining compliance for government contracts, or conducting routine security assessments, this tool provides:
+`linux_security_audit.py` is an attempt at a comprehensive security auditing tool that evaluates the Linux system against multiple compliance frameworks simultaneously. Whether the intent is hardening a new server, maintaining compliance for government contracts, or conducting routine security assessments, this tool provides:
 
 - **136+ security checks** across 20+ categories
 - **Multi-framework compliance mapping** (every check mapped to applicable standards)
 - **95%+ automated remediation** with interactive fix application
 - **Framework-specific filtering** to target exactly what you need
-- **Professional reports** in Text, HTML, JSON, and CSV formats
+- **Professionalized reports** in Text, HTML, JSON, and CSV formats
 - **Per-framework compliance scoring** to track your progress
 
-**Perfect for:**
+**Potentially useful for:**
 - 🏛️ Government contractors (DISA STIG compliance)
 - 🏢 Federal agencies (NIST 800-53 compliance)
 - 🏥 Healthcare (HIPAA technical safeguards)
