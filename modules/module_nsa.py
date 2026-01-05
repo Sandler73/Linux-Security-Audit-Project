@@ -61,6 +61,14 @@ DESCRIPTION:
 PARAMETERS:
     shared_data : Dictionary containing shared data from main script
 
+USAGE:
+# Standalone testing
+cd /mnt/user-data/outputs/modules
+python3 module_nsa.py
+
+# Integrated with main script
+python3 linux_security_audit.py -m nsa
+
 NOTES:
     Version: 1.0
     Reference: https://www.nsa.gov/cybersecurity-guidance/
