@@ -54,6 +54,14 @@ DESCRIPTION:
 PARAMETERS:
     shared_data : Dictionary containing shared data from main script
 
+USAGE:
+# Standalone testing
+cd /mnt/user-data/outputs/modules
+python3 module_nist.py
+
+# Integrated with main script
+python3 linux_security_audit.py -m nist
+
 NOTES:
     Version: 1.0
     Reference: https://www.nist.gov/cyberframework
