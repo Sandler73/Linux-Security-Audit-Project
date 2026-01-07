@@ -3,7 +3,7 @@
 linux_security_audit.py
 Comprehensive Linux Security Audit Script
 Version: 1.1
-GitHub: https://github.com/YourRepo/Linux-Security-Audit-Script
+GitHub: https://github.com/Sandler73/Linux-Security-Audit-Project.git
 
 SYNOPSIS:
     Comprehensive module-based Linux security audit script supporting multiple compliance frameworks.
