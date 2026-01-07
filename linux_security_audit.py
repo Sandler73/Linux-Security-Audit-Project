@@ -2,7 +2,7 @@
 """
 linux_security_audit.py
 Comprehensive Linux Security Audit Script
-Version: 1.0
+Version: 1.1
 GitHub: https://github.com/YourRepo/Linux-Security-Audit-Script
 
 SYNOPSIS:
@@ -14,6 +14,8 @@ DESCRIPTION:
     - CIS Benchmarks
     - CISA Best Practices
     - DISA STIGs
+    - ENISA Cybersecurity Guidelines
+    - ISO/IEC 27001 Information Security Management
     - NIST Cybersecurity Framework
     - NSA Cybersecurity Guidance
     
@@ -204,6 +206,8 @@ def print_banner():
     print_colored("  - CIS Benchmarks", Colors.GRAY)
     print_colored("  - CISA Best Practices", Colors.GRAY)
     print_colored("  - DISA STIGs", Colors.GRAY)
+    print_colored("  - ENISA Cybersecurity Guidelines", Colors.GRAY)
+    print_colored("  - ISO/IEC 27001 Information Security Management", Colors.GRAY)
     print_colored("  - NIST Cybersecurity Framework", Colors.GRAY)
     print_colored("  - NSA Cybersecurity Guidance", Colors.GRAY)
     print_colored("\n" + "=" * 100 + "\n", Colors.CYAN)
