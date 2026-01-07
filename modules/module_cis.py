@@ -2932,9 +2932,26 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
             remediation="Review module logs"
         ))
     
-    print(f"\n[{MODULE_NAME}] ===== CIS AUDIT COMPLETED =====")
-    print(f"[{MODULE_NAME}] Total checks performed: {len(results)}")
-    print(f"[{MODULE_NAME}] ========================================\n")
+    # Generate summary statistics
+    pass_count = sum(1 for r in results if r.status == "Pass")
+    fail_count = sum(1 for r in results if r.status == "Fail")
+    warn_count = sum(1 for r in results if r.status == "Warning")
+    info_count = sum(1 for r in results if r.status == "Info")
+    error_count = sum(1 for r in results if r.status == "Error")
+    
+    print(f"\n[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] CIS BENCHMARK SECURITY AUDIT COMPLETED")
+    print(f"[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] Total checks executed: {len(results)}")
+    print(f"[{MODULE_NAME}] ")
+    print(f"[{MODULE_NAME}] Results Summary:")
+    print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   ❌ Fail:    {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
+    if error_count > 0:
+        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
+    print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     return results
 
