@@ -1946,13 +1946,34 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         f"Critical failures: {critical_fail}, High failures: {high_fail}, "
         f"Medium failures: {medium_fail}, Low failures: {low_fail}"
     )
+
+    # Generate summary statistics
+    pass_count = sum(1 for r in results if r.status == "Pass")
+    fail_count = sum(1 for r in results if r.status == "Fail")
+    warn_count = sum(1 for r in results if r.status == "Warning")
+    info_count = sum(1 for r in results if r.status == "Info")
+    error_count = sum(1 for r in results if r.status == "Error")
     
-    print(f"\n[{MODULE_NAME}] ===== AUDIT COMPLETED =====")
-    print(f"[{MODULE_NAME}] Total checks: {len(results)}")
+    print(f"\n[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] CISA SECURITY AUDIT COMPLETED")
+    print(f"[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] Total checks executed: {len(results)}")
     print(f"[{MODULE_NAME}] BOD 22-01 checks: {bod_22_01_checks}")
     print(f"[{MODULE_NAME}] BOD 23-01 checks: {bod_23_01_checks}")
     print(f"[{MODULE_NAME}] Priority summary: {summary_details}")
-    print(f"[{MODULE_NAME}] ================================\n")
+    print(f"[{MODULE_NAME}]   🔴 Critical Failures: {critical_fail}")
+    print(f"[{MODULE_NAME}]   🟠 High Failures: {high_fail}")
+    print(f"[{MODULE_NAME}]   🟡 Medium Failures: {medium_fail}")
+    print(f"[{MODULE_NAME}]   🟣 Low Failures: {low_fail}")
+    print(f"[{MODULE_NAME}] ")
+    print(f"[{MODULE_NAME}] Results Summary:")
+    print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   ❌ Fail:    {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
+    if error_count > 0:
+        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
+    print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     return results
 
