@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 module_stig.py
-DISA STIG (Security Technical Implementation Guide) Module for Linux
-Version: 1.0
+STIG (Security Technical Implementation Guide) Module for Linux
+Version: 2.1
 
 SYNOPSIS:
     Comprehensive DISA STIG (Security Technical Implementation Guide)
@@ -11,14 +11,14 @@ SYNOPSIS:
 DESCRIPTION:
     This module performs exhaustive security checks based on DISA STIG:
     
-    DISA STIG Compliance (200+ real checks):
-    - Access Control (AC) - 40+ checks
-    - Audit and Accountability (AU) - 30+ checks
-    - Identification and Authentication (IA) - 30+ checks
-    - System and Information Integrity (SI) - 30+ checks
-    - Configuration Management (CM) - 30+ checks
-    - System and Communications Protection (SC) - 30+ checks
-    - Additional STIG Requirements - 30+ checks
+    DISA STIG Compliance:
+    - Access Control (AC)
+    - Audit and Accountability (AU)
+    - Identification and Authentication (IA)
+    - System and Information Integrity (SI)
+    - Configuration Management (CM)
+    - System and Communications Protection (SC)
+    - Additional STIG Requirements
     
     Key STIG Publications Covered:
     - Red Hat Enterprise Linux (RHEL) STIG
@@ -44,19 +44,20 @@ PARAMETERS:
     shared_data : Dictionary containing shared data from main script
 
 USAGE:
-# Standalone testing
-cd /mnt/user-data/outputs/modules
-python3 module_stig.py
+    Standalone testing
+        python3 module_stig.py
 
-# Integrated with main script
-python3 linux_security_audit.py -m stig
+    Integration with main audit script
+        python3 linux_security_audit.py --modules STIG
+        python3 linux_security_audit.py -m STIG
 
 NOTES:
-    Version: 1.0.0
+    Version: 2.1
     Reference: https://public.cyber.mil/stigs/
     Focus: DoD security requirements for Linux systems
 	Standards: DISA STIG & DoD 8500 series
-    Target: 200+ comprehensive, real security checks
+    Target: 200+ comprehensive security checks; OS-aware technical control checks
+    Module automatically detects OS via module_core integration
     
     STIG Finding Types:
     - Open: Non-compliant with STIG requirement
@@ -84,6 +85,104 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from linux_security_audit import AuditResult
 
 MODULE_NAME = "STIG"
+MODULE_VERSION = "2.1"
+
+import platform
+
+# ============================================================================
+# OS Detection and Classification  
+# ============================================================================
+
+class OSInfo:
+    """Store and manage OS information"""
+    def __init__(self):
+        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
+        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
+        self.version = "Unknown"
+        self.version_id = "Unknown"
+        self.codename = "Unknown"
+        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
+        self.init_system = "Unknown"  # systemd, sysvinit, upstart
+        self.architecture = platform.machine()
+        self.kernel_version = platform.release()
+        
+    def __str__(self):
+        return f"{self.distro} {self.version} ({self.family})"
+
+def detect_os() -> OSInfo:
+    """
+    Comprehensive OS detection
+    Returns OSInfo object with detailed system information
+    """
+    os_info = OSInfo()
+    
+    # Read /etc/os-release (standard location)
+    if os.path.exists("/etc/os-release"):
+        with open("/etc/os-release", 'r') as f:
+            os_release = {}
+            for line in f:
+                if '=' in line:
+                    key, value = line.strip().split('=', 1)
+                    os_release[key] = value.strip('"')
+        
+        os_info.distro = os_release.get('ID', 'unknown').lower()
+        os_info.version = os_release.get('VERSION', 'unknown')
+        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
+        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
+        
+        # Determine OS family
+        id_like = os_release.get('ID_LIKE', '').lower()
+        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
+            os_info.family = 'debian'
+        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
+            os_info.family = 'redhat'
+        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
+            os_info.family = 'suse'
+        elif os_info.distro == 'arch':
+            os_info.family = 'arch'
+    
+    # Fallback detection methods
+    if os_info.family == "Unknown":
+        if os.path.exists("/etc/debian_version"):
+            os_info.family = 'debian'
+            os_info.distro = 'debian'
+        elif os.path.exists("/etc/redhat-release"):
+            os_info.family = 'redhat'
+            with open("/etc/redhat-release", 'r') as f:
+                content = f.read().lower()
+                if 'centos' in content:
+                    os_info.distro = 'centos'
+                elif 'red hat' in content or 'rhel' in content:
+                    os_info.distro = 'rhel'
+                elif 'fedora' in content:
+                    os_info.distro = 'fedora'
+    
+    # Detect package manager
+    if command_exists('apt-get'):
+        os_info.package_manager = 'apt'
+    elif command_exists('dnf'):
+        os_info.package_manager = 'dnf'
+    elif command_exists('yum'):
+        os_info.package_manager = 'yum'
+    elif command_exists('zypper'):
+        os_info.package_manager = 'zypper'
+    elif command_exists('pacman'):
+        os_info.package_manager = 'pacman'
+    
+    # Detect init system
+    if os.path.exists("/run/systemd/system"):
+        os_info.init_system = 'systemd'
+    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
+        link = os.readlink("/sbin/init")
+        if 'systemd' in link:
+            os_info.init_system = 'systemd'
+        elif 'upstart' in link:
+            os_info.init_system = 'upstart'
+    else:
+        os_info.init_system = 'sysvinit'
+    
+    return os_info
+
 MODULE_VERSION = "1.0.0"
 
 # STIG Severity Categories
@@ -139,7 +238,7 @@ def check_service_active(service_name: str) -> bool:
     result = run_command(f"systemctl is-active {service_name} 2>/dev/null")
     return result.returncode == 0 and result.stdout.strip() == "active"
 
-def check_package_installed(package_name: str) -> bool:
+def check_package_installed(package_name: str, os_info) -> bool:
     """Check if a package is installed (works for both apt and rpm)"""
     # Try dpkg (Debian/Ubuntu)
     result = run_command(f"dpkg -l {package_name} 2>/dev/null | grep -q '^ii'")
@@ -203,7 +302,7 @@ def safe_int_parse(value: str, default: int = 0) -> int:
     except (ValueError, AttributeError):
         return default
 
-def get_selinux_status() -> Dict[str, Any]:
+def get_selinux_status(os_info: OSInfo) -> Dict[str, Any]:
     """Get comprehensive SELinux status"""
     status = {
         'installed': False,
@@ -214,7 +313,7 @@ def get_selinux_status() -> Dict[str, Any]:
     }
     
     # Check if SELinux is installed
-    if check_package_installed("selinux-policy") or os.path.exists("/etc/selinux/config"):
+    if check_package_installed("selinux-policy", os_info) or os.path.exists("/etc/selinux/config"):
         status['installed'] = True
     
     # Check current status
@@ -264,7 +363,7 @@ def get_apparmor_status() -> Dict[str, Any]:
     
     return status
 
-def get_auditd_status() -> Dict[str, Any]:
+def get_auditd_status(os_info: OSInfo) -> Dict[str, Any]:
     """Get comprehensive auditd status"""
     status = {
         'installed': False,
@@ -273,7 +372,7 @@ def get_auditd_status() -> Dict[str, Any]:
         'rules_count': 0
     }
     
-    status['installed'] = check_package_installed("auditd") or check_package_installed("audit")
+    status['installed'] = check_package_installed("auditd", os_info) or check_package_installed("audit", os_info)
     status['active'] = check_service_active("auditd")
     status['enabled'] = check_service_enabled("auditd")
     
@@ -427,19 +526,18 @@ def get_file_age_days(filepath: str) -> Optional[int]:
         return None
 
 # ============================================================================
-# ACCESS CONTROL (AC) - 40+ comprehensive checks
+# ACCESS CONTROL (AC)
 # STIG requires strict access control enforcement
 # Reference: DISA STIG Access Control requirements
 # ============================================================================
 
-def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Access Control checks
-    40+ comprehensive, real checks for STIG AC requirements
+    Access Control checks (AC) Security Audit Checks
     """
-    print(f"[{MODULE_NAME}] Checking Access Control (40+ checks)...")
+    print(f"[{MODULE_NAME}] Checking Access Control...")
     
-    selinux_status = get_selinux_status()
+    selinux_status = get_selinux_status(os_info)
     apparmor_status = get_apparmor_status()
     user_accounts = get_user_accounts()
     
@@ -631,7 +729,7 @@ def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]
     ))
     
     # AC-014: sudo installed and configured (CAT II)
-    sudo_installed = check_package_installed("sudo")
+    sudo_installed = check_package_installed("sudo", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1027,19 +1125,18 @@ def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]
 
 
 # ============================================================================
-# AUDIT AND ACCOUNTABILITY (AU) - 30+ comprehensive checks
+# AUDIT AND ACCOUNTABILITY (AU)
 # STIG requires comprehensive audit logging and accountability
 # Reference: DISA STIG Audit and Accountability requirements
 # ============================================================================
 
-def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Audit and Accountability checks
-    30+ comprehensive, real checks for STIG AU requirements
+    Audit and Accountability (AU) Security Audit Checks
     """
-    print(f"[{MODULE_NAME}] Checking Audit and Accountability (30+ checks)...")
+    print(f"[{MODULE_NAME}] Checking Audit and Accountability...")
     
-    auditd_status = get_auditd_status()
+    auditd_status = get_auditd_status(os_info)
     
     # AU-001: auditd installed (CAT II)
     results.append(AuditResult(
@@ -1369,7 +1466,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         ))
     
     # AU-024: rsyslog installed (CAT II)
-    rsyslog_installed = check_package_installed("rsyslog") or check_package_installed("syslog-ng")
+    rsyslog_installed = check_package_installed("rsyslog", os_info) or check_package_installed("syslog-ng", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1406,7 +1503,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
     ))
     
     # AU-027: Log rotation configured (CAT II)
-    logrotate_installed = check_package_installed("logrotate")
+    logrotate_installed = check_package_installed("logrotate", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1456,17 +1553,16 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
 
 
 # ============================================================================
-# IDENTIFICATION AND AUTHENTICATION (IA) - 30+ comprehensive checks
+# IDENTIFICATION AND AUTHENTICATION (IA)
 # STIG requires strong authentication mechanisms
 # Reference: DISA STIG Identification and Authentication requirements
 # ============================================================================
 
-def check_identification_authentication(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_identification_authentication(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Identification and Authentication checks
-    30+ comprehensive, real checks for STIG IA requirements
+    Identification and Authentication (IA) Security Audit Checks
     """
-    print(f"[{MODULE_NAME}] Checking Identification & Authentication (30+ checks)...")
+    print(f"[{MODULE_NAME}] Checking Identification & Authentication...")
     
     password_policy = get_password_policy()
     
@@ -1934,20 +2030,19 @@ def check_identification_authentication(results: List[AuditResult], shared_data:
 
 
 # ============================================================================
-# SYSTEM AND INFORMATION INTEGRITY (SI) - 30+ comprehensive checks
+# SYSTEM AND INFORMATION INTEGRITY (SI)
 # STIG requires system integrity protection and monitoring
 # Reference: DISA STIG System and Information Integrity requirements
 # ============================================================================
 
-def check_system_information_integrity(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_system_information_integrity(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    System and Information Integrity checks
-    30+ comprehensive, real checks for STIG SI requirements
+    System and Information (SI) Integrity Security Audit Checks
     """
-    print(f"[{MODULE_NAME}] Checking System & Information Integrity (30+ checks)...")
+    print(f"[{MODULE_NAME}] Checking System & Information Integrity...")
     
     # SI-001: AIDE installed (CAT II)
-    aide_installed = check_package_installed("aide")
+    aide_installed = check_package_installed("aide", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1984,7 +2079,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     ))
     
     # SI-004: Anti-virus software installed (CAT II)
-    av_installed = check_package_installed("clamav") or check_package_installed("clamav-daemon")
+    av_installed = check_package_installed("clamav", os_info) or check_package_installed("clamav-daemon", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2063,7 +2158,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     ))
     
     # SI-009: Automatic security updates (CAT II)
-    auto_updates = check_package_installed("unattended-upgrades") or check_package_installed("yum-cron")
+    auto_updates = check_package_installed("unattended-upgrades", os_info) or check_package_installed("yum-cron", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2183,7 +2278,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     ))
     
     # SI-017: Firmware updates (CAT II)
-    fwupd_installed = check_package_installed("fwupd")
+    fwupd_installed = check_package_installed("fwupd", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2195,7 +2290,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     ))
     
     # SI-018: Prelink disabled (CAT II)
-    prelink_installed = check_package_installed("prelink")
+    prelink_installed = check_package_installed("prelink", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2238,7 +2333,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     
     # SI-021: X Window System not installed on server (CAT II)
     x_packages = ["xorg", "xserver-xorg", "xorg-x11-server"]
-    x_installed = any(check_package_installed(pkg) for pkg in x_packages)
+    x_installed = any(check_package_installed(pkg, os_info) for pkg in x_packages)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2387,17 +2482,16 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
 
 
 # ============================================================================
-# CONFIGURATION MANAGEMENT (CM) - 30+ comprehensive checks
+# CONFIGURATION MANAGEMENT (CM)
 # STIG requires strict configuration management and control
 # Reference: DISA STIG Configuration Management requirements
 # ============================================================================
 
-def check_configuration_management(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_configuration_management(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Configuration Management checks
-    30+ comprehensive, real checks for STIG CM requirements
+    Configuration Management (CM) Security Audit Checks
     """
-    print(f"[{MODULE_NAME}] Checking Configuration Management (30+ checks)...)...")
+    print(f"[{MODULE_NAME}] Checking Configuration Management...")
     
     # CM-001: System has unique hostname (CAT III)
     hostname = socket.gethostname()
@@ -2527,7 +2621,7 @@ def check_configuration_management(results: List[AuditResult], shared_data: Dict
     ))
     
     # CM-009: System activity accounting enabled (CAT III)
-    sysstat_installed = check_package_installed("sysstat")
+    sysstat_installed = check_package_installed("sysstat", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2824,17 +2918,16 @@ def check_configuration_management(results: List[AuditResult], shared_data: Dict
 
 
 # ============================================================================
-# SYSTEM AND COMMUNICATIONS PROTECTION (SC) - 20+ comprehensive checks
+# SYSTEM AND COMMUNICATIONS PROTECTION (SC)
 # STIG requires protection of system communications
 # Reference: DISA STIG System and Communications Protection requirements
 # ============================================================================
 
-def check_system_communications_protection(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_system_communications_protection(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    System and Communications Protection checks
-    20+ comprehensive, real checks for STIG SC requirements
+    System and Communications (SC) Protection checks
     """
-    print(f"[{MODULE_NAME}] Checking System & Communications Protection (20+ checks)...")
+    print(f"[{MODULE_NAME}] Checking System & Communications Protection...")
     
     # SC-001: Firewall enabled (CAT II)
     firewall_active = check_firewall_active()
@@ -3117,15 +3210,14 @@ def check_system_communications_protection(results: List[AuditResult], shared_da
 
 
 # ============================================================================
-# ADDITIONAL STIG REQUIREMENTS - 20+ comprehensive checks
+# ADDITIONAL STIG REQUIREMENTS
 # ============================================================================
 
-def check_additional_requirements(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_additional_requirements(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Additional STIG Requirements checks
-    20+ comprehensive, real checks for miscellaneous STIG requirements
+    Additional STIG Requirements Security Audit Checks
     """
-    print(f"[{MODULE_NAME}] Checking Additional STIG Requirements (20+ checks)...")
+    print(f"[{MODULE_NAME}] Checking Additional STIG Requirements...")
     
     # ADD-001: System is registered/subscribed (CAT III)
     subscription_files = [
@@ -3238,7 +3330,7 @@ def check_additional_requirements(results: List[AuditResult], shared_data: Dict[
     
     # ADD-010: Vulnerability scanning (CAT II)
     vuln_scanners = ["openvas", "nessus", "qualys"]
-    scanner_installed = any(check_package_installed(s) for s in vuln_scanners)
+    scanner_installed = any(check_package_installed(s, os_info) for s in vuln_scanners)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -3367,32 +3459,47 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     """
     results = []
     
-    print(f"\n[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] DISA STIG COMPLIANCE AUDIT")
-    print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
-    print(f"[{MODULE_NAME}] Focus: DoD Security Requirements")
-    print(f"[{MODULE_NAME}] Control Areas: AC, AU, IA, SI, CM, SC + Additional")
-    print(f"[{MODULE_NAME}] Target: 200+ comprehensive security checks")
-    print(f"[{MODULE_NAME}] " + "="*70 + "\n")
+
+    # Detect operating system
+    os_info = detect_os()
+    shared_data['os_info'] = os_info
+    
+    print(f"[{MODULE_NAME}] Operating System: {os_info}")
+    print(f"[{MODULE_NAME}] Package Manager: {os_info.package_manager}")
+    print(f"[{MODULE_NAME}] Init System: {os_info.init_system}")
+    print("")
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
         print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
+    print(f"\n[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] DISA STIG COMPLIANCE AUDIT")
+    print(f"[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
+    print(f"[{MODULE_NAME}] Focus: DoD Security Requirements")
+    print(f"[{MODULE_NAME}] Control Areas: AC, AU, IA, SI, CM, SC + Additional")
+    print(f"[{MODULE_NAME}] Target: 200+ Comprehensive Security Audit Checks")
+    print(f"[{MODULE_NAME}] " + "="*70 + "\n")
+    
+    is_root = shared_data.get("is_root", os.geteuid() == 0)
+    if not is_root:
+        print(f"[{MODULE_NAME}] âš ï¸  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
+    
     try:
         # Execute all control area checks
-        check_access_control(results, shared_data)
-        check_audit_accountability(results, shared_data)
-        check_identification_authentication(results, shared_data)
-        check_system_information_integrity(results, shared_data)
-        check_configuration_management(results, shared_data)
-        check_system_communications_protection(results, shared_data)
-        check_additional_requirements(results, shared_data)
+        check_access_control(results, shared_data, os_info)
+        check_audit_accountability(results, shared_data, os_info)
+        check_identification_authentication(results, shared_data, os_info)
+        check_system_information_integrity(results, shared_data, os_info)
+        check_configuration_management(results, shared_data, os_info)
+        check_system_communications_protection(results, shared_data, os_info)
+        check_additional_requirements(results, shared_data, os_info)
         
     except Exception as e:
-        print(f"[{MODULE_NAME}] ❌ Error during audit execution: {str(e)}")
+        print(f"[{MODULE_NAME}] âŒ Error during audit execution: {str(e)}")
         results.append(AuditResult(
             module=MODULE_NAME,
             category="STIG - Error",
@@ -3419,7 +3526,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"\n[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] DISA STIG SECURITY AUDIT COMPLETED")
     print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Total Checks Executed: {len(results)}")
+    print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
     print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
