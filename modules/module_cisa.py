@@ -2,7 +2,7 @@
 """
 module_cisa.py
 CISA (Cybersecurity and Infrastructure Security Agency) Module for Linux
-Version: 2.0
+Version: 2.1
 
 SYNOPSIS:
     CISA Cybersecurity Directives and best practices compliance checks for Linux systems.
@@ -61,22 +61,23 @@ DESCRIPTION:
     - Known Exploited Vulnerabilities Catalog
 
 USAGE:
-# Standalone testing
-python3 module_cisa.py
+    Standalone module test:
+        python3 module_cisa.py
 
-# Integration with main audit script
-import module_cisa
-results = module_cisa.run_checks({'is_root': True})
+    Integration with main audit script:
+        python3 linux_security_audit.py --modules CISA
+        python3 linux_security_audit.py -m CISA
 
 PARAMETERS:
     shared_data : Dictionary containing shared data from main script
 
 NOTES:
-    Version: 2.0
+    Version: 2.1
     Reference: https://www.cisa.gov/directives
     Standards: CISA BODs, CISA EDs, NIST Cybersecurity Framework
     Priority: Critical, High, Medium, Low severity findings
-    Target: 150+ comprehensive security checks
+    Target: 150+ comprehensive security checks; OS-aware technical control checks
+    Module automatically detects OS via module_core integration
 """
 
 import os
@@ -95,6 +96,104 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from linux_security_audit import AuditResult
 
 MODULE_NAME = "CISA"
+MODULE_VERSION = "2.1"
+
+import platform
+
+# ============================================================================
+# OS Detection and Classification  
+# ============================================================================
+
+class OSInfo:
+    """Store and manage OS information"""
+    def __init__(self):
+        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
+        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
+        self.version = "Unknown"
+        self.version_id = "Unknown"
+        self.codename = "Unknown"
+        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
+        self.init_system = "Unknown"  # systemd, sysvinit, upstart
+        self.architecture = platform.machine()
+        self.kernel_version = platform.release()
+        
+    def __str__(self):
+        return f"{self.distro} {self.version} ({self.family})"
+
+def detect_os() -> OSInfo:
+    """
+    Comprehensive OS detection
+    Returns OSInfo object with detailed system information
+    """
+    os_info = OSInfo()
+    
+    # Read /etc/os-release (standard location)
+    if os.path.exists("/etc/os-release"):
+        with open("/etc/os-release", 'r') as f:
+            os_release = {}
+            for line in f:
+                if '=' in line:
+                    key, value = line.strip().split('=', 1)
+                    os_release[key] = value.strip('"')
+        
+        os_info.distro = os_release.get('ID', 'unknown').lower()
+        os_info.version = os_release.get('VERSION', 'unknown')
+        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
+        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
+        
+        # Determine OS family
+        id_like = os_release.get('ID_LIKE', '').lower()
+        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
+            os_info.family = 'debian'
+        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
+            os_info.family = 'redhat'
+        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
+            os_info.family = 'suse'
+        elif os_info.distro == 'arch':
+            os_info.family = 'arch'
+    
+    # Fallback detection methods
+    if os_info.family == "Unknown":
+        if os.path.exists("/etc/debian_version"):
+            os_info.family = 'debian'
+            os_info.distro = 'debian'
+        elif os.path.exists("/etc/redhat-release"):
+            os_info.family = 'redhat'
+            with open("/etc/redhat-release", 'r') as f:
+                content = f.read().lower()
+                if 'centos' in content:
+                    os_info.distro = 'centos'
+                elif 'red hat' in content or 'rhel' in content:
+                    os_info.distro = 'rhel'
+                elif 'fedora' in content:
+                    os_info.distro = 'fedora'
+    
+    # Detect package manager
+    if command_exists('apt-get'):
+        os_info.package_manager = 'apt'
+    elif command_exists('dnf'):
+        os_info.package_manager = 'dnf'
+    elif command_exists('yum'):
+        os_info.package_manager = 'yum'
+    elif command_exists('zypper'):
+        os_info.package_manager = 'zypper'
+    elif command_exists('pacman'):
+        os_info.package_manager = 'pacman'
+    
+    # Detect init system
+    if os.path.exists("/run/systemd/system"):
+        os_info.init_system = 'systemd'
+    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
+        link = os.readlink("/sbin/init")
+        if 'systemd' in link:
+            os_info.init_system = 'systemd'
+        elif 'upstart' in link:
+            os_info.init_system = 'upstart'
+    else:
+        os_info.init_system = 'sysvinit'
+    
+    return os_info
+
 MODULE_VERSION = "2.0.0"
 
 # ============================================================================
@@ -147,7 +246,7 @@ def check_service_active(service_name: str) -> bool:
     result = run_command(f"systemctl is-active {service_name} 2>/dev/null")
     return result.returncode == 0 and result.stdout.strip() == "active"
 
-def check_package_installed(package_name: str) -> bool:
+def check_package_installed(package_name: str, os_info) -> bool:
     """Check if a package is installed (works for both apt and rpm)"""
     # Try dpkg (Debian/Ubuntu)
     result = run_command(f"dpkg -l {package_name} 2>/dev/null | grep -q '^ii'")
@@ -233,13 +332,12 @@ def get_cisa_id(category: str, number: int) -> str:
 # ============================================================================
 
 # ============================================================================
-# BOD 22-01: Known Exploited Vulnerabilities Catalog (40 checks)
+# BOD 22-01: Known Exploited Vulnerabilities Catalog
 # ============================================================================
 
-def check_bod_22_01_kev(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_bod_22_01_kev(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    BOD 22-01: Reducing Significant Risk of Known Exploited Vulnerabilities
-    40 comprehensive checks for KEV catalog vulnerabilities
+    BOD 22-01: Reducing Significant Risk of Known Exploited Vulnerabilities (KEV) Security Audit Checks
     """
     print(f"[{MODULE_NAME}] Checking BOD 22-01 - Known Exploited Vulnerabilities...")
     
@@ -303,7 +401,7 @@ def check_bod_22_01_kev(results: List[AuditResult], shared_data: Dict[str, Any])
             pass
     
     # KEV-005: Polkit PwnKit
-    if check_package_installed("polkit"):
+    if check_package_installed("polkit", os_info):
         results.append(AuditResult(
             module=MODULE_NAME,
             category="CISA - BOD 22-01",
@@ -357,7 +455,7 @@ def check_bod_22_01_kev(results: List[AuditResult], shared_data: Dict[str, Any])
     ))
     
     # KEV-009: Automatic updates
-    auto_updates = check_package_installed("unattended-upgrades") or check_service_enabled("dnf-automatic.timer")
+    auto_updates = check_package_installed("unattended-upgrades", os_info) or check_service_enabled("dnf-automatic.timer")
     results.append(AuditResult(
         module=MODULE_NAME,
         category="CISA - BOD 22-01",
@@ -549,7 +647,7 @@ def check_bod_22_01_kev(results: List[AuditResult], shared_data: Dict[str, Any])
     # KEV-025: Obsolete packages
     obsolete_packages = []
     for pkg in ["telnet-server", "rsh-server", "ypserv", "tftp-server", "talk-server"]:
-        if check_package_installed(pkg):
+        if check_package_installed(pkg, os_info):
             obsolete_packages.append(pkg)
     
     results.append(AuditResult(
@@ -564,7 +662,7 @@ def check_bod_22_01_kev(results: List[AuditResult], shared_data: Dict[str, Any])
     # KEV-026: Vulnerability scanner
     vuln_scanners = []
     for scanner in ["lynis", "tiger", "aide", "rkhunter", "chkrootkit"]:
-        if command_exists(scanner) or check_package_installed(scanner):
+        if command_exists(scanner) or check_package_installed(scanner, os_info):
             vuln_scanners.append(scanner)
     
     results.append(AuditResult(
@@ -656,13 +754,12 @@ def check_bod_22_01_kev(results: List[AuditResult], shared_data: Dict[str, Any])
 
 
 # ============================================================================
-# BOD 23-01: Asset Visibility & Authentication (40 checks total)
+# BOD 23-01: Asset Visibility & Authentication
 # ============================================================================
 
-def check_bod_23_01_asset_visibility(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_bod_23_01_asset_visibility(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     BOD 23-01: Improving Asset Visibility and Vulnerability Detection
-    20 checks for asset management and inventory
     """
     print(f"[{MODULE_NAME}] Checking BOD 23-01 - Asset Visibility...")
     
@@ -852,10 +949,9 @@ def check_bod_23_01_asset_visibility(results: List[AuditResult], shared_data: Di
         ))
 
 
-def check_authentication_access_control(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_authentication_access_control(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Authentication and Access Control checks
-    20 comprehensive checks
+    Authentication and Access Control Security Audit Checks
     """
     print(f"[{MODULE_NAME}] Checking authentication and access control...")
     
@@ -894,7 +990,7 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
         module=MODULE_NAME,
         category="CISA - Authentication",
         status="Pass" if pass_max_ok else "Fail",
-        message=f"{get_cisa_id('AUTH', 3)}: Password expiration ≤90 days (High)",
+        message=f"{get_cisa_id('AUTH', 3)}: Password expiration â‰¤90 days (High)",
         details=f"PASS_MAX_DAYS: {pass_max_match.group(1) if pass_max_match else 'Not set'}",
         remediation="Set PASS_MAX_DAYS 90 in /etc/login.defs"
     ))
@@ -907,7 +1003,7 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
         module=MODULE_NAME,
         category="CISA - Authentication",
         status="Pass" if pass_min_ok else "Fail",
-        message=f"{get_cisa_id('AUTH', 4)}: Minimum password age ≥1 day (Medium)",
+        message=f"{get_cisa_id('AUTH', 4)}: Minimum password age â‰¥1 day (Medium)",
         details=f"PASS_MIN_DAYS: {pass_min_match.group(1) if pass_min_match else 'Not set'}",
         remediation="Set PASS_MIN_DAYS 1"
     ))
@@ -920,13 +1016,13 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
         module=MODULE_NAME,
         category="CISA - Authentication",
         status="Pass" if pass_warn_ok else "Warning",
-        message=f"{get_cisa_id('AUTH', 5)}: Password expiration warning ≥7 days (Low)",
+        message=f"{get_cisa_id('AUTH', 5)}: Password expiration warning â‰¥7 days (Low)",
         details=f"PASS_WARN_AGE: {pass_warn_match.group(1) if pass_warn_match else 'Not set'}",
         remediation="Set PASS_WARN_AGE 7"
     ))
     
     # AUTH-006: MFA availability
-    mfa_installed = check_package_installed("libpam-google-authenticator") or check_package_installed("google-authenticator")
+    mfa_installed = check_package_installed("libpam-google-authenticator", os_info) or check_package_installed("google-authenticator", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -938,7 +1034,7 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
     ))
     
     # AUTH-007: Password complexity
-    pwquality_installed = check_package_installed("libpam-pwquality") or os.path.exists("/etc/security/pwquality.conf")
+    pwquality_installed = check_package_installed("libpam-pwquality", os_info) or os.path.exists("/etc/security/pwquality.conf")
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -950,7 +1046,7 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
     ))
     
     # AUTH-008: Account lockout policy
-    faillock_exists = os.path.exists("/etc/security/faillock.conf") or check_package_installed("libpam-faillock")
+    faillock_exists = os.path.exists("/etc/security/faillock.conf") or check_package_installed("libpam-faillock", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -962,7 +1058,7 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
     ))
     
     # AUTH-009: sudo installed
-    sudo_installed = check_package_installed("sudo")
+    sudo_installed = check_package_installed("sudo", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1080,12 +1176,12 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
 
 
 # ============================================================================
-# Network Security + Logging & Monitoring (40 checks total)
+# Network Security + Logging & Monitoring
 # ============================================================================
 
-def check_network_security(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_network_security(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Network Security checks - 20 comprehensive checks
+    Network Security Audit Checks
     """
     print(f"[{MODULE_NAME}] Checking network security...")
     
@@ -1102,7 +1198,7 @@ def check_network_security(results: List[AuditResult], shared_data: Dict[str, An
     ))
     
     # NET-002: Firewall installed
-    firewall_installed = check_package_installed("firewalld") or check_package_installed("ufw") or check_package_installed("iptables")
+    firewall_installed = check_package_installed("firewalld", os_info) or check_package_installed("ufw", os_info) or check_package_installed("iptables", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1323,14 +1419,14 @@ def check_network_security(results: List[AuditResult], shared_data: Dict[str, An
         ))
 
 
-def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Logging and Monitoring checks - 20 comprehensive checks
+    Logging and Monitoring Security Audit Checks
     """
     print(f"[{MODULE_NAME}] Checking logging and monitoring...")
     
     # LOG-001: auditd installed
-    auditd_installed = check_package_installed("auditd") or check_package_installed("audit")
+    auditd_installed = check_package_installed("auditd", os_info) or check_package_installed("audit", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1392,7 +1488,7 @@ def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, 
         ))
     
     # LOG-006: rsyslog installed
-    rsyslog_installed = check_package_installed("rsyslog")
+    rsyslog_installed = check_package_installed("rsyslog", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1458,7 +1554,7 @@ def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, 
         ))
     
     # LOG-011: logrotate installed
-    logrotate_installed = check_package_installed("logrotate")
+    logrotate_installed = check_package_installed("logrotate", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1524,12 +1620,12 @@ def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, 
 
 
 # ============================================================================
-# Incident Response + Data Protection (30 checks total)
+# Incident Response + Data Protection
 # ============================================================================
 
-def check_incident_response(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_incident_response(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Incident Response Readiness checks - 15 comprehensive checks
+    Incident Response Readiness Security Audit Checks
     """
     print(f"[{MODULE_NAME}] Checking incident response capabilities...")
     
@@ -1584,7 +1680,7 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
     # IR-004: Backup tools
     backup_tools = []
     for tool in ["rsync", "duplicity", "borgbackup", "tar", "dd"]:
-        if command_exists(tool) or check_package_installed(tool):
+        if command_exists(tool) or check_package_installed(tool, os_info):
             backup_tools.append(tool)
     
     results.append(AuditResult(
@@ -1674,7 +1770,7 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
         ))
 
 
-def check_data_protection(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_data_protection(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     Data Protection checks - 15 comprehensive checks
     """
@@ -1723,7 +1819,7 @@ def check_data_protection(results: List[AuditResult], shared_data: Dict[str, Any
     ))
     
     # DP-004: File integrity monitoring (AIDE)
-    aide_installed = check_package_installed("aide")
+    aide_installed = check_package_installed("aide", os_info)
     
     if aide_installed:
         aide_db_locations = [
@@ -1888,11 +1984,26 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     """
     results = []
     
+
+    # Detect operating system
+    os_info = detect_os()
+    shared_data['os_info'] = os_info
+    
+    print(f"[{MODULE_NAME}] Operating System: {os_info}")
+    print(f"[{MODULE_NAME}] Package Manager: {os_info.package_manager}")
+    print(f"[{MODULE_NAME}] Init System: {os_info.init_system}")
+    print("")
+    
+    is_root = shared_data.get("is_root", os.geteuid() == 0)
+    if not is_root:
+        print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
+    
     print(f"\n[{MODULE_NAME}] ===== CISA SECURITY AUDIT =====")
     print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
     print(f"[{MODULE_NAME}] Standards: CISA BODs, Emergency Directives, Best Practices")
     print(f"[{MODULE_NAME}] Priority Levels: Critical, High, Medium, Low")
-    print(f"[{MODULE_NAME}] Target: 132 comprehensive security checks")
+    print(f"[{MODULE_NAME}] Target: 132 Comprehensive Security Audit Checks")
     print(f"[{MODULE_NAME}] Focus: BOD 22-01 (KEV), BOD 23-01 (Asset Visibility)\n")
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
@@ -1900,26 +2011,26 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         print(f"[{MODULE_NAME}] Note: Some checks require root privileges for complete results")
     
     try:
-        # Category 1: BOD 22-01 - Known Exploited Vulnerabilities (40 checks)
-        check_bod_22_01_kev(results, shared_data)
+        # Category 1: BOD 22-01 - Known Exploited Vulnerabilities
+        check_bod_22_01_kev(results, shared_data, os_info)
         
-        # Category 2: BOD 23-01 - Asset Visibility (20 checks)
-        check_bod_23_01_asset_visibility(results, shared_data)
+        # Category 2: BOD 23-01 - Asset Visibility
+        check_bod_23_01_asset_visibility(results, shared_data, os_info)
         
-        # Category 3: Authentication and Access Control (20 checks)
-        check_authentication_access_control(results, shared_data)
+        # Category 3: Authentication and Access Control
+        check_authentication_access_control(results, shared_data, os_info)
         
-        # Category 4: Network Security (20 checks)
-        check_network_security(results, shared_data)
+        # Category 4: Network Security
+        check_network_security(results, shared_data, os_info)
         
-        # Category 5: Logging and Monitoring (20 checks)
-        check_logging_monitoring(results, shared_data)
+        # Category 5: Logging and Monitoring
+        check_logging_monitoring(results, shared_data, os_info)
         
-        # Category 6: Incident Response (15 checks)
-        check_incident_response(results, shared_data)
+        # Category 6: Incident Response
+        check_incident_response(results, shared_data, os_info)
         
-        # Category 7: Data Protection (15 checks)
-        check_data_protection(results, shared_data)
+        # Category 7: Data Protection
+        check_data_protection(results, shared_data, os_info)
         
     except Exception as e:
         results.append(AuditResult(
@@ -1957,7 +2068,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"\n[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] CISA SECURITY AUDIT COMPLETED")
     print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Total checks executed: {len(results)}")
+    print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] BOD 22-01 checks: {bod_22_01_checks}")
     print(f"[{MODULE_NAME}] BOD 23-01 checks: {bod_23_01_checks}")
     print(f"[{MODULE_NAME}] Priority summary: {summary_details}")
