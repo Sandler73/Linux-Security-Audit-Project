@@ -1,409 +1,578 @@
-# Linux Security Audit and Remediation Script
+# Linux Security Audit Project
 
-# Linux Security Audit Script v3.1
+[![Version](https://img.shields.io/badge/version-1.1-blue.svg)](https://github.com/Sandler73/Linux-Security-Audit-Project)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/)
+[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.kernel.org/)
 
-## Multi-Framework Edition
-
-[![Version](https://img.shields.io/badge/version-3.1.0-blue.svg)]()
-[![Python](https://img.shields.io/badge/python-3.8+-green.svg)]()
-[![License](https://img.shields.io/badge/license-MIT-orange.svg)]()
-[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
-
-**The definitive comprehensive Linux security audit and hardening tool with multi-framework compliance support.**
-
-Audit a Linux system against **CIS Benchmark, NIST 800-53, DISA STIG, NSA Hardening Guide, and CISA Cybersecurity Best Practices** with a single command. Includes automated remediation for 95%+ of findings.
-
----
-
-## 🎯 Overview
-
-`linux_security_audit.py` is an attempt at a comprehensive security auditing tool that evaluates the Linux system against multiple compliance frameworks simultaneously. Whether the intent is hardening a new server, maintaining compliance for government contracts, or conducting routine security assessments, this tool provides:
-
-- **136+ security checks** across 20+ categories
-- **Multi-framework compliance mapping** (every check mapped to applicable standards)
-- **95%+ automated remediation** with interactive fix application
-- **Framework-specific filtering** to target exactly what you need
-- **Professionalized reports** in Text, HTML, JSON, and CSV formats
-- **Per-framework compliance scoring** to track your progress
-
-**Potentially useful for:**
-- 🏛️ Government contractors (DISA STIG compliance)
-- 🏢 Federal agencies (NIST 800-53 compliance)
-- 🏥 Healthcare (HIPAA technical safeguards)
-- 💳 Financial services (PCI DSS requirements)
-- 🔒 Critical infrastructure (CISA best practices)
-- 🖥️ General Linux hardening (CIS Benchmark)
-
----
-
-## ✨ Key Features
-
-### 🔍 Comprehensive Security Checks (136+)
-- **File Permissions** - System files, SSH configs, bootloader
-- **User Account Security** - Empty passwords, UID 0 accounts, password policies
-- **SSH Hardening** - 15+ SSH configuration checks (CAT I critical findings)
-- **Firewall** - UFW status, default policies, automated configuration
-- **Kernel Parameters** - Network security, ASLR, SYN cookies
-- **Filesystem Security** - Mount options, sticky bits, partitioning
-- **Logging & Auditing** - auditd, rsyslog, log permissions
-- **System Hardening** - AppArmor/SELinux, core dumps, AIDE
-- **Network Security** - TCP wrappers, hosts.allow/deny
-- **Password Complexity** - PAM configuration, lockout policies
-- **Time Synchronization** - chrony/NTP/timesyncd
-- **And much more...**
-
-### 🎯 Multi-Framework Compliance
-
-Every check is mapped to applicable frameworks:
-
-```
-[CIS 5.2.7 | NIST AC-6,IA-2 | STIG RHEL-07-040370 | NSA ✓ | CISA ✓]
-SSH PermitRootLogin
-Category: CAT I | Status: FAIL | Severity: Critical
-```
-
-**Supported Frameworks:**
-- **CIS Benchmark** - Center for Internet Security (Levels 1 & 2)
-- **NIST 800-53** - National Institute of Standards & Technology
-- **DISA STIG** - Defense Information Systems Agency Security Technical Implementation Guide
-- **NSA Hardening Guide** - National Security Agency
-- **CISA Best Practices** - Cybersecurity & Infrastructure Security Agency
-
-### 🛠️ Automated Remediation (95%+)
-
-```bash
-# Interactive remediation with y/n/q prompts
-sudo ./linux_security_audit.py --remediate
-
-# Fix only critical STIG CAT I issues
-sudo ./linux_security_audit.py --cat "CAT I" --remediate
-```
-
-### 📊 Framework-Specific Filtering
-
-```bash
-# NIST 800-53 controls only
-sudo ./linux_security_audit.py --framework nist
-
-# STIG Category I (Critical) only
-sudo ./linux_security_audit.py --cat "CAT I"
-
-# CIS Level 1 (essential) only
-sudo ./linux_security_audit.py --level 1
-```
-
-### 📈 Compliance Scoring
-
-```
-FRAMEWORK COMPLIANCE SUMMARY
---------------------------------------------------------------------------------
-CIS   :  85/97 checks passed (87.6%)
-NIST  :  78/85 checks passed (91.8%)
-STIG  :  82/97 checks passed (84.5%)
-NSA   :  86/92 checks passed (93.5%)
-CISA  :  61/68 checks passed (89.7%)
-```
-
----
-
-## 💻 Requirements
-
-- **OS:** Ubuntu 24.04/22.04/20.04 LTS, Debian 11+, RHEL/CentOS compatible
-- **Python:** 3.8 or higher
-- **Privileges:** Root//SUDO required for complete audit and remediation
-- **Dependencies:** Standard library only (no external packages)
-
----
-
-## 📥 Installation
-
-```bash
-# Download the script
-wget https://your-repo/linux_security_audit.py
-
-# Make executable
-chmod +x linux_security_audit.py
-
-# Run
-sudo ./linux_security_audit.py --help
-```
-
----
+A comprehensive, modular security audit framework for Linux systems supporting multiple compliance frameworks with automated remediation capabilities.
 
 ## 🚀 Quick Start
 
-### Basic Audit
 ```bash
-# Run comprehensive audit
-sudo ./linux_security_audit.py
+# Clone the repository
+git clone https://github.com/Sandler73/Linux-Security-Audit-Project.git
+cd Linux-Security-Audit-Project
 
-# Auto-save results
-sudo ./linux_security_audit.py --auto-save
+# Run a complete security audit (requires sudo)
+sudo python3 linux_security_audit.py
 
-# CSV export
-sudo ./linux_security_audit.py -f csv -o audit.csv
+# View the interactive HTML report
+# Opens automatically in your default browser
 ```
 
-### Fix Critical Issues
+**That's it!** The tool will audit your system against all 8 security frameworks and generate a comprehensive report.
+
+## 📋 Table of Contents
+
+- [Features](#-features)
+- [Security Frameworks](#-security-frameworks)
+- [System Requirements](#-system-requirements)
+- [Installation](#-installation)
+- [Basic Usage](#-basic-usage)
+- [Documentation](#-documentation)
+- [Output Formats](#-output-formats)
+- [Remediation](#-remediation)
+- [Project Structure](#-project-structure)
+- [Contributing](#-contributing)
+- [License](#-license)
+- [Support](#-support)
+
+## ✨ Features
+
+### Core Capabilities
+
+- **🔍 Comprehensive Security Assessment**: 1000+ individual security checks across 8 frameworks
+- **📊 Multiple Framework Support**: CIS, NIST, STIG, NSA, CISA, ENISA, ISO27001, and Core baseline
+- **🎨 Interactive HTML Reports**: Rich, filterable reports with dark/light themes
+- **🔧 Automated Remediation**: Fix security issues with single commands or selective batch operations
+- **📁 Multi-Format Output**: HTML, CSV, JSON, XML, and Console formats
+- **🔐 Privilege-Aware**: Works with or without root (graceful degradation)
+- **🎯 Selective Remediation**: Export specific issues from HTML and fix only those
+- **📈 Trend Analysis**: Track security posture over time with JSON/CSV exports
+
+### Advanced Features
+
+- **Dynamic Module Discovery**: Automatically detects and validates security modules
+- **OS-Aware Checks**: Distribution-specific optimizations (Debian, Ubuntu, RHEL, CentOS, Fedora, etc.)
+- **Smart Privilege Detection**: Identifies what can/can't be checked without root
+- **Comprehensive Error Handling**: Graceful failures with detailed error reporting
+- **Zero Dependencies**: Uses only Python standard library (no pip install needed)
+- **Completely Offline**: No internet connection required, no data transmitted
+
+## 🛡️ Security Frameworks
+
+The project includes 8 specialized security modules:
+
+| Module | Checks | Description | Best For |
+|--------|--------|-------------|----------|
+| **[Core](../../wiki/Module-Documentation#core-module)** | 150+ | Industry best practices, OS-specific security | Everyone |
+| **[CIS](../../wiki/Module-Documentation#cis-module)** | 200+ | CIS Benchmarks compliance | General hardening, compliance |
+| **[CISA](../../wiki/Module-Documentation#cisa-module)** | 140+ | Critical infrastructure protection | Government, critical sectors |
+| **[ENISA](../../wiki/Module-Documentation#enisa-module)** | 135+ | EU cybersecurity guidelines | European organizations |
+| **[ISO27001](../../wiki/Module-Documentation#iso27001-module)** | 145+ | Information security management | ISMS certification |
+| **[NIST](../../wiki/Module-Documentation#nist-module)** | 160+ | NIST 800-53, CSF 2.0, 800-171 | Federal, contractors |
+| **[NSA](../../wiki/Module-Documentation#nsa-module)** | 155+ | Advanced security hardening | High-security environments |
+| **[STIG](../../wiki/Module-Documentation#stig-module)** | 180+ | DoD security requirements | Defense, contractors |
+
+**Total**: 1,100+ comprehensive security checks
+
+### Framework Selection Guidance
+
+**General Organizations**: Start with `Core + CIS`  
+**Financial/Healthcare**: Use `ISO27001 + NIST + CIS`  
+**Government/Federal**: Use `NIST + STIG + CISA`  
+**EU Organizations**: Use `ISO27001 + ENISA + CIS`  
+**Defense Contractors**: Use `STIG + NIST + NSA`
+
+📖 **[Complete Framework Reference →](../../wiki/Framework-Reference)**
+
+## 💻 System Requirements
+
+### Minimum Requirements
+
+- **Operating System**: Linux (any modern distribution)
+- **Python**: Version 3.6 or higher
+- **Disk Space**: 100 MB free
+- **Memory**: 512 MB RAM (1 GB recommended)
+- **Privileges**: Root/sudo recommended for complete results
+
+### Supported Distributions
+
+#### Fully Tested
+- Ubuntu 18.04+, 20.04 LTS, 22.04 LTS, 24.04 LTS
+- Debian 9+, 10, 11, 12
+- RHEL 7, 8, 9
+- CentOS 7, 8 Stream
+- Fedora 28+, 35+, 38+
+- Rocky Linux 8, 9
+- AlmaLinux 8, 9
+
+#### Also Supported
+- Linux Mint 19+
+- Kali Linux 2020+
+- SUSE/openSUSE Leap 15+
+- Arch Linux (rolling release)
+
+### Prerequisites
+
+**No installation required!** All dependencies are part of Python's standard library:
+- `os`, `sys`, `json`, `csv`, `argparse`, `subprocess`
+- `platform`, `socket`, `datetime`, `pathlib`, `typing`
+- `xml.etree.ElementTree`, `html`, `dataclasses`
+
+## 📦 Installation
+
+### Option 1: Git Clone (Recommended)
+
 ```bash
-# Interactive remediation
-sudo ./linux_security_audit.py --remediate
+# Clone the repository
+git clone https://github.com/Sandler73/Linux-Security-Audit-Project.git
 
-# Fix STIG CAT I (Critical) only
-sudo ./linux_security_audit.py --cat "CAT I" --remediate
+# Navigate to directory
+cd Linux-Security-Audit-Project
+
+# Verify installation
+python3 linux_security_audit.py --list-modules
 ```
 
-### Framework-Specific
+### Option 2: Download ZIP
+
 ```bash
-# NIST 800-53 compliance
-sudo ./linux_security_audit.py --framework nist
+# Download latest release
+wget https://github.com/Sandler73/Linux-Security-Audit-Project/archive/refs/heads/main.zip
 
-# DISA STIG compliance
-sudo ./linux_security_audit.py --framework stig
+# Extract
+unzip main.zip
+cd Linux-Security-Audit-Project-main
 
-# CIS Benchmark Level 1
-sudo ./linux_security_audit.py --level 1
+# Make executable
+chmod +x linux_security_audit.py
 ```
 
----
+### Option 3: Direct Download
 
-## 📋 Command-Line Options
+Download individual files from the repository and place in the same directory:
+- `linux_security_audit.py` (main script)
+- `module_*.py` (all 8 module files)
 
-```
-usage: linux_security_audit.py [-h] [-f {text,html,json,csv}]
-                                             [-o OUTPUT] [--auto-save]
-                                             [--no-console]
-                                             [--framework {cis,nist,stig,nsa,cisa}]
-                                             [--level {1,2}]
-                                             [--cat {CAT I,CAT II,CAT III}]
-                                             [--scored-only] [--remediate]
-                                             [--remediate-info]
-                                             [--remediate-all]
+## 🎯 Basic Usage
 
-Output Options:
-  -f {text,html,json,csv}  Output format (default: text)
-  -o OUTPUT                Output file path
-  --auto-save              Auto-save report with timestamp
-  --no-console             Suppress console output
+### Simple Commands
 
-Framework Filtering:
-  --framework {cis,nist,stig,nsa,cisa}
-                          Filter by compliance framework
-  --level {1,2}           CIS Level (1=essential, 2=comprehensive)
-  --cat {CAT I,CAT II,CAT III}
-                          STIG Category (CAT I=Critical)
-  --scored-only           Only run scored CIS checks
+```bash
+# List available modules
+python3 linux_security_audit.py --list-modules
 
-Remediation:
-  --remediate             Fix FAIL items interactively
-  --remediate-info        Fix INFO items interactively
-  --remediate-all         Fix FAIL + INFO items
+# Run complete audit (all modules)
+sudo python3 linux_security_audit.py
+
+# Run specific modules
+sudo python3 linux_security_audit.py -m Core,CIS,NIST
+
+# Generate CSV report
+sudo python3 linux_security_audit.py -f CSV -o security-audit.csv
+
+# Quick console output
+sudo python3 linux_security_audit.py -f Console
 ```
 
----
+### Common Use Cases
 
-## 📄 Output Formats
+#### Security Baseline Assessment
+```bash
+# Establish initial security baseline
+sudo python3 linux_security_audit.py -m Core,CIS -o baseline-$(date +%Y%m%d).html
+```
 
-### Text (Default)
-- Human-readable console output
-- Framework compliance summary
-- Detailed check results with recommendations
+#### Compliance Auditing
+```bash
+# Generate compliance report
+sudo python3 linux_security_audit.py -m ISO27001,NIST,CIS -f HTML -o compliance-report.html
+```
+
+#### Automated Monitoring
+```bash
+# Daily automated audit (add to crontab)
+0 2 * * * /usr/bin/python3 /opt/audit/linux_security_audit.py -f JSON -o /var/log/audit-$(date +\%Y\%m\%d).json
+```
+
+#### SIEM Integration
+```bash
+# Generate XML for SIEM ingestion
+sudo python3 linux_security_audit.py -f XML -o siem-feed.xml
+```
+
+### Command-Line Options
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `-m, --modules` | Specify modules to run | `-m Core,CIS,NIST` |
+| `-f, --output-format` | Output format | `-f HTML` |
+| `-o, --output-path` | Output file path | `-o report.html` |
+| `--list-modules` | List available modules | |
+| `--remediate` | Interactive remediation | |
+| `--remediate-fail` | Fix only FAIL status | |
+| `--auto-remediate` | Automatic remediation | |
+| `--remediation-file` | Fix specific issues from JSON | |
+
+📖 **[Complete Usage Guide →](../../wiki/Usage-Guide)**
+
+## 📚 Documentation
+
+### Quick Links
+
+- **[🏠 Wiki Home](../../wiki/Home)** - Complete documentation hub
+- **[⚡ Quick Start](../../wiki/Quick-Start-Guide)** - Get started in minutes
+- **[📖 Usage Guide](../../wiki/Usage-Guide)** - Comprehensive usage instructions
+- **[🔍 Module Documentation](../../wiki/Module-Documentation)** - Detailed module capabilities
+- **[📊 Output Reference](../../wiki/Output-Reference)** - Understanding reports and formats
+- **[🛡️ Framework Reference](../../wiki/Framework-Reference)** - Security standards details
+- **[💻 Development Guide](../../wiki/Development-Guide)** - Contributing and extending
+- **[🔧 Troubleshooting](../../wiki/Troubleshooting-Guide)** - Common issues and solutions
+- **[❓ FAQ](../../wiki/Frequently-Asked-Questions-(FAQ))** - Frequently asked questions
+
+### Documentation Highlights
+
+#### For Users
+- **Installation**: [Quick Start Guide](../../wiki/Quick-Start-Guide#installation)
+- **First Run**: [Quick Start Guide](../../wiki/Quick-Start-Guide#first-run)
+- **Understanding Results**: [Output Reference](../../wiki/Output-Reference#data-field-definitions)
+- **Remediation**: [Usage Guide](../../wiki/Usage-Guide#remediation-options)
+- **Common Issues**: [Troubleshooting Guide](../../wiki/Troubleshooting-Guide)
+
+#### For Developers
+- **Architecture**: [Development Guide](../../wiki/Development-Guide#project-architecture)
+- **Creating Modules**: [Development Guide](../../wiki/Development-Guide#creating-security-modules)
+- **Code Standards**: [Development Guide](../../wiki/Development-Guide#code-standards)
+- **Contributing**: [Development Guide](../../wiki/Development-Guide#contributing)
+
+#### For Compliance
+- **Framework Details**: [Framework Reference](../../wiki/Framework-Reference)
+- **Module Coverage**: [Module Documentation](../../wiki/Module-Documentation)
+- **Compliance Mapping**: [Framework Reference](../../wiki/Framework-Reference#compliance-mapping)
+
+## 📁 Output Formats
+
+### HTML (Default)
+
+Interactive, browser-based report with:
+- ✅ Sortable and filterable tables
+- ✅ Full-text search across all fields
+- ✅ Dark/Light theme toggle
+- ✅ Export selected issues to JSON
+- ✅ Inline remediation commands
+- ✅ Summary statistics dashboard
+
+```bash
+sudo python3 linux_security_audit.py -f HTML
+```
 
 ### CSV
-- Spreadsheet import
-- All framework IDs in separate columns
-- Perfect for compliance tracking
+
+Spreadsheet-compatible format for:
+- ✅ Excel/Google Sheets analysis
+- ✅ Custom reporting and graphing
+- ✅ Historical trend analysis
+- ✅ Data manipulation
+
+```bash
+sudo python3 linux_security_audit.py -f CSV -o audit.csv
+```
 
 ### JSON
-- Programmatic integration
-- Structured data format
-- Framework compliance metrics
 
-### HTML
-- Web-viewable reports
-- Professional formatting
-- Color-coded results
+Structured data for:
+- ✅ API integration
+- ✅ SIEM ingestion
+- ✅ Automation workflows
+- ✅ Selective remediation
+- ✅ Custom scripting
 
----
+```bash
+sudo python3 linux_security_audit.py -f JSON -o audit.json
+```
+
+### XML
+
+Enterprise tool integration:
+- ✅ SIEM systems (Splunk, QRadar)
+- ✅ GRC platforms
+- ✅ Configuration management
+- ✅ Legacy system compatibility
+
+```bash
+sudo python3 linux_security_audit.py -f XML -o audit.xml
+```
+
+### Console
+
+Real-time terminal output:
+- ✅ Color-coded status
+- ✅ No file creation
+- ✅ SSH-friendly
+- ✅ Quick validation
+
+```bash
+sudo python3 linux_security_audit.py -f Console
+```
+
+📖 **[Complete Output Reference →](../../wiki/Output-Reference)**
 
 ## 🔧 Remediation
 
-Interactive remediation process:
+The tool provides multiple remediation approaches for fixing security issues:
 
-1. **Analysis** - Identifies failed checks with automated fixes
-2. **Grouping** - Organizes by severity (CAT I → CAT II → CAT III)
-3. **Presentation** - Shows framework IDs, current state, commands
-4. **User Decision** - Prompts: `y` (apply), `n` (skip), `q` (quit)
-5. **Execution** - Runs commands and reports results
+### Interactive Remediation
 
-**Example:**
-```
-1. [CIS 5.2.7 | NIST AC-6,IA-2 | STIG RHEL-07-040370 | NSA ✓ | CISA ✓]
-   SSH PermitRootLogin
-   Category: CAT I | Severity: Critical
-   Current: yes | Expected: no
-   Fix commands:
-      sed -i 's/^PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-      systemctl reload sshd
+Review and approve each fix individually:
 
-   Apply fix? (y/n/q): y
-   ✓ Done
-```
-
-**Safety Features:**
-- ✅ Confirmation required
-- ✅ Command preview
-- ✅ Quit anytime
-- ✅ Root check
-- ✅ Backup recommendations
-
----
-
-## 📚 Use Case Examples
-
-### Initial Server Hardening
 ```bash
-sudo ./linux_security_audit.py --auto-save
-sudo ./linux_security_audit.py --cat "CAT I" --remediate
-sudo ./linux_security_audit.py --level 1 --remediate
-sudo ./linux_security_audit.py --auto-save
+sudo python3 linux_security_audit.py --remediate
 ```
 
-### DISA STIG Compliance
+**Workflow**:
+1. Shows each issue with details
+2. Displays remediation command
+3. Prompts for confirmation
+4. Executes if approved
+5. Reports results
+
+### Filtered Remediation
+
+Fix only specific severity levels:
+
 ```bash
-sudo ./linux_security_audit.py --framework stig -f csv -o stig_baseline.csv
-sudo ./linux_security_audit.py --cat "CAT I" --remediate
-sudo ./linux_security_audit.py --cat "CAT II" --remediate
-sudo ./linux_security_audit.py --framework stig -f csv -o stig_final.csv
+# Fix only critical FAIL issues
+sudo python3 linux_security_audit.py --remediate-fail
+
+# Fix WARNING level issues
+sudo python3 linux_security_audit.py --remediate-warning
+
+# Combine with auto-remediation
+sudo python3 linux_security_audit.py --remediate-fail --auto-remediate
 ```
 
-### NIST 800-53 Compliance
+### Selective Remediation
+
+**Most precise approach** - fix only specific issues:
+
+1. Run audit and generate HTML report
+2. Review findings in browser
+3. Select specific issues using checkboxes
+4. Click "Export Selected" button
+5. Run remediation with exported file:
+
 ```bash
-sudo ./linux_security_audit.py --framework nist --remediate
-sudo ./linux_security_audit.py --framework nist -f json -o nist_ato.json
+sudo python3 linux_security_audit.py --auto-remediate --remediation-file Selected-Report.json
 ```
 
-### Monthly Security Audits
+### Automated Remediation
+
+Batch fix all issues with confirmation:
+
 ```bash
-#!/bin/bash
-DATE=$(date +%Y%m%d)
-sudo ./linux_security_audit.py \
-    -f csv \
-    -o /var/log/security/audit_$DATE.csv \
-    --no-console
+sudo python3 linux_security_audit.py --auto-remediate
 ```
 
----
+⚠️ **Safety Notes**:
+- Always test in non-production first
+- Review remediation commands before executing
+- Backup critical configurations
+- Have console access in case SSH breaks
+- Schedule during maintenance windows
 
-## 🔍 Security Checks Overview
+📖 **[Remediation Guide →](../../wiki/Usage-Guide#remediation-options)**
 
-- **File Permissions** (8 checks)
-- **User Account Security** (7 checks)
-- **SSH Configuration** (15 checks) - CAT I critical
-- **Firewall** (3 checks) - CAT I critical
-- **Kernel Parameters** (9 checks)
-- **Filesystem** (7 checks)
-- **Logging & Auditing** (5 checks)
-- **System Hardening** (6 checks)
-- **Network Security** (3 checks)
-- **Cron & Access** (2 checks)
-- **Bootloader** (2 checks)
-- **System Updates** (2 checks)
-- **Sudo Configuration** (2 checks)
-- **Banners** (2 checks)
-- **File Auditing** (5 checks)
-- **Home Directory Security** (5 checks)
-- **Password Complexity** (5 checks)
-- **Account Lockout** (2 checks)
-- **Time Synchronization** (2 checks)
-- **Additional Checks** (10+ checks)
+## 📂 Project Structure
 
-**Total: 136+ comprehensive security checks**
-
----
-
-## 🔧 Troubleshooting
-
-### Permission Denied
-```bash
-sudo ./linux_security_audit.py
 ```
-
-### Python Version Too Old
-```bash
-python3 --version  # Must be 3.8+
+Linux-Security-Audit-Project/
+├── linux_security_audit.py      # Main orchestrator script
+├── module_core.py                # Core security baseline (150+ checks)
+├── module_cis.py                 # CIS Benchmarks (200+ checks)
+├── module_cisa.py                # CISA guidance (140+ checks)
+├── module_enisa.py               # ENISA guidelines (135+ checks)
+├── module_iso27001.py            # ISO 27001 controls (145+ checks)
+├── module_nist.py                # NIST frameworks (160+ checks)
+├── module_nsa.py                 # NSA hardening (155+ checks)
+├── module_stig.py                # DISA STIGs (180+ checks)
+├── README.md                     # This file
+├── LICENSE                       # MIT License
+├── CHANGELOG.md                  # Version history
+├── SECURITY.md                   # Security policy
+└── .gitignore                    # Git ignore rules
 ```
-
-### Script Won't Execute
-```bash
-chmod +x linux_security_auditE.py
-```
-
-### Remediation Fails
-```bash
-sudo apt-get install -y ufw auditd aide
-```
-
----
 
 ## 🤝 Contributing
 
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Test thoroughly
-4. Document changes
-5. Submit pull request
+We welcome contributions! Here's how you can help:
 
----
+### Ways to Contribute
 
-## 📜 License
+1. **🐛 Report Bugs**: [Open an issue](https://github.com/Sandler73/Linux-Security-Audit-Project/issues)
+2. **💡 Suggest Features**: [Request enhancements](https://github.com/Sandler73/Linux-Security-Audit-Project/issues)
+3. **📝 Improve Documentation**: Fix errors, add examples
+4. **💻 Write Code**: Implement features, fix bugs
+5. **🛡️ Add Checks**: Create new security checks
+6. **🔍 Review PRs**: Help review pull requests
 
-MIT License - See LICENSE file for details
+### Contribution Process
 
----
+1. **Fork** the repository
+2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
+3. **Make** your changes
+4. **Test** thoroughly (root and non-root)
+5. **Commit** with clear messages (`git commit -m 'Add amazing feature'`)
+6. **Push** to your fork (`git push origin feature/amazing-feature`)
+7. **Open** a Pull Request
 
-## 🙏 Acknowledgments
+### Development Setup
 
-- **CIS** - CIS Benchmarks
-- **NIST** - NIST 800-53
-- **DISA** - Security Technical Implementation Guides
-- **NSA** - System Hardening Guides
-- **CISA** - Cybersecurity Best Practices
-- Security professionals and auditors worldwide
+```bash
+# Clone your fork
+git clone https://github.com/YOUR_USERNAME/Linux-Security-Audit-Project.git
+cd Linux-Security-Audit-Project
 
----
+# Create development branch
+git checkout -b feature/your-feature
 
-## 📊 Statistics
+# Make changes and test
+python3 linux_security_audit.py --list-modules
+sudo python3 linux_security_audit.py -m YourModule
 
-- **Lines of Code:** 2,290
-- **Security Checks:** 136+
-- **Framework Mappings:** 97
-- **Check Categories:** 20+
-- **Automated Fixes:** 95%+
-- **Supported Frameworks:** 5
-- **Output Formats:** 4
+# Run tests (if available)
+python3 -m pytest tests/
+```
 
----
+### Coding Standards
 
-## ⚠️ Disclaimer
+- Follow PEP 8 style guide
+- Use type hints where applicable
+- Write comprehensive docstrings
+- Add inline comments for complex logic
+- Include error handling
+- Test both root and non-root execution
 
-This tool is provided "as is" without warranty. Always test in non-production environments first, create backups before applying fixes, and have security professionals review your configuration.
+📖 **[Complete Development Guide →](../../wiki/Development-Guide)**
 
-**Use at your own risk.**
+## 📄 License
 
----
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-**Last Updated:** December 21, 2025  
-**Version:** 3.1.0-COMPLETE  
-**License:** MIT
+### MIT License Summary
+
+✅ **Permissions**:
+- Commercial use
+- Modification
+- Distribution
+- Private use
+
+✅ **Conditions**:
+- License and copyright notice
+
+✅ **Limitations**:
+- No liability
+- No warranty
+
+## 🆘 Support
+
+### Getting Help
+
+1. **📖 Check Documentation**: Start with [Wiki](../../wiki/Home)
+2. **🔍 Search Issues**: Look for [existing issues](https://github.com/Sandler73/Linux-Security-Audit-Project/issues)
+3. **❓ Read FAQ**: Check [Frequently Asked Questions](../../wiki/Frequently-Asked-Questions-(FAQ))
+4. **🔧 Troubleshooting**: Review [Troubleshooting Guide](../../wiki/Troubleshooting-Guide)
+5. **💬 Open Issue**: [Create new issue](https://github.com/Sandler73/Linux-Security-Audit-Project/issues/new)
+
+### Issue Guidelines
+
+When opening an issue, please include:
+
+**For Bug Reports**:
+- Clear description of the issue
+- Steps to reproduce
+- Expected vs actual behavior
+- Environment details (OS, Python version)
+- Error messages and logs
+- Screenshots (if applicable)
+
+**For Feature Requests**:
+- Use case description
+- Why it's needed
+- Proposed implementation
+- Benefit to other users
+
+### Community
+
+- **GitHub Issues**: Bug reports and feature requests
+- **Pull Requests**: Code contributions
+- **Discussions**: Questions and ideas (if enabled)
+- **Wiki**: Comprehensive documentation
+
+## 🌟 Acknowledgments
+
+### Standards Organizations
+
+This project implements guidance from:
+
+- **[CIS](https://www.cisecurity.org/)** - Center for Internet Security
+- **[NIST](https://www.nist.gov/cyberframework)** - National Institute of Standards and Technology
+- **[DISA](https://public.cyber.mil/stigs/)** - Defense Information Systems Agency
+- **[NSA](https://www.nsa.gov/What-We-Do/Cybersecurity/)** - National Security Agency
+- **[CISA](https://www.cisa.gov/)** - Cybersecurity and Infrastructure Security Agency
+- **[ENISA](https://www.enisa.europa.eu/)** - European Union Agency for Cybersecurity
+- **[ISO](https://www.iso.org/)** - International Organization for Standardization
+
+### Security Community
+
+Thanks to the open-source security community for:
+- Security research and vulnerability disclosure
+- Framework development and maintenance
+- Best practices documentation
+- Tool development and testing
+
+## 📊 Project Stats
+
+- **Version**: 1.1
+- **Release Date**: January 2026
+- **Total Checks**: 1,100+
+- **Modules**: 8
+- **Output Formats**: 5
+- **Python Version**: 3.6+
+- **License**: MIT
+- **Status**: Active Development
+
+## 🔗 Quick Links
+
+### Documentation
+- [Wiki Home](../../wiki/Home)
+- [Quick Start](../../wiki/Quick-Start-Guide)
+- [Usage Guide](../../wiki/Usage-Guide)
+- [Module Docs](../../wiki/Module-Documentation)
+- [Framework Reference](../../wiki/Framework-Reference)
+
+### Project
+- [GitHub Repository](https://github.com/Sandler73/Linux-Security-Audit-Project)
+- [Issues](https://github.com/Sandler73/Linux-Security-Audit-Project/issues)
+- [Pull Requests](https://github.com/Sandler73/Linux-Security-Audit-Project/pulls)
+- [Releases](https://github.com/Sandler73/Linux-Security-Audit-Project/releases)
+
+### Standards
+- [CIS Benchmarks](https://www.cisecurity.org/cis-benchmarks/)
+- [NIST Cybersecurity Framework](https://www.nist.gov/cyberframework)
+- [DISA STIGs](https://public.cyber.mil/stigs/)
+- [NSA Cybersecurity](https://www.nsa.gov/What-We-Do/Cybersecurity/)
+- [CISA Resources](https://www.cisa.gov/)
 
 ---
 
 <div align="center">
 
-**⭐ Star this repository if it helped you! ⭐**
+**[⬆ Back to Top](#linux-security-audit-project)**
 
-[Report Bug](https://github.com/Sandler73/Linux-Security-Audit-and-Remediation-Script/issues) · [Request Feature](https://github.com/Sandler73/Linux-Security-Audit-and-Remediation-Script/issues)
+Made with ❤️ for the Linux security community
+
+**[📖 Documentation](../../wiki/Home)** • **[🐛 Report Bug](https://github.com/Sandler73/Linux-Security-Audit-Project/issues)** • **[✨ Request Feature](https://github.com/Sandler73/Linux-Security-Audit-Project/issues)**
 
 </div>
