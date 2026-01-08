@@ -2,7 +2,7 @@
 """
 module_nsa.py
 NSA Cybersecurity Guidance Module for Linux
-Version: 1.0
+Version: 2.1
 
 SYNOPSIS:
     Comprehensive NSA (National Security Agency) cybersecurity guidance
@@ -40,17 +40,19 @@ PARAMETERS:
     shared_data : Dictionary containing shared data from main script
 
 USAGE:
-# Test the module standalone
-python3 module_nsa.py
+    Standalone testing
+        python3 module_nsa.py
 
-# Run with main audit script
-python3 linux_security_audit.py --modules NSA
+    Integration with main audit script
+        python3 linux_security_audit.py --modules NSA
+        python3 linux_security_audit.py -m NSA
 
 NOTES:
-    Version: 1.0.0
+    Version: 2.1
     Reference: https://www.nsa.gov/cybersecurity-guidance
     Focus: Enterprise-grade security for defense and critical infrastructure
-    Target: 180+ comprehensive, real security auditing checks
+    Target: 180+ comprehensive security auditing checks; OS-aware technical control checks
+    Module automatically detects OS via module_core integration
     
     SELinux Note: Many checks focus on SELinux which was developed by NSA
     as a mandatory access control mechanism for Linux systems.
@@ -73,6 +75,104 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from linux_security_audit import AuditResult
 
 MODULE_NAME = "NSA"
+MODULE_VERSION = "2.1"
+
+import platform
+
+# ============================================================================
+# OS Detection and Classification  
+# ============================================================================
+
+class OSInfo:
+    """Store and manage OS information"""
+    def __init__(self):
+        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
+        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
+        self.version = "Unknown"
+        self.version_id = "Unknown"
+        self.codename = "Unknown"
+        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
+        self.init_system = "Unknown"  # systemd, sysvinit, upstart
+        self.architecture = platform.machine()
+        self.kernel_version = platform.release()
+        
+    def __str__(self):
+        return f"{self.distro} {self.version} ({self.family})"
+
+def detect_os() -> OSInfo:
+    """
+    Comprehensive OS detection
+    Returns OSInfo object with detailed system information
+    """
+    os_info = OSInfo()
+    
+    # Read /etc/os-release (standard location)
+    if os.path.exists("/etc/os-release"):
+        with open("/etc/os-release", 'r') as f:
+            os_release = {}
+            for line in f:
+                if '=' in line:
+                    key, value = line.strip().split('=', 1)
+                    os_release[key] = value.strip('"')
+        
+        os_info.distro = os_release.get('ID', 'unknown').lower()
+        os_info.version = os_release.get('VERSION', 'unknown')
+        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
+        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
+        
+        # Determine OS family
+        id_like = os_release.get('ID_LIKE', '').lower()
+        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
+            os_info.family = 'debian'
+        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
+            os_info.family = 'redhat'
+        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
+            os_info.family = 'suse'
+        elif os_info.distro == 'arch':
+            os_info.family = 'arch'
+    
+    # Fallback detection methods
+    if os_info.family == "Unknown":
+        if os.path.exists("/etc/debian_version"):
+            os_info.family = 'debian'
+            os_info.distro = 'debian'
+        elif os.path.exists("/etc/redhat-release"):
+            os_info.family = 'redhat'
+            with open("/etc/redhat-release", 'r') as f:
+                content = f.read().lower()
+                if 'centos' in content:
+                    os_info.distro = 'centos'
+                elif 'red hat' in content or 'rhel' in content:
+                    os_info.distro = 'rhel'
+                elif 'fedora' in content:
+                    os_info.distro = 'fedora'
+    
+    # Detect package manager
+    if command_exists('apt-get'):
+        os_info.package_manager = 'apt'
+    elif command_exists('dnf'):
+        os_info.package_manager = 'dnf'
+    elif command_exists('yum'):
+        os_info.package_manager = 'yum'
+    elif command_exists('zypper'):
+        os_info.package_manager = 'zypper'
+    elif command_exists('pacman'):
+        os_info.package_manager = 'pacman'
+    
+    # Detect init system
+    if os.path.exists("/run/systemd/system"):
+        os_info.init_system = 'systemd'
+    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
+        link = os.readlink("/sbin/init")
+        if 'systemd' in link:
+            os_info.init_system = 'systemd'
+        elif 'upstart' in link:
+            os_info.init_system = 'upstart'
+    else:
+        os_info.init_system = 'sysvinit'
+    
+    return os_info
+
 MODULE_VERSION = "1.0.0"
 
 # ============================================================================
@@ -123,7 +223,7 @@ def check_service_active(service_name: str) -> bool:
     result = run_command(f"systemctl is-active {service_name} 2>/dev/null")
     return result.returncode == 0 and result.stdout.strip() == "active"
 
-def check_package_installed(package_name: str) -> bool:
+def check_package_installed(package_name: str, os_info) -> bool:
     """Check if a package is installed (works for both apt and rpm)"""
     # Try dpkg (Debian/Ubuntu)
     result = run_command(f"dpkg -l {package_name} 2>/dev/null | grep -q '^ii'")
@@ -187,7 +287,7 @@ def safe_int_parse(value: str, default: int = 0) -> int:
     except (ValueError, AttributeError):
         return default
 
-def get_selinux_status() -> Dict[str, str]:
+def get_selinux_status(os_info: OSInfo) -> Dict[str, str]:
     """Get comprehensive SELinux status"""
     status = {
         'installed': False,
@@ -198,7 +298,7 @@ def get_selinux_status() -> Dict[str, str]:
     }
     
     # Check if SELinux is installed
-    if check_package_installed("selinux-policy") or os.path.exists("/etc/selinux/config"):
+    if check_package_installed("selinux-policy", os_info) or os.path.exists("/etc/selinux/config"):
         status['installed'] = True
     
     # Check current status
@@ -348,14 +448,13 @@ def get_firewall_status() -> Dict[str, bool]:
 # Reference: NSA Security-Enhanced Linux documentation
 # ============================================================================
 
-def check_selinux_mac_controls(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_selinux_mac_controls(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    SELinux and Mandatory Access Control checks
-    Comprehensive checks for NSA's SELinux guidance
+    SELinux and Mandatory Access Control Security Audit Checks Against NSA's SELinux guidance
     """
     print(f"[{MODULE_NAME}] Checking SELinux/MAC Controls...")
     
-    selinux_status = get_selinux_status()
+    selinux_status = get_selinux_status(os_info)
     apparmor_status = get_apparmor_status()
     
     # MAC-001: SELinux or AppArmor installed
@@ -696,7 +795,7 @@ def check_selinux_mac_controls(results: List[AuditResult], shared_data: Dict[str
         ))
     
     # MAC-026: setroubleshoot not installed (production)
-    setroubleshoot_installed = check_package_installed("setroubleshoot")
+    setroubleshoot_installed = check_package_installed("setroubleshoot", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -765,10 +864,9 @@ def check_selinux_mac_controls(results: List[AuditResult], shared_data: Dict[str
 # Reference: NSA Network Infrastructure Security guidance
 # ============================================================================
 
-def check_network_hardening(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_network_hardening(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Network Security Hardening checks
-    Comprehensive checks for NSA network guidance
+    Network Security Hardening Security Audit Checks Against NSA Network Guidance
     """
     print(f"[{MODULE_NAME}] Checking Network Security Hardening...")
     
@@ -1315,10 +1413,9 @@ def check_network_hardening(results: List[AuditResult], shared_data: Dict[str, A
 # Reference: NSA Linux Kernel Hardening guidance
 # ============================================================================
 
-def check_kernel_hardening(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_kernel_hardening(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Kernel Security Hardening checks
-    Comprehensive checks for NSA kernel guidance
+    Kernel Security Hardening Security Audit Checks Against NSA Kernel Guidance
     """
     print(f"[{MODULE_NAME}] Checking Kernel Security Hardening...")
     
@@ -1734,10 +1831,9 @@ def check_kernel_hardening(results: List[AuditResult], shared_data: Dict[str, An
 # Reference: NSA System Hardening guidance
 # ============================================================================
 
-def check_system_hardening(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_system_hardening(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    System Hardening checks
-    Comprehensive checks for NSA system guidance
+    System Hardening Security Audit Checks Against NSA System Guidance
     """
     print(f"[{MODULE_NAME}] Checking System Hardening...")
     
@@ -1909,7 +2005,7 @@ def check_system_hardening(results: List[AuditResult], shared_data: Dict[str, An
     ))
     
     # SYS-009: sudo installed and configured
-    sudo_installed = check_package_installed("sudo")
+    sudo_installed = check_package_installed("sudo", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2090,7 +2186,7 @@ def check_system_hardening(results: List[AuditResult], shared_data: Dict[str, An
     ))
     
     # SYS-021: Log rotation configured
-    logrotate_installed = check_package_installed("logrotate")
+    logrotate_installed = check_package_installed("logrotate", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2153,7 +2249,7 @@ def check_system_hardening(results: List[AuditResult], shared_data: Dict[str, An
     ))
     
     # SYS-026: File integrity monitoring installed
-    fim_installed = check_package_installed("aide") or check_package_installed("tripwire")
+    fim_installed = check_package_installed("aide", os_info) or check_package_installed("tripwire", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2229,10 +2325,9 @@ def check_system_hardening(results: List[AuditResult], shared_data: Dict[str, An
 # Reference: NSA Cryptographic Module Validation Program guidance
 # ============================================================================
 
-def check_cryptography_services(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_cryptography_services(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Cryptography and Services checks
-    Comprehensive checks for NSA crypto guidance
+    Cryptography and Services Security Audit Checks Against NSA Crypto Guidance
     """
     print(f"[{MODULE_NAME}] Checking Cryptography & Services...")
     
@@ -2482,7 +2577,7 @@ def check_cryptography_services(results: List[AuditResult], shared_data: Dict[st
     
     # CRYPTO-019: VPN capability available
     vpn_tools = ["openvpn", "strongswan", "wireguard"]
-    vpn_installed = any(check_package_installed(tool) for tool in vpn_tools)
+    vpn_installed = any(check_package_installed(tool, os_info) for tool in vpn_tools)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2494,7 +2589,7 @@ def check_cryptography_services(results: List[AuditResult], shared_data: Dict[st
     ))
     
     # CRYPTO-020: IPsec tools available
-    ipsec_installed = check_package_installed("libreswan") or check_package_installed("strongswan")
+    ipsec_installed = check_package_installed("libreswan", os_info) or check_package_installed("strongswan", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2653,10 +2748,9 @@ def check_cryptography_services(results: List[AuditResult], shared_data: Dict[st
 # Miscellaneous NSA security guidance
 # ============================================================================
 
-def check_additional_security(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_additional_security(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
-    Additional Security checks
-    Comprehensive checks for miscellaneous NSA guidance
+    Additional Security Security Audit Checks for Miscellaneous NSA guidance
     """
     print(f"[{MODULE_NAME}] Checking Additional Security Controls...")
     
@@ -2746,7 +2840,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # ADD-007: System activity reporting
-    sysstat_installed = check_package_installed("sysstat")
+    sysstat_installed = check_package_installed("sysstat", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2758,7 +2852,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # ADD-008: Intrusion detection system
-    ids_installed = check_package_installed("aide") or check_package_installed("tripwire") or check_package_installed("ossec")
+    ids_installed = check_package_installed("aide", os_info) or check_package_installed("tripwire", os_info) or check_package_installed("ossec", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2770,7 +2864,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # ADD-009: Malware scanner available
-    av_installed = check_package_installed("clamav") or check_package_installed("clamav-daemon")
+    av_installed = check_package_installed("clamav", os_info) or check_package_installed("clamav-daemon", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2782,7 +2876,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # ADD-010: Rootkit detection tools
-    rkhunter_installed = check_package_installed("rkhunter") or check_package_installed("chkrootkit")
+    rkhunter_installed = check_package_installed("rkhunter", os_info) or check_package_installed("chkrootkit", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2794,7 +2888,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # ADD-011: Security updates automatic
-    auto_updates = check_package_installed("unattended-upgrades") or check_package_installed("yum-cron")
+    auto_updates = check_package_installed("unattended-upgrades", os_info) or check_package_installed("yum-cron", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2885,7 +2979,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
     
     # ADD-018: X Window System status
     x_packages = ["xorg", "xserver-xorg"]
-    x_installed = any(check_package_installed(pkg) for pkg in x_packages)
+    x_installed = any(check_package_installed(pkg, os_info) for pkg in x_packages)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2934,31 +3028,46 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     """
     results = []
     
-    print(f"\n[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] NSA CYBERSECURITY GUIDANCE AUDIT")
-    print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
-    print(f"[{MODULE_NAME}] Focus: Defense-in-depth, SELinux/MAC, Strong Crypto")
-    print(f"[{MODULE_NAME}] Control Areas: MAC, Network, Kernel, System, Crypto, Services")
-    print(f"[{MODULE_NAME}] Target: 180+ comprehensive security checks")
-    print(f"[{MODULE_NAME}] " + "="*70 + "\n")
+
+    # Detect operating system
+    os_info = detect_os()
+    shared_data['os_info'] = os_info
+    
+    print(f"[{MODULE_NAME}] Operating System: {os_info}")
+    print(f"[{MODULE_NAME}] Package Manager: {os_info.package_manager}")
+    print(f"[{MODULE_NAME}] Init System: {os_info.init_system}")
+    print("")
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
         print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
+    print(f"\n[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] NSA CYBERSECURITY GUIDANCE AUDIT")
+    print(f"[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
+    print(f"[{MODULE_NAME}] Focus: Defense-in-depth, SELinux/MAC, Strong Crypto")
+    print(f"[{MODULE_NAME}] Control Areas: MAC, Network, Kernel, System, Crypto, Services")
+    print(f"[{MODULE_NAME}] Target: 180+ Comprehensive Security Audit Checks")
+    print(f"[{MODULE_NAME}] " + "="*70 + "\n")
+    
+    is_root = shared_data.get("is_root", os.geteuid() == 0)
+    if not is_root:
+        print(f"[{MODULE_NAME}] âš ï¸  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
+    
     try:
         # Execute all control area checks
-        check_selinux_mac_controls(results, shared_data)
-        check_network_hardening(results, shared_data)
-        check_kernel_hardening(results, shared_data)
-        check_system_hardening(results, shared_data)
-        check_cryptography_services(results, shared_data)
-        check_additional_security(results, shared_data)
+        check_selinux_mac_controls(results, shared_data, os_info)
+        check_network_hardening(results, shared_data, os_info)
+        check_kernel_hardening(results, shared_data, os_info)
+        check_system_hardening(results, shared_data, os_info)
+        check_cryptography_services(results, shared_data, os_info)
+        check_additional_security(results, shared_data, os_info)
         
     except Exception as e:
-        print(f"[{MODULE_NAME}] ❌ Error during audit execution: {str(e)}")
+        print(f"[{MODULE_NAME}] âŒ Error during audit execution: {str(e)}")
         results.append(AuditResult(
             module=MODULE_NAME,
             category="NSA - Error",
@@ -2980,7 +3089,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"\n[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] AUDIT COMPLETED")
     print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Total checks executed: {len(results)}")
+    print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
     print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
@@ -2988,7 +3097,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
     print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
     if error_count > 0:
-        print(f"[{MODULE_NAME}]   🔴 Error:   {error_count:3d}")
+        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
     print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     return results
