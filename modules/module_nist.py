@@ -2,29 +2,29 @@
 """
 module_nist.py
 NIST Cybersecurity Framework & 800-53 Controls Module for Linux
-Version: 2.0
+Version: 2.1
 
 SYNOPSIS:
-    Truly comprehensive NIST security controls and Cybersecurity Framework 
+    Comprehensive audit of NIST security controls and Cybersecurity Framework 
     compliance checks for Linux systems.
 
 DESCRIPTION:
     This module performs exhaustive security checks aligned with NIST guidance:
     
-    NIST 800-53 Rev 5 Control Families (200+ real checks):
-    - Access Control (AC) - 30+ detailed controls
-    - Audit and Accountability (AU) - 25+ controls  
-    - Configuration Management (CM) - 25+ controls
-    - Identification and Authentication (IA) - 25+ controls
-    - Incident Response (IR) - 20+ controls
-    - System and Communications Protection (SC) - 30+ controls
-    - System and Information Integrity (SI) - 30+ controls
-    - Contingency Planning (CP) - 10+ controls
-    - Maintenance (MA) - 10+ controls
-    - Media Protection (MP) - 10+ controls
-    - Physical & Environmental (PE) - 5+ controls
-    - Risk Assessment (RA) - 5+ controls
-    - System Acquisition (SA) - 5+ controls
+    NIST 800-53 Rev 5 Control Families:
+    - Access Control (AC)
+    - Audit and Accountability (AU)
+    - Configuration Management (CM)
+    - Identification and Authentication (IA)
+    - Incident Response (IR)
+    - System and Communications Protection (SC)
+    - System and Information Integrity (SI)
+    - Contingency Planning (CP)
+    - Maintenance (MA)
+    - Media Protection (MP)
+    - Physical & Environmental (PE)
+    - Risk Assessment (RA)
+    - System Acquisition (SA)
     
     NIST Cybersecurity Framework 2.0 (CSF):
     - Govern (GV) - Organizational cybersecurity governance
@@ -42,17 +42,19 @@ PARAMETERS:
     shared_data : Dictionary containing shared data from main script
 
 USAGE:
-# Standalone testing
-python3 module_nist.py
+    Standalone testing
+        python3 module_nist.py
 
-# Integration with main audit script
-python3 linux_security_audit.py --modules NIST
+    Integration with main audit script
+        python3 linux_security_audit.py --modules NIST
+        python3 linux_security_audit.py -m NIST
 
 NOTES:
-    Version: 2.0
+    Version: 2.1
     Reference: https://csrc.nist.gov/publications
     Standards: NIST 800-53 Rev 5, NIST CSF 2.0, NIST 800-171 Rev 2
-    Target: 160+ comprehensive, real security checks
+    Target: 160+ comprehensive security checks; OS-aware technical control checks
+    Module automatically detects OS via module_core integration
 """
 
 import os
@@ -72,6 +74,104 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from linux_security_audit import AuditResult
 
 MODULE_NAME = "NIST"
+MODULE_VERSION = "2.1"
+
+import platform
+
+# ============================================================================
+# OS Detection and Classification  
+# ============================================================================
+
+class OSInfo:
+    """Store and manage OS information"""
+    def __init__(self):
+        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
+        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
+        self.version = "Unknown"
+        self.version_id = "Unknown"
+        self.codename = "Unknown"
+        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
+        self.init_system = "Unknown"  # systemd, sysvinit, upstart
+        self.architecture = platform.machine()
+        self.kernel_version = platform.release()
+        
+    def __str__(self):
+        return f"{self.distro} {self.version} ({self.family})"
+
+def detect_os() -> OSInfo:
+    """
+    Comprehensive OS detection
+    Returns OSInfo object with detailed system information
+    """
+    os_info = OSInfo()
+    
+    # Read /etc/os-release (standard location)
+    if os.path.exists("/etc/os-release"):
+        with open("/etc/os-release", 'r') as f:
+            os_release = {}
+            for line in f:
+                if '=' in line:
+                    key, value = line.strip().split('=', 1)
+                    os_release[key] = value.strip('"')
+        
+        os_info.distro = os_release.get('ID', 'unknown').lower()
+        os_info.version = os_release.get('VERSION', 'unknown')
+        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
+        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
+        
+        # Determine OS family
+        id_like = os_release.get('ID_LIKE', '').lower()
+        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
+            os_info.family = 'debian'
+        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
+            os_info.family = 'redhat'
+        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
+            os_info.family = 'suse'
+        elif os_info.distro == 'arch':
+            os_info.family = 'arch'
+    
+    # Fallback detection methods
+    if os_info.family == "Unknown":
+        if os.path.exists("/etc/debian_version"):
+            os_info.family = 'debian'
+            os_info.distro = 'debian'
+        elif os.path.exists("/etc/redhat-release"):
+            os_info.family = 'redhat'
+            with open("/etc/redhat-release", 'r') as f:
+                content = f.read().lower()
+                if 'centos' in content:
+                    os_info.distro = 'centos'
+                elif 'red hat' in content or 'rhel' in content:
+                    os_info.distro = 'rhel'
+                elif 'fedora' in content:
+                    os_info.distro = 'fedora'
+    
+    # Detect package manager
+    if command_exists('apt-get'):
+        os_info.package_manager = 'apt'
+    elif command_exists('dnf'):
+        os_info.package_manager = 'dnf'
+    elif command_exists('yum'):
+        os_info.package_manager = 'yum'
+    elif command_exists('zypper'):
+        os_info.package_manager = 'zypper'
+    elif command_exists('pacman'):
+        os_info.package_manager = 'pacman'
+    
+    # Detect init system
+    if os.path.exists("/run/systemd/system"):
+        os_info.init_system = 'systemd'
+    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
+        link = os.readlink("/sbin/init")
+        if 'systemd' in link:
+            os_info.init_system = 'systemd'
+        elif 'upstart' in link:
+            os_info.init_system = 'upstart'
+    else:
+        os_info.init_system = 'sysvinit'
+    
+    return os_info
+
 MODULE_VERSION = "2.0.0"
 
 # ============================================================================
@@ -122,7 +222,7 @@ def check_service_active(service_name: str) -> bool:
     result = run_command(f"systemctl is-active {service_name} 2>/dev/null")
     return result.returncode == 0 and result.stdout.strip() == "active"
 
-def check_package_installed(package_name: str) -> bool:
+def check_package_installed(package_name: str, os_info) -> bool:
     """Check if a package is installed (works for both apt and rpm)"""
     # Try dpkg (Debian/Ubuntu)
     result = run_command(f"dpkg -l {package_name} 2>/dev/null | grep -q '^ii'")
@@ -236,17 +336,17 @@ def safe_int_parse(value: str, default: int = 0) -> int:
 
 
 # ============================================================================
-# AC - Access Control (30+ comprehensive checks)
+# AC - Access Control
 # NIST 800-53: AC-1 through AC-25
 # CSF: PR.AC (Identity Management and Access Control)
 # ============================================================================
 
-def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     Access Control checks - AC family
-    30+ comprehensive, real checks for access control
+    Security audit for access control configurations and variables
     """
-    print(f"[{MODULE_NAME}] Checking AC - Access Control (30+ checks)...")
+    print(f"[{MODULE_NAME}] Checking AC - Access Control...")
     
     # AC-001: UID 0 accounts check (AC-6 Least Privilege)
     passwd_content = read_file_safe("/etc/passwd")
@@ -369,7 +469,7 @@ def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]
     ))
     
     # AC-009: sudo installed and configured (AC-5 Separation of Duties)
-    sudo_installed = check_package_installed("sudo")
+    sudo_installed = check_package_installed("sudo", os_info)
     sudoers_exists = os.path.exists("/etc/sudoers")
     
     results.append(AuditResult(
@@ -555,7 +655,7 @@ def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]
     
     # AC-022: Screen lock capability (AC-11)
     screen_lock_packages = ["vlock", "gnome-screensaver", "xscreensaver", "light-locker"]
-    installed_locks = [pkg for pkg in screen_lock_packages if check_package_installed(pkg)]
+    installed_locks = [pkg for pkg in screen_lock_packages if check_package_installed(pkg, os_info)]
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -692,20 +792,20 @@ def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]
 
 
 # ============================================================================
-# AU - Audit and Accountability (25+ comprehensive checks)
+# AU - Audit and Accountability
 # NIST 800-53: AU-1 through AU-16
 # CSF: DE.CM (Security Continuous Monitoring)
 # ============================================================================
 
-def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     Audit and Accountability checks - AU family
-    25+ comprehensive, real checks for auditing
+    Comprehensive security assessment of auditing and logging variables
     """
-    print(f"[{MODULE_NAME}] Checking AU - Audit & Accountability (25+ checks)...")
+    print(f"[{MODULE_NAME}] Checking AU - Audit & Accountability...")
     
     # AU-001: auditd installed (AU-2)
-    auditd_installed = check_package_installed("auditd") or check_package_installed("audit")
+    auditd_installed = check_package_installed("auditd", os_info) or check_package_installed("audit", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -871,7 +971,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
     # AU-013: Log analysis tools installed (AU-6)
     log_tools = []
     for tool in ["logwatch", "logcheck", "swatch", "auditreport"]:
-        if command_exists(tool) or check_package_installed(tool):
+        if command_exists(tool) or check_package_installed(tool, os_info):
             log_tools.append(tool)
     
     results.append(AuditResult(
@@ -999,7 +1099,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         ))
     
     # AU-022: logrotate installed (AU-11)
-    logrotate_installed = check_package_installed("logrotate")
+    logrotate_installed = check_package_installed("logrotate", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1052,17 +1152,17 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
 
 
 # ============================================================================
-# CM - Configuration Management (25+ comprehensive checks)
+# CM - Configuration Management
 # NIST 800-53: CM-1 through CM-14
 # CSF: PR.IP (Information Protection Processes)
 # ============================================================================
 
-def check_configuration_management(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_configuration_management(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     Configuration Management checks - CM family  
-    25+ comprehensive, real checks
+    Audit of configuration management variables
     """
-    print(f"[{MODULE_NAME}] Checking CM - Configuration Management (25+ checks)...")
+    print(f"[{MODULE_NAME}] Checking CM - Configuration Management...")
     
     # CM-001: Baseline configuration files exist (CM-2)
     baseline_files = [
@@ -1238,7 +1338,7 @@ def check_configuration_management(results: List[AuditResult], shared_data: Dict
     ))
     
     # CM-013: System file integrity monitoring (CM-3, SI-7)
-    aide_installed = check_package_installed("aide")
+    aide_installed = check_package_installed("aide", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -1417,17 +1517,17 @@ def check_configuration_management(results: List[AuditResult], shared_data: Dict
 
 
 # ============================================================================
-# IA - Identification and Authentication (25+ comprehensive checks)
+# IA - Identification and Authentication
 # NIST 800-53: IA-1 through IA-12
 # CSF: PR.AC-7 (Identity Management)
 # ============================================================================
 
-def check_identification_authentication(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_identification_authentication(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     Identification and Authentication checks - IA family
-    25+ comprehensive, real checks
+    IAM relevant security auditing
     """
-    print(f"[{MODULE_NAME}] Checking IA - Identification & Authentication (25+ checks)...")
+    print(f"[{MODULE_NAME}] Checking IA - Identification & Authentication Management...")
     
     # IA-001: Password maximum days (IA-5)
     login_defs = read_file_safe("/etc/login.defs")
@@ -1914,17 +2014,16 @@ def check_identification_authentication(results: List[AuditResult], shared_data:
 
 
 # ============================================================================
-# IR - Incident Response (20+ comprehensive checks)
+# IR - Incident Response
 # NIST 800-53: IR-1 through IR-10
 # CSF: RS (Respond)
 # ============================================================================
 
-def check_incident_response(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_incident_response(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     Incident Response checks - IR family
-    20+ comprehensive, real checks
     """
-    print(f"[{MODULE_NAME}] Checking IR - Incident Response (20+ checks)...")
+    print(f"[{MODULE_NAME}] Checking IR - Incident Response...")
     
     # IR-001: Incident response plan documentation (IR-1)
     ir_plan_locations = [
@@ -1972,7 +2071,7 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
     
     # IR-004: Memory forensics capability (IR-4)
     memory_tools = ["volatility", "lime", "avml"]
-    memory_forensics = any(command_exists(tool) or check_package_installed(tool) for tool in memory_tools)
+    memory_forensics = any(command_exists(tool) or check_package_installed(tool, os_info) for tool in memory_tools)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2123,7 +2222,7 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
     
     # IR-015: Rootkit detection tools (IR-4)
     rootkit_tools = ["rkhunter", "chkrootkit", "unhide"]
-    installed_rootkit = [tool for tool in rootkit_tools if check_package_installed(tool)]
+    installed_rootkit = [tool for tool in rootkit_tools if check_package_installed(tool, os_info)]
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2136,7 +2235,7 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
     
     # IR-016: Malware scanning capability (IR-4, SI-3)
     malware_scanners = ["clamav", "clamscan"]
-    installed_malware = [tool for tool in malware_scanners if check_package_installed(tool) or command_exists(tool)]
+    installed_malware = [tool for tool in malware_scanners if check_package_installed(tool, os_info) or command_exists(tool)]
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2149,7 +2248,7 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
     
     # IR-017: IDS/IPS capability (IR-4, SI-4)
     ids_ips_tools = ["snort", "suricata", "fail2ban"]
-    installed_ids = [tool for tool in ids_ips_tools if check_package_installed(tool)]
+    installed_ids = [tool for tool in ids_ips_tools if check_package_installed(tool, os_info)]
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2205,21 +2304,20 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
 
 
 # ============================================================================
-# SC - System and Communications Protection (30+ comprehensive checks)  
+# SC - System and Communications Protection
 # NIST 800-53: SC-1 through SC-28
 # CSF: PR.DS (Data Security), PR.PT (Protective Technology)
 # ============================================================================
 
-def check_system_communications_protection(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_system_communications_protection(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     System and Communications Protection - SC family
-    30+ comprehensive, real checks
     """
-    print(f"[{MODULE_NAME}] Checking SC - System & Communications Protection (30+ checks)...")
+    print(f"[{MODULE_NAME}] Checking SC - System & Communications Protection...")
     
     # SC-001: Firewall installed (SC-7)
     firewall_packages = ["ufw", "firewalld", "iptables"]
-    firewall_installed = any(check_package_installed(pkg) for pkg in firewall_packages)
+    firewall_installed = any(check_package_installed(pkg, os_info) for pkg in firewall_packages)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2596,7 +2694,7 @@ def check_system_communications_protection(results: List[AuditResult], shared_da
     
     # SC-029: VPN capability (SC-8)
     vpn_packages = ["openvpn", "strongswan", "wireguard"]
-    vpn_installed = any(check_package_installed(pkg) for pkg in vpn_packages)
+    vpn_installed = any(check_package_installed(pkg, os_info) for pkg in vpn_packages)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2623,17 +2721,16 @@ def check_system_communications_protection(results: List[AuditResult], shared_da
 
 
 # ============================================================================
-# SI - System and Information Integrity (30+ comprehensive checks)
+# SI - System and Information Integrity
 # NIST 800-53: SI-1 through SI-16
 # CSF: PR.DS (Data Security), DE.CM (Continuous Monitoring)
 # ============================================================================
 
-def check_system_information_integrity(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_system_information_integrity(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     System and Information Integrity - SI family
-    30+ comprehensive, real checks
     """
-    print(f"[{MODULE_NAME}] Checking SI - System & Information Integrity (30+ checks)...")
+    print(f"[{MODULE_NAME}] Checking SI - System & Information Integrity...")
     
     # SI-001: Available security updates (SI-2)
     # Try apt first (Debian/Ubuntu)
@@ -2663,7 +2760,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     
     # SI-002: Automatic updates configured (SI-2)
     auto_update_packages = ["unattended-upgrades", "yum-cron", "dnf-automatic"]
-    auto_updates = any(check_package_installed(pkg) for pkg in auto_update_packages)
+    auto_updates = any(check_package_installed(pkg, os_info) for pkg in auto_update_packages)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2694,7 +2791,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     ))
     
     # SI-004: AIDE installed (SI-7)
-    aide_installed = check_package_installed("aide")
+    aide_installed = check_package_installed("aide", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2738,7 +2835,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     
     # SI-007: Malware protection installed (SI-3)
     antivirus_packages = ["clamav", "clamav-daemon"]
-    antivirus_installed = any(check_package_installed(pkg) for pkg in antivirus_packages)
+    antivirus_installed = any(check_package_installed(pkg, os_info) for pkg in antivirus_packages)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2767,7 +2864,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     
     # SI-009: Rootkit detection installed (SI-3)
     rootkit_tools = ["rkhunter", "chkrootkit"]
-    rootkit_installed = any(check_package_installed(tool) for tool in rootkit_tools)
+    rootkit_installed = any(check_package_installed(tool, os_info) for tool in rootkit_tools)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2909,7 +3006,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         ))
     
     # SI-019: Prelink disabled (SI-7)
-    prelink_installed = check_package_installed("prelink")
+    prelink_installed = check_package_installed("prelink", os_info)
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -2956,7 +3053,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         if tool == "auditd":
             is_present = check_service_active(tool)
         else:
-            is_present = command_exists(tool) or check_package_installed(tool)
+            is_present = command_exists(tool) or check_package_installed(tool, os_info)
         
         status = "Info"
         if "Remove if not needed" in remediation:
@@ -2975,7 +3072,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
 
 
 # ============================================================================
-# Additional Control Families (15+ comprehensive checks)
+# Additional Control Families
 # CP - Contingency Planning
 # MA - Maintenance
 # MP - Media Protection
@@ -2984,12 +3081,12 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
 # SA - System & Services Acquisition
 # ============================================================================
 
-def check_additional_controls(results: List[AuditResult], shared_data: Dict[str, Any]):
+def check_additional_controls(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """
     Additional NIST control families
-    15+ comprehensive checks across CP, MA, MP, PE, RA, SA
+    Security audit checks across CP, MA, MP, PE, RA, SA
     """
-    print(f"[{MODULE_NAME}] Checking Additional Control Families (15+ checks)...")
+    print(f"[{MODULE_NAME}] Checking Additional Control Families...")
     
     # CP-001: Backup directories exist (CP-9)
     backup_dirs = ["/backup", "/var/backups", "/mnt/backup", "/srv/backup"]
@@ -3006,7 +3103,7 @@ def check_additional_controls(results: List[AuditResult], shared_data: Dict[str,
     
     # CP-002: Backup tools installed (CP-9)
     backup_tools = ["rsync", "tar", "borgbackup", "duplicity", "bacula"]
-    installed_backup = [tool for tool in backup_tools if command_exists(tool) or check_package_installed(tool)]
+    installed_backup = [tool for tool in backup_tools if command_exists(tool) or check_package_installed(tool, os_info)]
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -3169,7 +3266,7 @@ def check_additional_controls(results: List[AuditResult], shared_data: Dict[str,
     
     # RA-001: Vulnerability scanning capability (RA-5)
     vuln_scanners = ["lynis", "openvas", "nessus"]
-    vuln_tools = [tool for tool in vuln_scanners if check_package_installed(tool) or command_exists(tool)]
+    vuln_tools = [tool for tool in vuln_scanners if check_package_installed(tool, os_info) or command_exists(tool)]
     
     results.append(AuditResult(
         module=MODULE_NAME,
@@ -3202,33 +3299,48 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     """
     results = []
     
-    print(f"\n[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] NIST SECURITY CONTROLS AUDIT - Comprehensive Edition")
-    print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
-    print(f"[{MODULE_NAME}] Standards: NIST 800-53 Rev 5, CSF 2.0, 800-171 Rev 2")
-    print(f"[{MODULE_NAME}] Control Families: AC, AU, CM, IA, IR, SC, SI, CP, MA, MP, PE, RA, SA")
-    print(f"[{MODULE_NAME}] Target: 200+ comprehensive, real security checks")
-    print(f"[{MODULE_NAME}] " + "="*70 + "\n")
+
+    # Detect operating system
+    os_info = detect_os()
+    shared_data['os_info'] = os_info
+    
+    print(f"[{MODULE_NAME}] Operating System: {os_info}")
+    print(f"[{MODULE_NAME}] Package Manager: {os_info.package_manager}")
+    print(f"[{MODULE_NAME}] Init System: {os_info.init_system}")
+    print("")
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
         print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
+    print(f"\n[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] NIST SECURITY CONTROLS AUDIT - Comprehensive Edition")
+    print(f"[{MODULE_NAME}] " + "="*70)
+    print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
+    print(f"[{MODULE_NAME}] Standards: NIST 800-53 Rev 5, CSF 2.0, 800-171 Rev 2")
+    print(f"[{MODULE_NAME}] Control Families: AC, AU, CM, IA, IR, SC, SI, CP, MA, MP, PE, RA, SA")
+    print(f"[{MODULE_NAME}] Target: 160+ Comprehensive Security Audit Checks")
+    print(f"[{MODULE_NAME}] " + "="*70 + "\n")
+    
+    is_root = shared_data.get("is_root", os.geteuid() == 0)
+    if not is_root:
+        print(f"[{MODULE_NAME}] âš ï¸  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
+    
     try:
         # Execute all control family checks
-        check_access_control(results, shared_data)
-        check_audit_accountability(results, shared_data)
-        check_configuration_management(results, shared_data)
-        check_identification_authentication(results, shared_data)
-        check_incident_response(results, shared_data)
-        check_system_communications_protection(results, shared_data)
-        check_system_information_integrity(results, shared_data)
-        check_additional_controls(results, shared_data)
+        check_access_control(results, shared_data, os_info)
+        check_audit_accountability(results, shared_data, os_info)
+        check_configuration_management(results, shared_data, os_info)
+        check_identification_authentication(results, shared_data, os_info)
+        check_incident_response(results, shared_data, os_info)
+        check_system_communications_protection(results, shared_data, os_info)
+        check_system_information_integrity(results, shared_data, os_info)
+        check_additional_controls(results, shared_data, os_info)
         
     except Exception as e:
-        print(f"[{MODULE_NAME}] ❌ Error during audit execution: {str(e)}")
+        print(f"[{MODULE_NAME}] âŒ Error during audit execution: {str(e)}")
         results.append(AuditResult(
             module=MODULE_NAME,
             category="NIST - Error",
@@ -3248,9 +3360,9 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     error_count = sum(1 for r in results if r.status == "Error")
     
     print(f"\n[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] AUDIT COMPLETED")
+    print(f"[{MODULE_NAME}] NIST AUDIT COMPLETED")
     print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Total checks executed: {len(results)}")
+    print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
     print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
@@ -3258,7 +3370,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
     print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
     if error_count > 0:
-        print(f"[{MODULE_NAME}]   🔴 Error:   {error_count:3d}")
+        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
     print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     return results
