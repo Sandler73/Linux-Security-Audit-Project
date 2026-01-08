@@ -2,7 +2,7 @@
 """
 module_enisa.py
 ENISA Cybersecurity Recommendations Module for Linux
-Version: 1.0
+Version: 1.1
 
 SYNOPSIS:
     Comprehensive ENISA cybersecurity compliance assessment for Linux systems
@@ -11,7 +11,7 @@ SYNOPSIS:
 DESCRIPTION:
     This module performs thorough security checks aligned with ENISA guidance:
     
-    ENISA Cybersecurity Coverage (100+ real checks):
+    ENISA Cybersecurity Coverage:
     - Baseline Security Measures
     - Network Security Controls
     - System Hardening & Configuration
@@ -44,17 +44,17 @@ PARAMETERS:
     shared_data : Dictionary containing shared data from main script
 
 USAGE:
-	Test the module standalone
+	Standalone module test:
 		python3 module_enisa.py
 
-	Run with main audit script
-		python3 linux_security_audit.py --modules enisa
-
+	Integration with main audit script:
+		python3 linux_security_audit.py --modules ENISA
+        python3 linux_security_audit.py -m ENISA
 
 NOTES:
-    Version: 1.0.0
+    Version: 1.1
     Focus: ENISA Cybersecurity Recommendations for EU
-    Target: 100+ comprehensive, OS-aware security checks
+    Target: 100+ Comprehensive Cybersecurity Audit Checks; OS-aware security checks
     Module automatically detects OS via module_core integration
 	
     ENISA Context:
@@ -83,7 +83,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from linux_security_audit import AuditResult
 
 MODULE_NAME = "ENISA"
-MODULE_VERSION = "1.0.0"
+MODULE_VERSION = "1.1"
 
 # ============================================================================
 # Import OS Detection from Core Module
@@ -279,7 +279,7 @@ def check_logging_configured() -> Dict[str, bool]:
     return logging
 
 # ============================================================================
-# BASELINE SECURITY - 25+ checks
+# BASELINE SECURITY
 # ============================================================================
 
 def check_baseline_security(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
@@ -287,7 +287,7 @@ def check_baseline_security(results: List[AuditResult], shared_data: Dict[str, A
     ENISA Baseline Security Measures
     Essential security controls recommended by ENISA
     """
-    print(f"[{MODULE_NAME}] Checking Baseline Security Measures (25+ checks)...")
+    print(f"[{MODULE_NAME}] Checking Baseline Security Measures...")
     
     # BSM-001: Operating system up to date
     available_updates = get_available_updates(os_info)
@@ -628,7 +628,7 @@ def check_baseline_security(results: List[AuditResult], shared_data: Dict[str, A
     ))
 
 # ============================================================================
-# NETWORK SECURITY CONTROLS - 25+ comprehensive checks
+# NETWORK SECURITY CONTROLS
 # ENISA network security recommendations
 # ============================================================================
 
@@ -637,7 +637,7 @@ def check_network_security(results: List[AuditResult], shared_data: Dict[str, An
     ENISA Network Security Controls
     Network hardening and security measures
     """
-    print(f"[{MODULE_NAME}] Checking Network Security Controls (25+ checks)...")
+    print(f"[{MODULE_NAME}] Checking Network Security Controls...")
     
     # NET-001: Firewall default policy
     firewall_active = any(check_service_active(svc) for svc in ['ufw', 'firewalld', 'iptables'])
@@ -973,7 +973,7 @@ def check_network_security(results: List[AuditResult], shared_data: Dict[str, An
 
 
 # ============================================================================
-# ACCESS CONTROL & DATA PROTECTION - 25+ comprehensive checks
+# ACCESS CONTROL & DATA PROTECTION
 # ENISA access control and GDPR-aligned data protection
 # ============================================================================
 
@@ -982,7 +982,7 @@ def check_access_control_data_protection(results: List[AuditResult], shared_data
     ENISA Access Control & Data Protection
     Authentication, authorization, and data protection measures
     """
-    print(f"[{MODULE_NAME}] Checking Access Control & Data Protection (25+ checks)...")
+    print(f"[{MODULE_NAME}] Checking Access Control & Data Protection...")
     
     # ACC-001: Strong authentication configured
     password_policy = check_password_policy()
@@ -1322,7 +1322,7 @@ def check_access_control_data_protection(results: List[AuditResult], shared_data
 
 
 # ============================================================================
-# INCIDENT RESPONSE & MONITORING - 25+ comprehensive checks
+# INCIDENT RESPONSE & MONITORING
 # ENISA incident response and security monitoring
 # ============================================================================
 
@@ -1331,7 +1331,7 @@ def check_incident_response_monitoring(results: List[AuditResult], shared_data: 
     ENISA Incident Response & Monitoring
     Logging, monitoring, and incident response capabilities
     """
-    print(f"[{MODULE_NAME}] Checking Incident Response & Monitoring (25+ checks)...")
+    print(f"[{MODULE_NAME}] Checking Incident Response & Monitoring...")
     
     # INC-001: Centralized logging
     logging_status = check_logging_configured()
@@ -1636,7 +1636,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
     print(f"[{MODULE_NAME}] Agency: European Union Agency for Cybersecurity")
     print(f"[{MODULE_NAME}] Focus: Baseline Security & GDPR-aligned Controls")
-    print(f"[{MODULE_NAME}] Target: 100+ comprehensive cybersecurity checks")
+    print(f"[{MODULE_NAME}] Target: 100+ Comprehensive Cybersecurity Audit Checks")
     print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     # Get or detect OS information
@@ -1695,7 +1695,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"\n[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] ENISA CYBERSECURITY COMPLIANCE AUDIT COMPLETED")
     print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Total checks executed: {len(results)}")
+    print(f"[{MODULE_NAME}] Total Cybersecurity Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
     print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
