@@ -1,63 +1,63 @@
 #!/usr/bin/env python3
 """
 module_cis.py - CIS Benchmarks Comprehensive Implementation
-Version: 2.0 (Complete Rebuild)
+Version: 2.1
 
 SYNOPSIS:
-    Exhaustive CIS Benchmark compliance checks for Linux systems.
+    CIS Benchmark compliance and security audit checks for Linux systems.
     Target: 200+ distinct, executable security checks.
 
 DESCRIPTION:
     This module implements comprehensive CIS Benchmark controls across all sections:
     
-    Section 1: Initial Setup (40+ checks)
-    - Filesystem configuration (10 checks)
-    - Package management (10 checks)
-    - Filesystem integrity (5 checks)
-    - Secure boot settings (5 checks)
-    - Additional process hardening (10 checks)
+    Section 1: Initial Setup:
+    - Filesystem configuration
+    - Package management
+    - Filesystem integrity
+    - Secure boot settings
+    - Additional process hardening
     
-    Section 2: Services (30+ checks)
-    - Time synchronization (5 checks)
-    - X Window System (3 checks)
-    - Special purpose services (15 checks)
-    - Service clients (7 checks)
+    Section 2: Services:
+    - Time synchronization
+    - X Window System
+    - Special purpose services
+    - Service clients
     
-    Section 3: Network Configuration (40+ checks)
-    - Network parameters host only (15 checks)
-    - Network parameters host and router (10 checks)
-    - IPv6 parameters (10 checks)
-    - TCP wrappers (5 checks)
+    Section 3: Network Configuration:
+    - Network parameters host only
+    - Network parameters host and router
+    - IPv6 parameters
+    - TCP wrappers
     
-    Section 4: Logging and Auditing (40+ checks)
-    - System logging (15 checks)
-    - Auditd configuration (25 checks)
+    Section 4: Logging and Auditing:
+    - System logging
+    - Auditd configuration
     
-    Section 5: Access, Authentication, Authorization (35+ checks)
-    - Cron configuration (8 checks)
-    - SSH server configuration (15 checks)
-    - PAM configuration (7 checks)
-    - User accounts and environment (5 checks)
+    Section 5: Access, Authentication, Authorization:
+    - Cron configuration
+    - SSH server configuration
+    - PAM configuration
+    - User accounts and environment
     
-    Section 6: System Maintenance (25+ checks)
-    - System file permissions (15 checks)
-    - User and group settings (10 checks)
+    Section 6: System Maintenance:
+    - System file permissions
+    - User and group settings
 
 USAGE:
-# Standalone testing
-cd /mnt/user-data/outputs/modules
-python3 module_cis.py
+    Standalone module test:
+        python3 module_cis.py
 
-# Integrated with main script
-python3 linux_security_audit.py -m cis
+    Integration with main audit script:
+        python3 linux_security_audit.py --modules CIS
+        python3 linux_security_audit.py -m CIS
 
 PARAMETERS:
     shared_data : Dictionary containing shared data from main script
 
 NOTES:
-    Version: 2.0 (Rebuilt for comprehensive coverage)
-    Target Checks: 200+ individual executable checks
-    All checks are actual, not conditional branches
+    Version: 2.1
+    Target Checks: 200+ individual executable checks; OS-aware technical control checks
+    Module automatically detects OS via module_core integration
 """
 
 import os
@@ -73,7 +73,104 @@ from typing import List, Dict, Any, Optional, Tuple, Set
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from linux_security_audit import AuditResult
 
+import platform
+
 MODULE_NAME = "CIS"
+MODULE_VERSION = "2.1"
+
+# ============================================================================
+# OS Detection and Classification
+# ============================================================================
+
+class OSInfo:
+    """Store and manage OS information"""
+    def __init__(self):
+        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
+        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
+        self.version = "Unknown"
+        self.version_id = "Unknown"
+        self.codename = "Unknown"
+        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
+        self.init_system = "Unknown"  # systemd, sysvinit, upstart
+        self.architecture = platform.machine()
+        self.kernel_version = platform.release()
+        
+    def __str__(self):
+        return f"{self.distro} {self.version} ({self.family})"
+
+def detect_os() -> OSInfo:
+    """
+    Comprehensive OS detection
+    Returns OSInfo object with detailed system information
+    """
+    os_info = OSInfo()
+    
+    # Read /etc/os-release (standard location)
+    if os.path.exists("/etc/os-release"):
+        with open("/etc/os-release", 'r') as f:
+            os_release = {}
+            for line in f:
+                if '=' in line:
+                    key, value = line.strip().split('=', 1)
+                    os_release[key] = value.strip('"')
+        
+        os_info.distro = os_release.get('ID', 'unknown').lower()
+        os_info.version = os_release.get('VERSION', 'unknown')
+        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
+        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
+        
+        # Determine OS family
+        id_like = os_release.get('ID_LIKE', '').lower()
+        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
+            os_info.family = 'debian'
+        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
+            os_info.family = 'redhat'
+        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
+            os_info.family = 'suse'
+        elif os_info.distro == 'arch':
+            os_info.family = 'arch'
+    
+    # Fallback detection methods
+    if os_info.family == "Unknown":
+        if os.path.exists("/etc/debian_version"):
+            os_info.family = 'debian'
+            os_info.distro = 'debian'
+        elif os.path.exists("/etc/redhat-release"):
+            os_info.family = 'redhat'
+            with open("/etc/redhat-release", 'r') as f:
+                content = f.read().lower()
+                if 'centos' in content:
+                    os_info.distro = 'centos'
+                elif 'red hat' in content or 'rhel' in content:
+                    os_info.distro = 'rhel'
+                elif 'fedora' in content:
+                    os_info.distro = 'fedora'
+    
+    # Detect package manager
+    if command_exists('apt-get'):
+        os_info.package_manager = 'apt'
+    elif command_exists('dnf'):
+        os_info.package_manager = 'dnf'
+    elif command_exists('yum'):
+        os_info.package_manager = 'yum'
+    elif command_exists('zypper'):
+        os_info.package_manager = 'zypper'
+    elif command_exists('pacman'):
+        os_info.package_manager = 'pacman'
+    
+    # Detect init system
+    if os.path.exists("/run/systemd/system"):
+        os_info.init_system = 'systemd'
+    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
+        link = os.readlink("/sbin/init")
+        if 'systemd' in link:
+            os_info.init_system = 'systemd'
+        elif 'upstart' in link:
+            os_info.init_system = 'upstart'
+    else:
+        os_info.init_system = 'sysvinit'
+    
+    return os_info
 
 # ============================================================================
 # Comprehensive Helper Functions
@@ -114,15 +211,21 @@ def check_service_active(service: str) -> bool:
     result = run_command(f"systemctl is-active {service} 2>/dev/null")
     return result.returncode == 0 and "active" in result.stdout.lower()
 
-def check_package_installed(package: str) -> bool:
-    """Check if package is installed (multi-distro)"""
-    # Debian/Ubuntu
-    result = run_command(f"dpkg -l {package} 2>/dev/null | grep -q '^ii'")
-    if result.returncode == 0:
-        return True
-    # RHEL/CentOS/Fedora
-    result = run_command(f"rpm -q {package} 2>/dev/null")
-    return result.returncode == 0
+def check_package_installed(package: str, os_info: OSInfo) -> bool:
+    """Check if package is installed (OS-aware)"""
+    if os_info.package_manager == 'apt':
+        result = run_command(f"dpkg -l {package} 2>/dev/null | grep -q '^ii'")
+        return result.returncode == 0
+    elif os_info.package_manager in ['yum', 'dnf']:
+        result = run_command(f"rpm -q {package} 2>/dev/null")
+        return result.returncode == 0
+    elif os_info.package_manager == 'zypper':
+        result = run_command(f"rpm -q {package} 2>/dev/null")
+        return result.returncode == 0
+    elif os_info.package_manager == 'pacman':
+        result = run_command(f"pacman -Q {package} 2>/dev/null")
+        return result.returncode == 0
+    return False
 
 def get_file_permissions(filepath: str) -> Optional[str]:
     """Get file permissions as octal string"""
@@ -191,11 +294,11 @@ def check_password_quality(setting: str, min_value: int) -> bool:
 
 
 # ============================================================================
-# Section 1: Initial Setup (40+ checks)
+# Section 1: Initial Setup
 # ============================================================================
 
-def check_section1_filesystem_configuration(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 1.1 - Filesystem Configuration (15 checks)"""
+def check_section1_filesystem_configuration(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 1.1 - Filesystem Configuration"""
     print(f"[{MODULE_NAME}] Checking Section 1.1 - Filesystem Configuration...")
     
     # 1.1.1.1 - Ensure cramfs is disabled
@@ -348,8 +451,8 @@ def check_section1_filesystem_configuration(results: List[AuditResult], shared_d
         remediation="Add noexec to /var/tmp in /etc/fstab"
     ))
 
-def check_section1_package_management(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 1.2 - Configure Software Updates (10 checks)"""
+def check_section1_package_management(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 1.2 - Configure Software Updates"""
     print(f"[{MODULE_NAME}] Checking Section 1.2 - Package Management...")
     
     # 1.2.1 - Ensure GPG keys configured (apt)
@@ -411,9 +514,9 @@ def check_section1_package_management(results: List[AuditResult], shared_data: D
         ))
     
     # 1.2.5 - Ensure automatic updates configured
-    auto_updates = check_package_installed("unattended-upgrades") or \
-                   check_package_installed("dnf-automatic") or \
-                   check_package_installed("yum-cron")
+    auto_updates = check_package_installed("unattended-upgrades", os_info) or \
+                   check_package_installed("dnf-automatic", os_info) or \
+                   check_package_installed("yum-cron", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.2 - Package Mgmt",
         status="Pass" if auto_updates else "Warning",
@@ -472,7 +575,7 @@ def check_section1_package_management(results: List[AuditResult], shared_data: D
         ))
     
     # 1.2.10 - Ensure aide is installed
-    aide_installed = check_package_installed("aide")
+    aide_installed = check_package_installed("aide", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.2 - Package Mgmt",
         status="Pass" if aide_installed else "Fail",
@@ -482,12 +585,12 @@ def check_section1_package_management(results: List[AuditResult], shared_data: D
     ))
 
 
-def check_section1_mandatory_access_control(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 1.6 - Mandatory Access Control (10 checks)"""
+def check_section1_mandatory_access_control(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 1.6 - Mandatory Access Control"""
     print(f"[{MODULE_NAME}] Checking Section 1.6 - Mandatory Access Control...")
     
     # 1.6.1.1 - Ensure SELinux is installed
-    selinux_installed = check_package_installed("selinux-policy")
+    selinux_installed = check_package_installed("selinux-policy", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.6 - Access Control",
         status="Pass" if selinux_installed else "Fail",
@@ -541,7 +644,7 @@ def check_section1_mandatory_access_control(results: List[AuditResult], shared_d
         ))
     
     # 1.6.2.1 - Ensure AppArmor is installed (alternative to SELinux)
-    apparmor_installed = check_package_installed("apparmor")
+    apparmor_installed = check_package_installed("apparmor", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.6 - Access Control",
         status="Pass" if apparmor_installed else "Info",
@@ -595,8 +698,8 @@ def check_section1_mandatory_access_control(results: List[AuditResult], shared_d
         remediation="Install either SELinux or AppArmor"
     ))
 
-def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 1.7 - Command Line Warning Banners (5 checks)"""
+def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 1.7 - Command Line Warning Banners"""
     print(f"[{MODULE_NAME}] Checking Section 1.7 - Warning Banners...")
     
     # 1.7.1 - Ensure message of the day is configured
@@ -657,16 +760,16 @@ def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict
 
 
 # ============================================================================
-# Section 2: Services (30+ checks)
+# Section 2: Services
 # ============================================================================
 
-def check_section2_services(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 2 - Services Configuration (30 checks)"""
+def check_section2_services(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 2 - Services Configuration"""
     print(f"[{MODULE_NAME}] Checking Section 2 - Services...")
     
     # 2.1.1 - Ensure time synchronization is in use
-    time_sync = check_package_installed("chrony") or check_package_installed("ntp") or \
-                check_package_installed("systemd-timesyncd")
+    time_sync = check_package_installed("chrony", os_info) or check_package_installed("ntp", os_info) or \
+                check_package_installed("systemd-timesyncd", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.1 - Time Sync",
         status="Pass" if time_sync else "Fail",
@@ -676,7 +779,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.1.2 - Ensure chrony is configured
-    if check_package_installed("chrony"):
+    if check_package_installed("chrony", os_info):
         chrony_conf = read_file_safe("/etc/chrony.conf") or read_file_safe("/etc/chrony/chrony.conf")
         has_servers = "server" in chrony_conf or "pool" in chrony_conf
         results.append(AuditResult(
@@ -699,7 +802,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         ))
     
     # 2.1.4 - Ensure systemd-timesyncd is configured
-    if check_package_installed("systemd-timesyncd"):
+    if check_package_installed("systemd-timesyncd", os_info):
         timesyncd_conf = read_file_safe("/etc/systemd/timesyncd.conf")
         has_ntp = "NTP=" in timesyncd_conf or "FallbackNTP=" in timesyncd_conf
         results.append(AuditResult(
@@ -733,7 +836,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.1 - Ensure X Window System is not installed
-    xorg_installed = check_package_installed("xserver-xorg") or check_package_installed("xorg-x11-server-common")
+    xorg_installed = check_package_installed("xserver-xorg", os_info) or check_package_installed("xorg-x11-server-common", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - X Window",
         status="Pass" if not xorg_installed else "Warning",
@@ -743,7 +846,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.2 - Ensure Avahi Server is not installed
-    avahi_installed = check_package_installed("avahi-daemon")
+    avahi_installed = check_package_installed("avahi-daemon", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not avahi_installed else "Fail",
@@ -753,7 +856,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.3 - Ensure CUPS is not installed
-    cups_installed = check_package_installed("cups")
+    cups_installed = check_package_installed("cups", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not cups_installed else "Warning",
@@ -763,7 +866,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.4 - Ensure DHCP Server is not installed
-    dhcp_installed = check_package_installed("isc-dhcp-server") or check_package_installed("dhcp-server")
+    dhcp_installed = check_package_installed("isc-dhcp-server", os_info) or check_package_installed("dhcp-server", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not dhcp_installed else "Fail",
@@ -773,7 +876,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.5 - Ensure LDAP server is not installed
-    ldap_installed = check_package_installed("slapd")
+    ldap_installed = check_package_installed("slapd", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not ldap_installed else "Fail",
@@ -783,7 +886,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.6 - Ensure NFS is not installed
-    nfs_installed = check_package_installed("nfs-kernel-server") or check_package_installed("nfs-utils")
+    nfs_installed = check_package_installed("nfs-kernel-server", os_info) or check_package_installed("nfs-utils", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not nfs_installed else "Warning",
@@ -793,7 +896,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.7 - Ensure DNS Server is not installed
-    dns_installed = check_package_installed("bind9") or check_package_installed("bind")
+    dns_installed = check_package_installed("bind9", os_info) or check_package_installed("bind", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not dns_installed else "Fail",
@@ -803,7 +906,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.8 - Ensure FTP Server is not installed
-    ftp_installed = check_package_installed("vsftpd") or check_package_installed("proftpd")
+    ftp_installed = check_package_installed("vsftpd", os_info) or check_package_installed("proftpd", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not ftp_installed else "Fail",
@@ -813,7 +916,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.9 - Ensure HTTP server is not installed
-    http_installed = check_package_installed("apache2") or check_package_installed("httpd") or check_package_installed("nginx")
+    http_installed = check_package_installed("apache2", os_info) or check_package_installed("httpd", os_info) or check_package_installed("nginx", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not http_installed else "Info",
@@ -823,8 +926,8 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.10 - Ensure IMAP and POP3 server are not installed
-    mail_installed = check_package_installed("dovecot-imapd") or check_package_installed("dovecot-pop3d") or \
-                     check_package_installed("cyrus-imapd")
+    mail_installed = check_package_installed("dovecot-imapd", os_info) or check_package_installed("dovecot-pop3d", os_info) or \
+                     check_package_installed("cyrus-imapd", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not mail_installed else "Fail",
@@ -834,7 +937,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.11 - Ensure Samba is not installed
-    samba_installed = check_package_installed("samba")
+    samba_installed = check_package_installed("samba", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not samba_installed else "Warning",
@@ -844,7 +947,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.12 - Ensure HTTP Proxy Server is not installed
-    proxy_installed = check_package_installed("squid") or check_package_installed("squid3")
+    proxy_installed = check_package_installed("squid", os_info) or check_package_installed("squid3", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not proxy_installed else "Fail",
@@ -854,7 +957,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.13 - Ensure SNMP Server is not installed
-    snmp_installed = check_package_installed("snmpd")
+    snmp_installed = check_package_installed("snmpd", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not snmp_installed else "Fail",
@@ -864,7 +967,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.14 - Ensure mail transfer agent is configured for local-only mode
-    if check_package_installed("postfix") or check_package_installed("sendmail"):
+    if check_package_installed("postfix", os_info) or check_package_installed("sendmail", os_info):
         listening = run_command("ss -lntu | grep -E ':25\\s' | grep -v '127.0.0.1:25\\|::1:25'").returncode
         results.append(AuditResult(
             module=MODULE_NAME, category="CIS 2.2 - Services",
@@ -875,7 +978,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         ))
     
     # 2.2.15 - Ensure rsync service is not installed
-    rsync_daemon = check_package_installed("rsync") and check_service_active("rsync")
+    rsync_daemon = check_package_installed("rsync", os_info) and check_service_active("rsync")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not rsync_daemon else "Fail",
@@ -885,7 +988,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.2.16 - Ensure NIS Server is not installed
-    nis_installed = check_package_installed("nis")
+    nis_installed = check_package_installed("nis", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.2 - Services",
         status="Pass" if not nis_installed else "Fail",
@@ -895,7 +998,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.3.1 - Ensure NIS Client is not installed
-    nis_client = check_package_installed("nis")
+    nis_client = check_package_installed("nis", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.3 - Service Clients",
         status="Pass" if not nis_client else "Fail",
@@ -905,7 +1008,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.3.2 - Ensure rsh client is not installed
-    rsh_client = check_package_installed("rsh-client") or check_package_installed("rsh")
+    rsh_client = check_package_installed("rsh-client", os_info) or check_package_installed("rsh", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.3 - Service Clients",
         status="Pass" if not rsh_client else "Fail",
@@ -915,7 +1018,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.3.3 - Ensure talk client is not installed
-    talk_client = check_package_installed("talk")
+    talk_client = check_package_installed("talk", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.3 - Service Clients",
         status="Pass" if not talk_client else "Fail",
@@ -925,7 +1028,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.3.4 - Ensure telnet client is not installed
-    telnet_client = check_package_installed("telnet")
+    telnet_client = check_package_installed("telnet", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.3 - Service Clients",
         status="Pass" if not telnet_client else "Fail",
@@ -935,7 +1038,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
     ))
     
     # 2.3.5 - Ensure LDAP client is not installed
-    ldap_client = check_package_installed("ldap-utils") or check_package_installed("openldap-clients")
+    ldap_client = check_package_installed("ldap-utils", os_info) or check_package_installed("openldap-clients", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 2.3 - Service Clients",
         status="Pass" if not ldap_client else "Warning",
@@ -977,11 +1080,11 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
 
 
 # ============================================================================
-# Section 3: Network Configuration (40+ checks)
+# Section 3: Network Configuration
 # ============================================================================
 
-def check_section3_network_parameters(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 3.1 - Network Parameters (Host Only) (15 checks)"""
+def check_section3_network_parameters(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 3.1 - Network Parameters (Host Only)"""
     print(f"[{MODULE_NAME}] Checking Section 3.1 - Network Parameters (Host Only)...")
     
     # 3.1.1 - Ensure IP forwarding is disabled
@@ -1136,8 +1239,8 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
         remediation="sysctl -w net.ipv4.tcp_syncookies=1"
     ))
 
-def check_section3_network_host_and_router(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 3.2 - Network Parameters (Host and Router) (13 checks)"""
+def check_section3_network_host_and_router(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 3.2 - Network Parameters (Host and Router)"""
     print(f"[{MODULE_NAME}] Checking Section 3.2 - Network Parameters (Host and Router)...")
     
     # 3.2.1 - Ensure source routed packets are not accepted
@@ -1236,8 +1339,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
         remediation="sysctl -w net.ipv6.conf.all.accept_ra=0; sysctl -w net.ipv6.conf.default.accept_ra=0"
     ))
 
-def check_section3_network_host_and_router(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 3.2 - Network Parameters (Host and Router) (15 checks)"""
+def check_section3_network_host_and_router(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 3.2 - Network Parameters (Host and Router)"""
     print(f"[{MODULE_NAME}] Checking Section 3.2 - Network Parameters (Host and Router)...")
     
     # 3.2.1 - Ensure source routed packets are not accepted
@@ -1397,8 +1500,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
         remediation="sysctl -w net.ipv4.tcp_rfc1337=1"
     ))
 
-def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 3.3 - IPv6 (10 checks)"""
+def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 3.3 - IPv6"""
     print(f"[{MODULE_NAME}] Checking Section 3.3 - IPv6...")
     
     # 3.3.1 - Ensure IPv6 is disabled if not needed
@@ -1506,13 +1609,13 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any])
         remediation="Consider: sysctl -w net.ipv6.conf.all.autoconf=0"
     ))
 
-def check_section3_firewall(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 3.4 - Firewall Configuration (5 checks)"""
+def check_section3_firewall(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 3.4 - Firewall Configuration"""
     print(f"[{MODULE_NAME}] Checking Section 3.4 - Firewall...")
     
     # 3.4.1 - Ensure firewall is installed
-    firewall_installed = check_package_installed("firewalld") or check_package_installed("ufw") or \
-                        check_package_installed("iptables") or check_package_installed("nftables")
+    firewall_installed = check_package_installed("firewalld", os_info) or check_package_installed("ufw", os_info) or \
+                        check_package_installed("iptables", os_info) or check_package_installed("nftables", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.4 - Firewall",
         status="Pass" if firewall_installed else "Fail",
@@ -1567,15 +1670,15 @@ def check_section3_firewall(results: List[AuditResult], shared_data: Dict[str, A
 
 
 # ============================================================================
-# Section 4: Logging and Auditing (40+ checks)
+# Section 4: Logging and Auditing
 # ============================================================================
 
-def check_section4_system_logging(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 4.1 - Configure System Accounting (auditd) (20 checks)"""
+def check_section4_system_logging(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 4.1 - Configure System Accounting (auditd)"""
     print(f"[{MODULE_NAME}] Checking Section 4.1 - System Auditing...")
     
     # 4.1.1 - Ensure auditing is enabled
-    auditd_installed = check_package_installed("auditd") or check_package_installed("audit")
+    auditd_installed = check_package_installed("auditd", os_info) or check_package_installed("audit", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 4.1 - Auditing",
         status="Pass" if auditd_installed else "Fail",
@@ -1694,7 +1797,7 @@ def check_section4_system_logging(results: List[AuditResult], shared_data: Dict[
             remediation="Create /etc/audit/rules.d/audit.rules with '-e 2'"
         ))
     
-    # Specific audit rules (4.1.8 - 4.1.20) - ALWAYS execute these 13 checks
+    # Specific audit rules (4.1.8 - 4.1.20) - ALWAYS execute these checks
     audit_rules_checks = [
         ("4.1.8", "time-change", "date and time modification events are collected"),
         ("4.1.9", "identity", "user/group information modification events are collected"),
@@ -1725,12 +1828,12 @@ def check_section4_system_logging(results: List[AuditResult], shared_data: Dict[
             remediation=f"Add audit rule with key={key} to {rules_file or '/etc/audit/rules.d/audit.rules'}"
         ))
 
-def check_section4_logging(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 4.2 - Configure Logging (15 checks)"""
+def check_section4_logging(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 4.2 - Configure Logging"""
     print(f"[{MODULE_NAME}] Checking Section 4.2 - System Logging...")
     
     # 4.2.1 - Ensure rsyslog is installed
-    rsyslog_installed = check_package_installed("rsyslog")
+    rsyslog_installed = check_package_installed("rsyslog", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 4.2 - Logging",
         status="Pass" if rsyslog_installed else "Warning",
@@ -1790,7 +1893,7 @@ def check_section4_logging(results: List[AuditResult], shared_data: Dict[str, An
         ))
     
     # 4.2.6 - Ensure syslog-ng is installed (alternative)
-    syslog_ng = check_package_installed("syslog-ng")
+    syslog_ng = check_package_installed("syslog-ng", os_info)
     if syslog_ng:
         results.append(AuditResult(
             module=MODULE_NAME, category="CIS 4.2 - Logging",
@@ -1813,7 +1916,7 @@ def check_section4_logging(results: List[AuditResult], shared_data: Dict[str, An
         ))
     
     # 4.3.1 - Ensure logrotate is configured
-    logrotate_installed = check_package_installed("logrotate")
+    logrotate_installed = check_package_installed("logrotate", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 4.3 - Logrotate",
         status="Pass" if logrotate_installed else "Fail",
@@ -1834,11 +1937,11 @@ def check_section4_logging(results: List[AuditResult], shared_data: Dict[str, An
 
 
 # ============================================================================
-# Section 5: Access, Authentication and Authorization (35+ checks)
+# Section 5: Access, Authentication and Authorization
 # ============================================================================
 
-def check_section5_cron(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 5.1 - Configure cron (8 checks)"""
+def check_section5_cron(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 5.1 - Configure cron"""
     print(f"[{MODULE_NAME}] Checking Section 5.1 - Cron Configuration...")
     
     # 5.1.1 - Ensure cron daemon is enabled
@@ -1940,8 +2043,8 @@ def check_section5_cron(results: List[AuditResult], shared_data: Dict[str, Any])
         remediation="Create /etc/cron.allow with authorized users; rm /etc/cron.deny"
     ))
 
-def check_section5_ssh(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 5.2 - SSH Server Configuration (18 checks)"""
+def check_section5_ssh(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 5.2 - SSH Server Configuration"""
     print(f"[{MODULE_NAME}] Checking Section 5.2 - SSH Server Configuration...")
     
     sshd_config = read_file_safe("/etc/ssh/sshd_config")
@@ -2155,8 +2258,8 @@ def check_section5_ssh(results: List[AuditResult], shared_data: Dict[str, Any]):
         remediation="Set 'Banner /etc/issue.net' in sshd_config"
     ))
 
-def check_section5_pam(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 5.3 - Configure PAM (9 checks)"""
+def check_section5_pam(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 5.3 - Configure PAM"""
     print(f"[{MODULE_NAME}] Checking Section 5.3 - PAM Configuration...")
     
     # 5.3.1 - Ensure password creation requirements are configured
@@ -2171,7 +2274,7 @@ def check_section5_pam(results: List[AuditResult], shared_data: Dict[str, Any]):
     ))
     
     # 5.3.2 - Ensure lockout for failed password attempts is configured
-    faillock = check_package_installed("libpam-pwquality") or os.path.exists("/etc/security/faillock.conf")
+    faillock = check_package_installed("libpam-pwquality", os_info) or os.path.exists("/etc/security/faillock.conf")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 5.3 - PAM",
         status="Pass" if faillock else "Fail",
@@ -2216,11 +2319,11 @@ def check_section5_pam(results: List[AuditResult], shared_data: Dict[str, Any]):
 
 
 # ============================================================================
-# Section 6: System Maintenance (25+ checks)
+# Section 6: System Maintenance
 # ============================================================================
 
-def check_section5_user_password_aging(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 5.4.1 - Set Shadow Password Suite Parameters (10 checks)"""
+def check_section5_user_password_aging(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 5.4.1 - Set Shadow Password Suite Parameters"""
     print(f"[{MODULE_NAME}] Checking Section 5.4.1 - Password Aging...")
     
     login_defs = read_file_safe("/etc/login.defs")
@@ -2373,8 +2476,8 @@ def check_section5_user_password_aging(results: List[AuditResult], shared_data: 
         remediation="Lock or delete accounts with empty passwords"
     ))
 
-def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 1.7 - Command Line Warning Banners (5 checks)"""
+def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 1.7 - Command Line Warning Banners"""
     print(f"[{MODULE_NAME}] Checking Section 1.7 - Warning Banners...")
     
     # 1.7.1 - Ensure message of the day is configured
@@ -2433,8 +2536,8 @@ def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict
             remediation="chown root:root /etc/issue && chmod 644 /etc/issue"
         ))
 
-def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 1.4 - Secure Boot Settings (10 checks)"""
+def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 1.4 - Secure Boot Settings"""
     print(f"[{MODULE_NAME}] Checking Section 1.4 - Bootloader Security...")
     
     # 1.4.1 - Ensure bootloader password is set (GRUB)
@@ -2523,7 +2626,7 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # 1.4.7 - Ensure prelink is disabled
-    prelink_installed = check_package_installed("prelink")
+    prelink_installed = check_package_installed("prelink", os_info)
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.4 - Boot Security",
         status="Pass" if not prelink_installed else "Fail",
@@ -2572,8 +2675,8 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
         remediation="sysctl -w kernel.yama.ptrace_scope=1"
     ))
 
-def check_section6_file_permissions(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 6.1 - System File Permissions (15 checks)"""
+def check_section6_file_permissions(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 6.1 - System File Permissions"""
     print(f"[{MODULE_NAME}] Checking Section 6.1 - System File Permissions...")
     
     # 6.1.1 - Audit system file permissions
@@ -2742,8 +2845,8 @@ def check_section6_file_permissions(results: List[AuditResult], shared_data: Dic
         remediation="Review SGID binaries and remove unnecessary SGID bits"
     ))
 
-def check_section6_user_accounts(results: List[AuditResult], shared_data: Dict[str, Any]):
-    """CIS Section 6.2 - User and Group Settings (10 checks)"""
+def check_section6_user_accounts(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 6.2 - User and Group Settings"""
     print(f"[{MODULE_NAME}] Checking Section 6.2 - User and Group Settings...")
     
     # 6.2.1 - Ensure password fields are not empty
@@ -2887,40 +2990,54 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     results = []
     
     print(f"\n[{MODULE_NAME}] ===== CIS BENCHMARK SECURITY AUDIT =====")
-    print(f"[{MODULE_NAME}] Version: 2.0 - Comprehensive Coverage")
+    print(f"[{MODULE_NAME}] Version: {MODULE_VERSION} - Comprehensive OS-Aware Coverage")
     print(f"[{MODULE_NAME}] Target: 200+ distinct security checks")
     print(f"[{MODULE_NAME}] Scope: All CIS Benchmark sections\n")
     
+    # Detect operating system
+    os_info = detect_os()
+    shared_data['os_info'] = os_info
+    
+    print(f"[{MODULE_NAME}] Operating System: {os_info}")
+    print(f"[{MODULE_NAME}] Package Manager: {os_info.package_manager}")
+    print(f"[{MODULE_NAME}] Init System: {os_info.init_system}")
+    print("")
+    
+    is_root = shared_data.get("is_root", os.geteuid() == 0)
+    if not is_root:
+        print(f"[{MODULE_NAME}] âš ï¸  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
+    
     try:
-        # Section 1: Initial Setup (55 checks - added bootloader security)
-        check_section1_filesystem_configuration(results, shared_data)
-        check_section1_package_management(results, shared_data)
-        check_section1_bootloader(results, shared_data)
-        check_section1_mandatory_access_control(results, shared_data)
-        check_section1_warning_banners(results, shared_data)
+        # Section 1: Initial Setup
+        check_section1_filesystem_configuration(results, shared_data, os_info)
+        check_section1_package_management(results, shared_data, os_info)
+        check_section1_bootloader(results, shared_data, os_info)
+        check_section1_mandatory_access_control(results, shared_data, os_info)
+        check_section1_warning_banners(results, shared_data, os_info)
         
-        # Section 2: Services (27 checks)
-        check_section2_services(results, shared_data)
+        # Section 2: Services
+        check_section2_services(results, shared_data, os_info)
         
-        # Section 3: Network Configuration (30 checks)
-        check_section3_network_parameters(results, shared_data)
-        check_section3_network_host_and_router(results, shared_data)
-        check_section3_ipv6(results, shared_data)
-        check_section3_firewall(results, shared_data)
+        # Section 3: Network Configuration
+        check_section3_network_parameters(results, shared_data, os_info)
+        check_section3_network_host_and_router(results, shared_data, os_info)
+        check_section3_ipv6(results, shared_data, os_info)
+        check_section3_firewall(results, shared_data, os_info)
         
-        # Section 4: Logging and Auditing (40 checks)
-        check_section4_system_logging(results, shared_data)
-        check_section4_logging(results, shared_data)
+        # Section 4: Logging and Auditing
+        check_section4_system_logging(results, shared_data, os_info)
+        check_section4_logging(results, shared_data, os_info)
         
-        # Section 5: Access, Authentication and Authorization (45 checks - added password aging)
-        check_section5_cron(results, shared_data)
-        check_section5_ssh(results, shared_data)
-        check_section5_pam(results, shared_data)
-        check_section5_user_password_aging(results, shared_data)
+        # Section 5: Access, Authentication and Authorization
+        check_section5_cron(results, shared_data, os_info)
+        check_section5_ssh(results, shared_data, os_info)
+        check_section5_pam(results, shared_data, os_info)
+        check_section5_user_password_aging(results, shared_data, os_info)
         
-        # Section 6: System Maintenance (25 checks)
-        check_section6_file_permissions(results, shared_data)
-        check_section6_user_accounts(results, shared_data)
+        # Section 6: System Maintenance
+        check_section6_file_permissions(results, shared_data, os_info)
+        check_section6_user_accounts(results, shared_data, os_info)
         
     except Exception as e:
         results.append(AuditResult(
@@ -2942,7 +3059,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"\n[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] CIS BENCHMARK SECURITY AUDIT COMPLETED")
     print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Total checks executed: {len(results)}")
+    print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
     print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
