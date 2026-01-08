@@ -2,7 +2,7 @@
 """
 module_iso27001.py
 ISO/IEC 27001:2022 Technical Controls Module for Linux
-Version: 1.0
+Version: 1.1
 
 SYNOPSIS:
     Comprehensive ISO/IEC 27001:2022 compliance assessment focusing on
@@ -11,7 +11,7 @@ SYNOPSIS:
 DESCRIPTION:
     This module performs thorough security checks aligned with ISO 27001:2022:
     
-    ISO 27001:2022 Annex A Coverage (150+ real checks):
+    ISO 27001:2022 Annex A Coverage:
     - A.8.1: User endpoint devices
     - A.8.2: Privileged access rights
     - A.8.3: Information access restriction
@@ -47,23 +47,18 @@ PARAMETERS:
     shared_data : Dictionary containing shared data from main script
 
 USAGE:
-	Test the module standalone
+	Standalone module test:
 		python3 module_iso27001.py
 
-	Run with main audit script
-		python3 linux_security_audit.py --modules ISO27001
+	Integration with main audit script:
+		python3 linux_security_audit.py --modules iso27001
+        python3 linux_security_audit.py -m iso27001
 
- 
 NOTES:
-    Version: 1.0.0
+    Version: 1.1
     Focus: ISO 27001:2022 Annex A Technical Controls
     Target: 150+ comprehensive, OS-aware technical control checks
     Module automatically detects OS via module_core integration
-
-    ISO 27001:2022 Update:
-    - New structure with 93 controls (vs 114 in 2013 version)
-    - Reorganized into 4 main categories (Organizational, People, Physical, Technological)
-    - Enhanced focus on cloud security, privacy, and modern threats
 """
 
 import os
@@ -85,7 +80,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from linux_security_audit import AuditResult
 
 MODULE_NAME = "ISO27001"
-MODULE_VERSION = "1.0.0"
+MODULE_VERSION = "1.1"
 
 # ============================================================================
 # Import OS Detection from Core Module
@@ -269,7 +264,7 @@ def check_encryption_available(os_info: OSInfo) -> Dict[str, bool]:
     return encryption
 
 # ============================================================================
-# A.8.1: User Endpoint Devices - 15+ checks
+# A.8.1: User Endpoint Devices
 # ============================================================================
 
 def check_user_endpoint_devices(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
@@ -278,7 +273,7 @@ def check_user_endpoint_devices(results: List[AuditResult], shared_data: Dict[st
     Information stored on, processed by or accessible via user endpoint devices
     shall be protected
     """
-    print(f"[{MODULE_NAME}] Checking A.8.1 User Endpoint Devices (15+ checks)...")
+    print(f"[{MODULE_NAME}] Checking A.8.1 User Endpoint Devices...")
     
     # A.8.1-001: Screen lock configured
     screensaver_timeout = None
@@ -496,7 +491,6 @@ def check_user_endpoint_devices(results: List[AuditResult], shared_data: Dict[st
 
 # ============================================================================
 # A.8.2-A.8.5: Privileged Access, Information Access, Source Code, Authentication
-# 40+ comprehensive checks
 # ============================================================================
 
 def check_privileged_access_authentication(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
@@ -506,7 +500,7 @@ def check_privileged_access_authentication(results: List[AuditResult], shared_da
     ISO 27001 A.8.4: Access to source code
     ISO 27001 A.8.5: Secure authentication
     """
-    print(f"[{MODULE_NAME}] Checking A.8.2-A.8.5 Access Control & Authentication (40+ checks)...")
+    print(f"[{MODULE_NAME}] Checking A.8.2-A.8.5 Access Control & Authentication...")
     
     # A.8.2: Privileged Access Rights
     
@@ -953,7 +947,6 @@ def check_privileged_access_authentication(results: List[AuditResult], shared_da
 
 # ============================================================================
 # A.8.6-A.8.10: Capacity, Malware, Vulnerabilities, Configuration, Data Protection
-# 35+ comprehensive checks
 # ============================================================================
 
 def check_system_protection_management(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
@@ -964,7 +957,7 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
     ISO 27001 A.8.9: Configuration management
     ISO 27001 A.8.10: Information deletion
     """
-    print(f"[{MODULE_NAME}] Checking A.8.6-A.8.10 Protection & Management (35+ checks)...")
+    print(f"[{MODULE_NAME}] Checking A.8.6-A.8.10 Protection & Management...")
     
     # A.8.6: Capacity Management
     
@@ -1338,7 +1331,6 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
 
 # ============================================================================
 # A.8.11-A.8.20: Backup, Logging, Monitoring, Clock Sync, Network Security
-# 35+ comprehensive checks
 # ============================================================================
 
 def check_backup_monitoring_network(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
@@ -1347,7 +1339,7 @@ def check_backup_monitoring_network(results: List[AuditResult], shared_data: Dic
     ISO 27001 A.8.14-A.8.17: Reliability and monitoring  
     ISO 27001 A.8.18-A.8.20: System and network security
     """
-    print(f"[{MODULE_NAME}] Checking A.8.11-A.8.20 Backup, Monitoring & Network (35+ checks)...")
+    print(f"[{MODULE_NAME}] Checking A.8.11-A.8.20 Backup, Monitoring & Network...")
     
     # A.8.13: Information Backup
     
@@ -1708,7 +1700,6 @@ def check_backup_monitoring_network(results: List[AuditResult], shared_data: Dic
 
 # ============================================================================
 # A.8.21-A.8.24: Network Services, Cryptography + Main Function
-# 25+ checks + orchestration
 # ============================================================================
 
 def check_network_services_cryptography(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
@@ -1718,7 +1709,7 @@ def check_network_services_cryptography(results: List[AuditResult], shared_data:
     ISO 27001 A.8.23: Web filtering
     ISO 27001 A.8.24: Use of cryptography
     """
-    print(f"[{MODULE_NAME}] Checking A.8.21-A.8.24 Network Services & Cryptography (25+ checks)...")
+    print(f"[{MODULE_NAME}] Checking A.8.21-A.8.24 Network Services & Cryptography...")
     
     # A.8.21: Security of Network Services
     
@@ -2074,7 +2065,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"\n[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] ISO/IEC 27001 INFORMATION SECURITY MANAGEMENT AUDIT COMPLETED")
     print(f"[{MODULE_NAME}] " + "="*70)
-    print(f"[{MODULE_NAME}] Total checks executed: {len(results)}")
+    print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
     print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
