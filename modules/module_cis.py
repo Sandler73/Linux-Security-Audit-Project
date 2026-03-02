@@ -159,7 +159,7 @@ except ImportError:
         HAS_COMMON_LIB = False
 
 MODULE_NAME = "CIS"
-MODULE_VERSION = "2.0"
+MODULE_VERSION = "2.2"
 
 # Module logger (uses structured logging if audit_common is available)
 logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
