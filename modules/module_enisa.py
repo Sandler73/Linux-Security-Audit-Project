@@ -2,7 +2,7 @@
 """
 module_enisa.py
 ENISA Cybersecurity Recommendations Module for Linux
-Version: 1.1
+Version: 2.2
 
 SYNOPSIS:
     Comprehensive ENISA cybersecurity compliance assessment for Linux systems
@@ -52,7 +52,7 @@ USAGE:
         python3 linux_security_audit.py -m ENISA
 
 NOTES:
-    Version: 1.1
+    Version: 2.0
     Focus: ENISA Cybersecurity Recommendations for EU
     Target: 100+ Comprehensive Cybersecurity Audit Checks; OS-aware security checks
     Module automatically detects OS via module_core integration
@@ -62,6 +62,12 @@ NOTES:
     - Provides cybersecurity guidance for EU member states
     - Focus on practical, implementable security measures
     - Alignment with GDPR requirements where applicable
+    
+    v2.0 Changes:
+    - Uses audit_common.py shared library (eliminates duplicated helpers)
+    - SharedDataCache integration for cached file/command lookups
+    - Severity levels on all AuditResults
+    - Thread-safe for parallel execution
 """
 
 import os
@@ -74,103 +80,93 @@ import glob
 import socket
 import platform
 import time
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
-# Import AuditResult from main script
+# ============================================================================
+# Shared Library Integration
+# ============================================================================
+# Import consolidated utilities from audit_common.py
+# This eliminates duplicated helper functions across all modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from linux_security_audit import AuditResult
-
-MODULE_NAME = "ENISA"
-MODULE_VERSION = "1.1"
-
-# ============================================================================
-# Import OS Detection from Core Module
-# ============================================================================
+sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    # Import OS detection from module_core
-    sys.path.insert(0, str(Path(__file__).parent))
-    from module_core import (
-        OSInfo, detect_os, run_command, command_exists, read_file_safe,
-        check_service_enabled, check_service_active, check_package_installed,
-        get_file_permissions, get_file_owner_group, check_kernel_parameter,
-        safe_int_parse, get_security_updates, get_available_updates
+    # Try shared_components package first (standard deployment)
+    from shared_components.audit_common import (
+        # Core classes
+        AuditResult, OSInfo, SharedDataCache,
+        # OS detection
+        detect_os,
+        # Command execution (cached)
+        run_command, command_exists, read_file_safe,
+        # Service checks (cache-aware)
+        check_service_enabled, check_service_active,
+        # Package checks (OS-aware)
+        check_package_installed,
+        # File checks
+        get_file_permissions, get_file_permissions_full,
+        get_file_owner_group, check_file_exists,
+        # Kernel parameters (cache-aware)
+        check_kernel_parameter, check_mount_option,
+        # Security subsystems (cache-aware)
+        get_selinux_status, get_apparmor_status, get_firewall_status,
+        check_fips_mode, check_ipv6_enabled,
+        # SSH configuration (cache-aware)
+        get_ssh_config_value, get_ssh_config_all,
+        # Network
+        get_listening_ports, get_loaded_kernel_modules,
+        # PAM & password policy (cache-aware)
+        check_pam_module, get_password_policy,
+        # User accounts (cache-aware)
+        get_user_accounts, get_system_users, get_human_users,
+        # Parsing helpers
+        safe_int_parse, safe_float_parse,
+        # Audit rules & GRUB
+        get_audit_rules, get_grub_cmdline, check_grub_parameter,
+        # Updates (OS-aware)
+        get_available_updates, get_security_updates,
+        # ID generation
+        generate_check_id,
+        # Logging
+        get_module_logger,
     )
-    HAS_CORE_MODULE = True
+    HAS_COMMON_LIB = True
 except ImportError:
-    HAS_CORE_MODULE = False
-    
-    # Fallback: Minimal implementation if core module not available
-    class OSInfo:
-        def __init__(self):
-            self.family = "Unknown"
-            self.distro = "Unknown"
-            self.package_manager = "Unknown"
-            self.version = "Unknown"
-    
-    def detect_os():
-        os_info = OSInfo()
-        if os.path.exists("/etc/debian_version"):
-            os_info.family = "debian"
-            os_info.package_manager = "apt"
-        elif os.path.exists("/etc/redhat-release"):
-            os_info.family = "redhat"
-            os_info.package_manager = "yum"
-        return os_info
-    
-    def run_command(command: str, check: bool = False):
-        return subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
-    
-    def command_exists(command: str):
-        return run_command(f"which {command} 2>/dev/null").returncode == 0
-    
-    def read_file_safe(filepath: str):
-        try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                return f.read()
-        except:
-            return ""
-    
-    def check_service_active(service: str):
-        return run_command(f"systemctl is-active {service} 2>/dev/null").returncode == 0
-    
-    def check_package_installed(package: str, os_info):
-        if os_info.package_manager == 'apt':
-            return run_command(f"dpkg -l {package} 2>/dev/null | grep -q '^ii'").returncode == 0
-        else:
-            return run_command(f"rpm -q {package} 2>/dev/null").returncode == 0
-    
-    def get_file_permissions(filepath: str):
-        try:
-            return oct(os.stat(filepath).st_mode)[-3:]
-        except:
-            return None
-    
-    def check_kernel_parameter(param: str):
-        result = run_command(f"sysctl {param} 2>/dev/null")
-        if result.returncode == 0:
-            match = re.search(r'=\s*(.+)', result.stdout)
-            if match:
-                return True, match.group(1).strip()
-        return False, ""
-    
-    def safe_int_parse(value: str, default: int = 0):
-        try:
-            return int(value.strip()) if value and value.strip().isdigit() else default
-        except:
-            return default
-    
-    def get_security_updates(os_info):
-        return 0
-    
-    def get_available_updates(os_info):
-        return 0
+    try:
+        # Fallback: flat-file layout (audit_common.py in same directory)
+        from audit_common import (
+            AuditResult, OSInfo, SharedDataCache, detect_os,
+            run_command, command_exists, read_file_safe,
+            check_service_enabled, check_service_active,
+            check_package_installed, get_file_permissions,
+            get_file_permissions_full, get_file_owner_group,
+            check_file_exists, check_kernel_parameter,
+            check_mount_option, get_selinux_status,
+            get_apparmor_status, get_firewall_status,
+            check_fips_mode, check_ipv6_enabled,
+            get_ssh_config_value, get_ssh_config_all,
+            get_listening_ports, get_loaded_kernel_modules,
+            check_pam_module, get_password_policy,
+            get_user_accounts, get_system_users, get_human_users,
+            safe_int_parse, safe_float_parse,
+            get_audit_rules, get_grub_cmdline, check_grub_parameter,
+            get_available_updates, get_security_updates,
+            generate_check_id, get_module_logger,
+        )
+        HAS_COMMON_LIB = True
+    except ImportError:
+        # Fallback: import AuditResult from main script (backward compatibility)
+        from linux_security_audit import AuditResult
+        HAS_COMMON_LIB = False
 
-# ============================================================================
-# ENISA Helper Functions
-# ============================================================================
+MODULE_NAME = "ENISA"
+MODULE_VERSION = "2.2"
+
+# Module logger (uses structured logging if audit_common is available)
+logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
 
 def get_enisa_id(category: str, number: int) -> str:
     """Generate ENISA control ID"""
@@ -287,6 +283,9 @@ def check_baseline_security(results: List[AuditResult], shared_data: Dict[str, A
     ENISA Baseline Security Measures
     Essential security controls recommended by ENISA
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Baseline Security Measures...")
     
     # BSM-001: Operating system up to date
@@ -637,6 +636,9 @@ def check_network_security(results: List[AuditResult], shared_data: Dict[str, An
     ENISA Network Security Controls
     Network hardening and security measures
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Network Security Controls...")
     
     # NET-001: Firewall default policy
@@ -982,6 +984,9 @@ def check_access_control_data_protection(results: List[AuditResult], shared_data
     ENISA Access Control & Data Protection
     Authentication, authorization, and data protection measures
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Access Control & Data Protection...")
     
     # ACC-001: Strong authentication configured
@@ -1331,6 +1336,9 @@ def check_incident_response_monitoring(results: List[AuditResult], shared_data: 
     ENISA Incident Response & Monitoring
     Logging, monitoring, and incident response capabilities
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Incident Response & Monitoring...")
     
     # INC-001: Centralized logging
@@ -1620,6 +1628,115 @@ def check_incident_response_monitoring(results: List[AuditResult], shared_data: 
 
 
 # ============================================================================
+# ENISA Supply Chain Security & NIS2 Compliance
+# Phase 1 Gap: NIS2 Article 21, supply chain, encryption at rest, DR
+# ============================================================================
+
+def check_supply_chain_nis2(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    ENISA/NIS2 supply chain security, encryption at rest, vulnerability
+    disclosure readiness, and business continuity checks.
+    """
+    cache = shared_data.get('cache')
+
+    # --- NIS2 Art.21: Supply chain - Package repository integrity ---
+    if os_info.package_manager == "apt":
+        result = run_command("apt-key list 2>/dev/null | grep -c 'pub'", check=False)
+        gpg_keys = safe_int_parse(result.stdout.strip(), default=0)
+        # Check for unsigned repos
+        sources = read_file_safe("/etc/apt/sources.list") or ""
+        unsigned = sources.count("[trusted=yes]") + sources.count("allow-insecure=yes")
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="ENISA - Supply Chain",
+            status="Pass" if gpg_keys > 0 and unsigned == 0 else (
+                "Fail" if unsigned > 0 else "Warning"),
+            message=f"{get_enisa_id('SCM', 1)}: Package repository GPG verification (NIS2 Art.21)",
+            details=f"GPG keys: {gpg_keys}, Unsigned/insecure repos: {unsigned}",
+            remediation="Remove [trusted=yes] from sources and import proper GPG keys",
+            severity="High"
+        ))
+    elif os_info.package_manager in ("yum", "dnf"):
+        conf = read_file_safe(f"/etc/{os_info.package_manager}.conf") or ""
+        gpgcheck_on = "gpgcheck=0" not in conf
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="ENISA - Supply Chain",
+            status="Pass" if gpgcheck_on else "Fail",
+            message=f"{get_enisa_id('SCM', 1)}: Package GPG verification (NIS2 Art.21)",
+            details=f"gpgcheck: {'enabled' if gpgcheck_on else 'DISABLED'}",
+            remediation=f"Set gpgcheck=1 in /etc/{os_info.package_manager}.conf",
+            severity="High"
+        ))
+
+    # --- Software bill of materials readiness ---
+    sbom_tools = ["syft", "cyclonedx", "spdx", "dpkg-query", "rpm"]
+    found_sbom = [t for t in sbom_tools if command_exists(t)]
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ENISA - Supply Chain",
+        status="Pass" if found_sbom else "Info",
+        message=f"{get_enisa_id('SCM', 2)}: SBOM generation capability",
+        details=f"Available tools: {', '.join(found_sbom) if found_sbom else 'none detected'}",
+        remediation="Install SBOM generation tools (syft, cyclonedx-cli) for supply chain transparency",
+        severity="Low"
+    ))
+
+    # --- Encryption at rest ---
+    # Check for LUKS encrypted partitions
+    result = run_command("lsblk -o NAME,FSTYPE,TYPE 2>/dev/null | grep -i crypt", check=False)
+    luks_found = result.returncode == 0 and result.stdout.strip()
+    # Check dm-crypt
+    result2 = run_command("dmsetup ls --target crypt 2>/dev/null", check=False)
+    dm_crypt = result2.returncode == 0 and result2.stdout.strip() and "No" not in result2.stdout
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ENISA - Data Protection",
+        status="Pass" if (luks_found or dm_crypt) else "Warning",
+        message=f"{get_enisa_id('DAT', 10)}: Encryption at rest (NIS2 Art.21)",
+        details=f"LUKS/dm-crypt: {'detected' if (luks_found or dm_crypt) else 'not detected'}",
+        remediation="Implement full disk encryption using LUKS: cryptsetup luksFormat /dev/sdX",
+        severity="High"
+    ))
+
+    # --- Backup verification ---
+    backup_dirs = ["/var/backups", "/backup", "/mnt/backup"]
+    recent_backup = False
+    for bdir in backup_dirs:
+        if os.path.isdir(bdir):
+            result = run_command(f"find {bdir} -type f -mtime -30 2>/dev/null | head -1", check=False)
+            if result.returncode == 0 and result.stdout.strip():
+                recent_backup = True
+                break
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ENISA - Data Protection",
+        status="Pass" if recent_backup else "Warning",
+        message=f"{get_enisa_id('DAT', 11)}: Recent backup existence (NIS2 Art.21)",
+        details=f"Recent backups (<30 days): {'found' if recent_backup else 'not found in standard locations'}",
+        remediation="Implement and verify regular backup procedures",
+        severity="Medium"
+    ))
+
+    # --- Vulnerability disclosure readiness ---
+    security_files = ["/etc/security-policy.txt", "/.well-known/security.txt",
+                      "/var/www/html/.well-known/security.txt",
+                      "/var/www/.well-known/security.txt"]
+    vuln_disclosure = any(os.path.exists(f) for f in security_files)
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ENISA - Incident Response",
+        status="Pass" if vuln_disclosure else "Info",
+        message=f"{get_enisa_id('INC', 10)}: Vulnerability disclosure policy (NIS2 Art.21)",
+        details=f"security.txt: {'found' if vuln_disclosure else 'not found'}",
+        remediation="Create /.well-known/security.txt per RFC 9116",
+        severity="Low"
+    ))
+
+
+# ============================================================================
 # Main Orchestration Function
 # ============================================================================
 
@@ -1629,6 +1746,9 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     Executes all ENISA cybersecurity checks and returns results
     """
     results = []
+    
+    # Extract SharedDataCache from shared_data (populated by main script)
+    cache = shared_data.get('cache')
     
     print(f"\n[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] ENISA CYBERSECURITY COMPLIANCE AUDIT")
@@ -1653,7 +1773,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
-        print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}]   Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
     try:
@@ -1662,9 +1782,11 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         check_network_security(results, shared_data, os_info)
         check_access_control_data_protection(results, shared_data, os_info)
         check_incident_response_monitoring(results, shared_data, os_info)
+        # Phase 1 new checks
+        check_supply_chain_nis2(results, shared_data, os_info)
         
     except Exception as e:
-        print(f"[{MODULE_NAME}] ❌ Error during audit execution: {str(e)}")
+        print(f"[{MODULE_NAME}]  Error during audit execution: {str(e)}")
         results.append(AuditResult(
             module=MODULE_NAME,
             category="ENISA - Error",
@@ -1698,12 +1820,11 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}] Total Cybersecurity Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
-    print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ❌ Fail:    {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
-    if error_count > 0:
-        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
+    print(f"[{MODULE_NAME}]   Passed:  {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Failed:  {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Warnings: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Errors:  {error_count:3d} ({error_count/len(results)*100:.1f}%)")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] ENISA Control Categories:")
     for category in sorted(category_counts.keys()):
@@ -1728,12 +1849,21 @@ if __name__ == "__main__":
     print("EU Agency for Cybersecurity Compliance for Linux")
     print("="*80)
     
+    # Initialize cache if shared library is available
+    cache = None
+    if HAS_COMMON_LIB:
+        os_info_init = detect_os()
+        cache = SharedDataCache(os_info_init)
+        cache.warm_up()
+        print(f"  Cache: Enabled")
+    
     # Prepare test environment data
     test_data = {
         "hostname": socket.gethostname(),
         "scan_date": datetime.datetime.now(),
         "is_root": os.geteuid() == 0,
-        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd()
+        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd(),
+        "cache": cache,
     }
     
     print(f"\nTest Environment:")
@@ -1760,7 +1890,7 @@ if __name__ == "__main__":
         count = status_counts.get(status, 0)
         if count > 0:
             pct = (count / len(test_results)) * 100
-            bar = '█' * int(pct / 2)
+            bar = '#' * int(pct / 2)
             print(f"  {status:8s}: {count:3d} ({pct:5.1f}%) {bar}")
     
     # Category breakdown
@@ -1779,3 +1909,7 @@ if __name__ == "__main__":
     print(f"ENISA module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
+
+# ============================================================================
+# End of module_enisa.py
+# ============================================================================
