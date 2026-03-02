@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 module_cis.py - CIS Benchmarks Comprehensive Implementation
-Version: 2.1
+Version: 2.2
 
 SYNOPSIS:
     CIS Benchmark compliance and security audit checks for Linux systems.
@@ -58,218 +58,139 @@ NOTES:
     Version: 2.1
     Target Checks: 200+ individual executable checks; OS-aware technical control checks
     Module automatically detects OS via module_core integration
+    
+    v2.0 Changes:
+    - Uses audit_common.py shared library (eliminates duplicated helpers)
+    - SharedDataCache integration for cached file/command lookups
+    - Severity levels on all AuditResults
+    - Thread-safe for parallel execution
 """
 
 import os
 import sys
 import re
 import subprocess
-import glob
 import pwd
 import grp
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple, Set
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from linux_security_audit import AuditResult
-
+import glob
+import socket
 import platform
+import time
+import logging
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
+
+# ============================================================================
+# Shared Library Integration
+# ============================================================================
+# Import consolidated utilities from audit_common.py
+# This eliminates duplicated helper functions across all modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
+
+try:
+    # Try shared_components package first (standard deployment)
+    from shared_components.audit_common import (
+        # Core classes
+        AuditResult, OSInfo, SharedDataCache,
+        # OS detection
+        detect_os,
+        # Command execution (cached)
+        run_command, command_exists, read_file_safe,
+        # Service checks (cache-aware)
+        check_service_enabled, check_service_active,
+        # Package checks (OS-aware)
+        check_package_installed,
+        # File checks
+        get_file_permissions, get_file_permissions_full,
+        get_file_owner_group, check_file_exists,
+        # Kernel parameters (cache-aware)
+        check_kernel_parameter, check_mount_option,
+        # Security subsystems (cache-aware)
+        get_selinux_status, get_apparmor_status, get_firewall_status,
+        check_fips_mode, check_ipv6_enabled,
+        # SSH configuration (cache-aware)
+        get_ssh_config_value, get_ssh_config_all,
+        # Network
+        get_listening_ports, get_loaded_kernel_modules,
+        # PAM & password policy (cache-aware)
+        check_pam_module, get_password_policy,
+        # User accounts (cache-aware)
+        get_user_accounts, get_system_users, get_human_users,
+        # Parsing helpers
+        safe_int_parse, safe_float_parse,
+        # Audit rules & GRUB
+        get_audit_rules, get_grub_cmdline, check_grub_parameter,
+        # Updates (OS-aware)
+        get_available_updates, get_security_updates,
+        # ID generation
+        generate_check_id,
+        # Logging
+        get_module_logger,
+    )
+    HAS_COMMON_LIB = True
+except ImportError:
+    try:
+        # Fallback: flat-file layout (audit_common.py in same directory)
+        from audit_common import (
+            AuditResult, OSInfo, SharedDataCache, detect_os,
+            run_command, command_exists, read_file_safe,
+            check_service_enabled, check_service_active,
+            check_package_installed, get_file_permissions,
+            get_file_permissions_full, get_file_owner_group,
+            check_file_exists, check_kernel_parameter,
+            check_mount_option, get_selinux_status,
+            get_apparmor_status, get_firewall_status,
+            check_fips_mode, check_ipv6_enabled,
+            get_ssh_config_value, get_ssh_config_all,
+            get_listening_ports, get_loaded_kernel_modules,
+            check_pam_module, get_password_policy,
+            get_user_accounts, get_system_users, get_human_users,
+            safe_int_parse, safe_float_parse,
+            get_audit_rules, get_grub_cmdline, check_grub_parameter,
+            get_available_updates, get_security_updates,
+            generate_check_id, get_module_logger,
+        )
+        HAS_COMMON_LIB = True
+    except ImportError:
+        # Fallback: import AuditResult from main script (backward compatibility)
+        from linux_security_audit import AuditResult
+        HAS_COMMON_LIB = False
 
 MODULE_NAME = "CIS"
-MODULE_VERSION = "2.1"
+MODULE_VERSION = "2.0"
 
-# ============================================================================
-# OS Detection and Classification
-# ============================================================================
+# Module logger (uses structured logging if audit_common is available)
+logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
 
-class OSInfo:
-    """Store and manage OS information"""
-    def __init__(self):
-        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
-        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
-        self.version = "Unknown"
-        self.version_id = "Unknown"
-        self.codename = "Unknown"
-        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
-        self.init_system = "Unknown"  # systemd, sysvinit, upstart
-        self.architecture = platform.machine()
-        self.kernel_version = platform.release()
-        
-    def __str__(self):
-        return f"{self.distro} {self.version} ({self.family})"
-
-def detect_os() -> OSInfo:
-    """
-    Comprehensive OS detection
-    Returns OSInfo object with detailed system information
-    """
-    os_info = OSInfo()
-    
-    # Read /etc/os-release (standard location)
-    if os.path.exists("/etc/os-release"):
-        with open("/etc/os-release", 'r') as f:
-            os_release = {}
-            for line in f:
-                if '=' in line:
-                    key, value = line.strip().split('=', 1)
-                    os_release[key] = value.strip('"')
-        
-        os_info.distro = os_release.get('ID', 'unknown').lower()
-        os_info.version = os_release.get('VERSION', 'unknown')
-        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
-        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
-        
-        # Determine OS family
-        id_like = os_release.get('ID_LIKE', '').lower()
-        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
-            os_info.family = 'debian'
-        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
-            os_info.family = 'redhat'
-        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
-            os_info.family = 'suse'
-        elif os_info.distro == 'arch':
-            os_info.family = 'arch'
-    
-    # Fallback detection methods
-    if os_info.family == "Unknown":
-        if os.path.exists("/etc/debian_version"):
-            os_info.family = 'debian'
-            os_info.distro = 'debian'
-        elif os.path.exists("/etc/redhat-release"):
-            os_info.family = 'redhat'
-            with open("/etc/redhat-release", 'r') as f:
-                content = f.read().lower()
-                if 'centos' in content:
-                    os_info.distro = 'centos'
-                elif 'red hat' in content or 'rhel' in content:
-                    os_info.distro = 'rhel'
-                elif 'fedora' in content:
-                    os_info.distro = 'fedora'
-    
-    # Detect package manager
-    if command_exists('apt-get'):
-        os_info.package_manager = 'apt'
-    elif command_exists('dnf'):
-        os_info.package_manager = 'dnf'
-    elif command_exists('yum'):
-        os_info.package_manager = 'yum'
-    elif command_exists('zypper'):
-        os_info.package_manager = 'zypper'
-    elif command_exists('pacman'):
-        os_info.package_manager = 'pacman'
-    
-    # Detect init system
-    if os.path.exists("/run/systemd/system"):
-        os_info.init_system = 'systemd'
-    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
-        link = os.readlink("/sbin/init")
-        if 'systemd' in link:
-            os_info.init_system = 'systemd'
-        elif 'upstart' in link:
-            os_info.init_system = 'upstart'
-    else:
-        os_info.init_system = 'sysvinit'
-    
-    return os_info
-
-# ============================================================================
-# Comprehensive Helper Functions
-# ============================================================================
-
-def run_command(command: str) -> subprocess.CompletedProcess:
-    """Execute shell command with timeout"""
-    try:
-        return subprocess.run(command, shell=True, capture_output=True, 
-                            text=True, timeout=30)
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(args=command, returncode=-1, 
-                                         stdout="", stderr="Timeout")
-    except Exception as e:
-        return subprocess.CompletedProcess(args=command, returncode=-1, 
-                                         stdout="", stderr=str(e))
-
-def command_exists(command: str) -> bool:
-    """Check if command exists in PATH"""
-    result = run_command(f"command -v {command}")
-    return result.returncode == 0
-
-def read_file_safe(filepath: str) -> str:
-    """Safely read file contents"""
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except:
-        return ""
-
-def check_service_enabled(service: str) -> bool:
-    """Check if systemd service is enabled"""
-    result = run_command(f"systemctl is-enabled {service} 2>/dev/null")
-    return result.returncode == 0 and "enabled" in result.stdout.lower()
-
-def check_service_active(service: str) -> bool:
-    """Check if systemd service is active"""
-    result = run_command(f"systemctl is-active {service} 2>/dev/null")
-    return result.returncode == 0 and "active" in result.stdout.lower()
-
-def check_package_installed(package: str, os_info: OSInfo) -> bool:
-    """Check if package is installed (OS-aware)"""
-    if os_info.package_manager == 'apt':
-        result = run_command(f"dpkg -l {package} 2>/dev/null | grep -q '^ii'")
-        return result.returncode == 0
-    elif os_info.package_manager in ['yum', 'dnf']:
-        result = run_command(f"rpm -q {package} 2>/dev/null")
-        return result.returncode == 0
-    elif os_info.package_manager == 'zypper':
-        result = run_command(f"rpm -q {package} 2>/dev/null")
-        return result.returncode == 0
-    elif os_info.package_manager == 'pacman':
-        result = run_command(f"pacman -Q {package} 2>/dev/null")
-        return result.returncode == 0
-    return False
-
-def get_file_permissions(filepath: str) -> Optional[str]:
-    """Get file permissions as octal string"""
-    try:
-        return oct(os.stat(filepath).st_mode)[-4:]
-    except:
-        return None
-
-def get_file_owner_group(filepath: str) -> Tuple[Optional[str], Optional[str]]:
-    """Get file owner and group"""
-    try:
-        stat_info = os.stat(filepath)
-        owner = pwd.getpwuid(stat_info.st_uid).pw_name
-        group = grp.getgrgid(stat_info.st_gid).gr_name
-        return owner, group
-    except:
-        return None, None
-
-def check_kernel_parameter(param: str, expected: str) -> bool:
-    """Check if kernel parameter matches expected value"""
-    result = run_command(f"sysctl {param} 2>/dev/null")
+def check_password_quality(setting: str, min_value: int) -> bool:
+    """Check if password quality setting meets minimum value"""
+    result = run_command(f"grep -E '^{setting}' /etc/security/pwquality.conf 2>/dev/null")
     if result.returncode == 0:
-        match = re.search(r'=\s*(.+)', result.stdout)
+        match = re.search(r'=\s*(-?\d+)', result.stdout)
         if match:
-            return match.group(1).strip() == expected
+            return int(match.group(1)) >= min_value
     return False
 
-def check_mount_option(mount_point: str, option: str) -> bool:
-    """Check if mount point has specific option"""
-    result = run_command(f"mount | grep ' {mount_point} '")
-    return option in result.stdout
 
-def check_grub_parameter(parameter: str) -> bool:
-    """Check if GRUB has specific parameter"""
-    grub_files = ["/boot/grub/grub.cfg", "/boot/grub2/grub.cfg", "/etc/default/grub"]
-    for grub_file in grub_files:
-        if os.path.exists(grub_file):
-            content = read_file_safe(grub_file)
-            if parameter in content:
-                return True
-    return False
+def cis_check_kernel_parameter(param: str, expected: str, cache=None) -> bool:
+    """CIS-specific kernel parameter check: returns True if value matches expected
+    
+    Wraps audit_common's check_kernel_parameter which returns (exists, value) tuple.
+    CIS checks compare against an expected value and return a simple boolean.
+    """
+    exists, value = check_kernel_parameter(param, cache=cache)
+    return exists and value.strip() == expected
+
+
+def cis_check_mount_option(mount_point: str, option: str, cache=None) -> bool:
+    """CIS-specific mount option check with cache support"""
+    return check_mount_option(mount_point, option, cache=cache)
+
 
 def get_listening_services() -> List[str]:
-    """Get list of services listening on network ports"""
+    """Get list of services listening on network ports (CIS-specific)"""
     services = []
     result = run_command("ss -tulpn 2>/dev/null || netstat -tulpn 2>/dev/null")
     for line in result.stdout.split('\n'):
@@ -278,9 +199,7 @@ def get_listening_services() -> List[str]:
             if len(parts) >= 7:
                 service = parts[-1] if '/' in parts[-1] else 'unknown'
                 services.append(service)
-    return list(set(services))
-
-def check_password_quality(setting: str, min_value: int) -> bool:
+    return services
     """Check password quality settings in PAM"""
     pam_files = ["/etc/security/pwquality.conf", "/etc/pam.d/system-auth", 
                  "/etc/pam.d/common-password"]
@@ -299,6 +218,9 @@ def check_password_quality(setting: str, min_value: int) -> bool:
 
 def check_section1_filesystem_configuration(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 1.1 - Filesystem Configuration"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 1.1 - Filesystem Configuration...")
     
     # 1.1.1.1 - Ensure cramfs is disabled
@@ -453,6 +375,9 @@ def check_section1_filesystem_configuration(results: List[AuditResult], shared_d
 
 def check_section1_package_management(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 1.2 - Configure Software Updates"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 1.2 - Package Management...")
     
     # 1.2.1 - Ensure GPG keys configured (apt)
@@ -587,6 +512,9 @@ def check_section1_package_management(results: List[AuditResult], shared_data: D
 
 def check_section1_mandatory_access_control(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 1.6 - Mandatory Access Control"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 1.6 - Mandatory Access Control...")
     
     # 1.6.1.1 - Ensure SELinux is installed
@@ -700,6 +628,9 @@ def check_section1_mandatory_access_control(results: List[AuditResult], shared_d
 
 def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 1.7 - Command Line Warning Banners"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 1.7 - Warning Banners...")
     
     # 1.7.1 - Ensure message of the day is configured
@@ -765,6 +696,9 @@ def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict
 
 def check_section2_services(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 2 - Services Configuration"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 2 - Services...")
     
     # 2.1.1 - Ensure time synchronization is in use
@@ -1085,10 +1019,13 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
 
 def check_section3_network_parameters(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 3.1 - Network Parameters (Host Only)"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 3.1 - Network Parameters (Host Only)...")
     
     # 3.1.1 - Ensure IP forwarding is disabled
-    ipv4_forward = check_kernel_parameter("net.ipv4.ip_forward", "0")
+    ipv4_forward = cis_check_kernel_parameter("net.ipv4.ip_forward", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if ipv4_forward else "Fail",
@@ -1098,8 +1035,8 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.2 - Ensure packet redirect sending is disabled
-    send_redirects_all = check_kernel_parameter("net.ipv4.conf.all.send_redirects", "0")
-    send_redirects_default = check_kernel_parameter("net.ipv4.conf.default.send_redirects", "0")
+    send_redirects_all = cis_check_kernel_parameter("net.ipv4.conf.all.send_redirects", "0")
+    send_redirects_default = cis_check_kernel_parameter("net.ipv4.conf.default.send_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if send_redirects_all and send_redirects_default else "Fail",
@@ -1110,7 +1047,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     
     # Additional network hardening checks
     # 3.1.3 - Ensure ICMP redirect acceptance is disabled (all interfaces)
-    icmp_accept_all = check_kernel_parameter("net.ipv4.conf.all.accept_redirects", "0")
+    icmp_accept_all = cis_check_kernel_parameter("net.ipv4.conf.all.accept_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if icmp_accept_all else "Fail",
@@ -1120,7 +1057,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.4 - Ensure ICMP redirect acceptance is disabled (default)
-    icmp_accept_default = check_kernel_parameter("net.ipv4.conf.default.accept_redirects", "0")
+    icmp_accept_default = cis_check_kernel_parameter("net.ipv4.conf.default.accept_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if icmp_accept_default else "Fail",
@@ -1130,7 +1067,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.5 - Ensure secure ICMP redirects are not accepted (all)
-    secure_redir_all = check_kernel_parameter("net.ipv4.conf.all.secure_redirects", "0")
+    secure_redir_all = cis_check_kernel_parameter("net.ipv4.conf.all.secure_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if secure_redir_all else "Fail",
@@ -1140,7 +1077,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.6 - Ensure secure ICMP redirects are not accepted (default)
-    secure_redir_default = check_kernel_parameter("net.ipv4.conf.default.secure_redirects", "0")
+    secure_redir_default = cis_check_kernel_parameter("net.ipv4.conf.default.secure_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if secure_redir_default else "Fail",
@@ -1150,7 +1087,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.7 - Ensure Reverse Path Filtering is enabled (all)
-    rp_filter_all = check_kernel_parameter("net.ipv4.conf.all.rp_filter", "1")
+    rp_filter_all = cis_check_kernel_parameter("net.ipv4.conf.all.rp_filter", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if rp_filter_all else "Fail",
@@ -1160,7 +1097,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.8 - Ensure Reverse Path Filtering is enabled (default)
-    rp_filter_default = check_kernel_parameter("net.ipv4.conf.default.rp_filter", "1")
+    rp_filter_default = cis_check_kernel_parameter("net.ipv4.conf.default.rp_filter", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if rp_filter_default else "Fail",
@@ -1170,7 +1107,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.9 - Ensure source routed packets are not accepted (all)
-    source_route_all = check_kernel_parameter("net.ipv4.conf.all.accept_source_route", "0")
+    source_route_all = cis_check_kernel_parameter("net.ipv4.conf.all.accept_source_route", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if source_route_all else "Fail",
@@ -1180,7 +1117,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.10 - Ensure source routed packets are not accepted (default)
-    source_route_default = check_kernel_parameter("net.ipv4.conf.default.accept_source_route", "0")
+    source_route_default = cis_check_kernel_parameter("net.ipv4.conf.default.accept_source_route", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if source_route_default else "Fail",
@@ -1190,7 +1127,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.11 - Ensure suspicious packets are logged (all)
-    log_martians_all = check_kernel_parameter("net.ipv4.conf.all.log_martians", "1")
+    log_martians_all = cis_check_kernel_parameter("net.ipv4.conf.all.log_martians", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if log_martians_all else "Fail",
@@ -1200,7 +1137,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.12 - Ensure suspicious packets are logged (default)
-    log_martians_default = check_kernel_parameter("net.ipv4.conf.default.log_martians", "1")
+    log_martians_default = cis_check_kernel_parameter("net.ipv4.conf.default.log_martians", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if log_martians_default else "Fail",
@@ -1210,7 +1147,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.13 - Ensure broadcast ICMP requests are ignored
-    ignore_broadcasts = check_kernel_parameter("net.ipv4.icmp_echo_ignore_broadcasts", "1")
+    ignore_broadcasts = cis_check_kernel_parameter("net.ipv4.icmp_echo_ignore_broadcasts", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if ignore_broadcasts else "Fail",
@@ -1220,7 +1157,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.14 - Ensure bogus ICMP responses are ignored
-    ignore_bogus = check_kernel_parameter("net.ipv4.icmp_ignore_bogus_error_responses", "1")
+    ignore_bogus = cis_check_kernel_parameter("net.ipv4.icmp_ignore_bogus_error_responses", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if ignore_bogus else "Fail",
@@ -1230,7 +1167,7 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
     ))
     
     # 3.1.15 - Ensure TCP SYN Cookies is enabled
-    syn_cookies = check_kernel_parameter("net.ipv4.tcp_syncookies", "1")
+    syn_cookies = cis_check_kernel_parameter("net.ipv4.tcp_syncookies", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.1 - Network",
         status="Pass" if syn_cookies else "Fail",
@@ -1241,11 +1178,14 @@ def check_section3_network_parameters(results: List[AuditResult], shared_data: D
 
 def check_section3_network_host_and_router(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 3.2 - Network Parameters (Host and Router)"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 3.2 - Network Parameters (Host and Router)...")
     
     # 3.2.1 - Ensure source routed packets are not accepted
-    accept_source_route_all = check_kernel_parameter("net.ipv4.conf.all.accept_source_route", "0")
-    accept_source_route_default = check_kernel_parameter("net.ipv4.conf.default.accept_source_route", "0")
+    accept_source_route_all = cis_check_kernel_parameter("net.ipv4.conf.all.accept_source_route", "0")
+    accept_source_route_default = cis_check_kernel_parameter("net.ipv4.conf.default.accept_source_route", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if accept_source_route_all and accept_source_route_default else "Fail",
@@ -1255,8 +1195,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.2 - Ensure ICMP redirects are not accepted
-    accept_redirects_all = check_kernel_parameter("net.ipv4.conf.all.accept_redirects", "0")
-    accept_redirects_default = check_kernel_parameter("net.ipv4.conf.default.accept_redirects", "0")
+    accept_redirects_all = cis_check_kernel_parameter("net.ipv4.conf.all.accept_redirects", "0")
+    accept_redirects_default = cis_check_kernel_parameter("net.ipv4.conf.default.accept_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if accept_redirects_all and accept_redirects_default else "Fail",
@@ -1266,8 +1206,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.3 - Ensure secure ICMP redirects are not accepted
-    secure_redirects_all = check_kernel_parameter("net.ipv4.conf.all.secure_redirects", "0")
-    secure_redirects_default = check_kernel_parameter("net.ipv4.conf.default.secure_redirects", "0")
+    secure_redirects_all = cis_check_kernel_parameter("net.ipv4.conf.all.secure_redirects", "0")
+    secure_redirects_default = cis_check_kernel_parameter("net.ipv4.conf.default.secure_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if secure_redirects_all and secure_redirects_default else "Fail",
@@ -1277,8 +1217,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.4 - Ensure suspicious packets are logged
-    log_martians_all = check_kernel_parameter("net.ipv4.conf.all.log_martians", "1")
-    log_martians_default = check_kernel_parameter("net.ipv4.conf.default.log_martians", "1")
+    log_martians_all = cis_check_kernel_parameter("net.ipv4.conf.all.log_martians", "1")
+    log_martians_default = cis_check_kernel_parameter("net.ipv4.conf.default.log_martians", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if log_martians_all and log_martians_default else "Fail",
@@ -1288,7 +1228,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.5 - Ensure broadcast ICMP requests are ignored
-    ignore_broadcasts = check_kernel_parameter("net.ipv4.icmp_echo_ignore_broadcasts", "1")
+    ignore_broadcasts = cis_check_kernel_parameter("net.ipv4.icmp_echo_ignore_broadcasts", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if ignore_broadcasts else "Fail",
@@ -1298,7 +1238,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.6 - Ensure bogus ICMP responses are ignored
-    ignore_bogus = check_kernel_parameter("net.ipv4.icmp_ignore_bogus_error_responses", "1")
+    ignore_bogus = cis_check_kernel_parameter("net.ipv4.icmp_ignore_bogus_error_responses", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if ignore_bogus else "Fail",
@@ -1308,8 +1248,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.7 - Ensure Reverse Path Filtering is enabled
-    rp_filter_all = check_kernel_parameter("net.ipv4.conf.all.rp_filter", "1")
-    rp_filter_default = check_kernel_parameter("net.ipv4.conf.default.rp_filter", "1")
+    rp_filter_all = cis_check_kernel_parameter("net.ipv4.conf.all.rp_filter", "1")
+    rp_filter_default = cis_check_kernel_parameter("net.ipv4.conf.default.rp_filter", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if rp_filter_all and rp_filter_default else "Fail",
@@ -1319,7 +1259,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.8 - Ensure TCP SYN Cookies is enabled
-    syn_cookies = check_kernel_parameter("net.ipv4.tcp_syncookies", "1")
+    syn_cookies = cis_check_kernel_parameter("net.ipv4.tcp_syncookies", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if syn_cookies else "Fail",
@@ -1329,8 +1269,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.9 - Ensure IPv6 router advertisements are not accepted
-    ipv6_accept_ra_all = check_kernel_parameter("net.ipv6.conf.all.accept_ra", "0")
-    ipv6_accept_ra_default = check_kernel_parameter("net.ipv6.conf.default.accept_ra", "0")
+    ipv6_accept_ra_all = cis_check_kernel_parameter("net.ipv6.conf.all.accept_ra", "0")
+    ipv6_accept_ra_default = cis_check_kernel_parameter("net.ipv6.conf.default.accept_ra", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if ipv6_accept_ra_all and ipv6_accept_ra_default else "Warning",
@@ -1341,11 +1281,14 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
 
 def check_section3_network_host_and_router(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 3.2 - Network Parameters (Host and Router)"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 3.2 - Network Parameters (Host and Router)...")
     
     # 3.2.1 - Ensure source routed packets are not accepted
-    accept_source_route_all = check_kernel_parameter("net.ipv4.conf.all.accept_source_route", "0")
-    accept_source_route_default = check_kernel_parameter("net.ipv4.conf.default.accept_source_route", "0")
+    accept_source_route_all = cis_check_kernel_parameter("net.ipv4.conf.all.accept_source_route", "0")
+    accept_source_route_default = cis_check_kernel_parameter("net.ipv4.conf.default.accept_source_route", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if accept_source_route_all and accept_source_route_default else "Fail",
@@ -1355,8 +1298,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.2 - Ensure ICMP redirects are not accepted
-    accept_redirects_all = check_kernel_parameter("net.ipv4.conf.all.accept_redirects", "0")
-    accept_redirects_default = check_kernel_parameter("net.ipv4.conf.default.accept_redirects", "0")
+    accept_redirects_all = cis_check_kernel_parameter("net.ipv4.conf.all.accept_redirects", "0")
+    accept_redirects_default = cis_check_kernel_parameter("net.ipv4.conf.default.accept_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if accept_redirects_all and accept_redirects_default else "Fail",
@@ -1366,8 +1309,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.3 - Ensure secure ICMP redirects are not accepted
-    secure_redirects_all = check_kernel_parameter("net.ipv4.conf.all.secure_redirects", "0")
-    secure_redirects_default = check_kernel_parameter("net.ipv4.conf.default.secure_redirects", "0")
+    secure_redirects_all = cis_check_kernel_parameter("net.ipv4.conf.all.secure_redirects", "0")
+    secure_redirects_default = cis_check_kernel_parameter("net.ipv4.conf.default.secure_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if secure_redirects_all and secure_redirects_default else "Fail",
@@ -1377,8 +1320,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.4 - Ensure suspicious packets are logged
-    log_martians_all = check_kernel_parameter("net.ipv4.conf.all.log_martians", "1")
-    log_martians_default = check_kernel_parameter("net.ipv4.conf.default.log_martians", "1")
+    log_martians_all = cis_check_kernel_parameter("net.ipv4.conf.all.log_martians", "1")
+    log_martians_default = cis_check_kernel_parameter("net.ipv4.conf.default.log_martians", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if log_martians_all and log_martians_default else "Fail",
@@ -1388,7 +1331,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.5 - Ensure broadcast ICMP requests are ignored
-    ignore_broadcasts = check_kernel_parameter("net.ipv4.icmp_echo_ignore_broadcasts", "1")
+    ignore_broadcasts = cis_check_kernel_parameter("net.ipv4.icmp_echo_ignore_broadcasts", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if ignore_broadcasts else "Fail",
@@ -1398,7 +1341,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.6 - Ensure bogus ICMP responses are ignored
-    ignore_bogus = check_kernel_parameter("net.ipv4.icmp_ignore_bogus_error_responses", "1")
+    ignore_bogus = cis_check_kernel_parameter("net.ipv4.icmp_ignore_bogus_error_responses", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if ignore_bogus else "Fail",
@@ -1408,8 +1351,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.7 - Ensure Reverse Path Filtering is enabled
-    rp_filter_all = check_kernel_parameter("net.ipv4.conf.all.rp_filter", "1")
-    rp_filter_default = check_kernel_parameter("net.ipv4.conf.default.rp_filter", "1")
+    rp_filter_all = cis_check_kernel_parameter("net.ipv4.conf.all.rp_filter", "1")
+    rp_filter_default = cis_check_kernel_parameter("net.ipv4.conf.default.rp_filter", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if rp_filter_all and rp_filter_default else "Fail",
@@ -1419,7 +1362,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.8 - Ensure TCP SYN Cookies is enabled
-    syn_cookies = check_kernel_parameter("net.ipv4.tcp_syncookies", "1")
+    syn_cookies = cis_check_kernel_parameter("net.ipv4.tcp_syncookies", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if syn_cookies else "Fail",
@@ -1429,8 +1372,8 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.9 - Ensure IPv6 router advertisements are not accepted
-    ipv6_accept_ra_all = check_kernel_parameter("net.ipv6.conf.all.accept_ra", "0")
-    ipv6_accept_ra_default = check_kernel_parameter("net.ipv6.conf.default.accept_ra", "0")
+    ipv6_accept_ra_all = cis_check_kernel_parameter("net.ipv6.conf.all.accept_ra", "0")
+    ipv6_accept_ra_default = cis_check_kernel_parameter("net.ipv6.conf.default.accept_ra", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if ipv6_accept_ra_all and ipv6_accept_ra_default else "Warning",
@@ -1441,7 +1384,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     
     # Additional router-specific checks
     # 3.2.10 - Ensure TCP timestamps are disabled
-    tcp_timestamps = check_kernel_parameter("net.ipv4.tcp_timestamps", "0")
+    tcp_timestamps = cis_check_kernel_parameter("net.ipv4.tcp_timestamps", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if tcp_timestamps else "Info",
@@ -1451,7 +1394,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.11 - Ensure ARP proxy is disabled
-    proxy_arp_all = check_kernel_parameter("net.ipv4.conf.all.proxy_arp", "0")
+    proxy_arp_all = cis_check_kernel_parameter("net.ipv4.conf.all.proxy_arp", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if proxy_arp_all else "Info",
@@ -1461,7 +1404,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.12 - Ensure medium ARP is disabled
-    arp_announce = check_kernel_parameter("net.ipv4.conf.all.arp_announce", "2")
+    arp_announce = cis_check_kernel_parameter("net.ipv4.conf.all.arp_announce", "2")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Info",
@@ -1471,7 +1414,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.13 - Ensure ARP ignore is configured
-    arp_ignore = check_kernel_parameter("net.ipv4.conf.all.arp_ignore", "1")
+    arp_ignore = cis_check_kernel_parameter("net.ipv4.conf.all.arp_ignore", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Info",
@@ -1481,7 +1424,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.14 - Ensure ICMP echo ignore all is configured
-    icmp_echo_ignore = check_kernel_parameter("net.ipv4.icmp_echo_ignore_all", "0")
+    icmp_echo_ignore = cis_check_kernel_parameter("net.ipv4.icmp_echo_ignore_all", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Info",
@@ -1491,7 +1434,7 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
     ))
     
     # 3.2.15 - Ensure IPv4 TCP RFC1337 protection is enabled
-    tcp_rfc1337 = check_kernel_parameter("net.ipv4.tcp_rfc1337", "1")
+    tcp_rfc1337 = cis_check_kernel_parameter("net.ipv4.tcp_rfc1337", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.2 - Network",
         status="Pass" if tcp_rfc1337 else "Warning",
@@ -1502,6 +1445,9 @@ def check_section3_network_host_and_router(results: List[AuditResult], shared_da
 
 def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 3.3 - IPv6"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 3.3 - IPv6...")
     
     # 3.3.1 - Ensure IPv6 is disabled if not needed
@@ -1515,8 +1461,8 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any],
     ))
     
     # 3.3.2 - Ensure IPv6 forwarding is disabled
-    ipv6_forward_all = check_kernel_parameter("net.ipv6.conf.all.forwarding", "0")
-    ipv6_forward_default = check_kernel_parameter("net.ipv6.conf.default.forwarding", "0")
+    ipv6_forward_all = cis_check_kernel_parameter("net.ipv6.conf.all.forwarding", "0")
+    ipv6_forward_default = cis_check_kernel_parameter("net.ipv6.conf.default.forwarding", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.3 - IPv6",
         status="Pass" if ipv6_forward_all and ipv6_forward_default else "Fail",
@@ -1526,8 +1472,8 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any],
     ))
     
     # 3.3.3 - Ensure IPv6 redirects are not accepted
-    ipv6_redirects_all = check_kernel_parameter("net.ipv6.conf.all.accept_redirects", "0")
-    ipv6_redirects_default = check_kernel_parameter("net.ipv6.conf.default.accept_redirects", "0")
+    ipv6_redirects_all = cis_check_kernel_parameter("net.ipv6.conf.all.accept_redirects", "0")
+    ipv6_redirects_default = cis_check_kernel_parameter("net.ipv6.conf.default.accept_redirects", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.3 - IPv6",
         status="Pass" if ipv6_redirects_all and ipv6_redirects_default else "Fail",
@@ -1538,8 +1484,8 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any],
     
     # Additional IPv6 security checks
     # 3.3.4 - Ensure IPv6 source routing is disabled
-    ipv6_source_route_all = check_kernel_parameter("net.ipv6.conf.all.accept_source_route", "0")
-    ipv6_source_route_default = check_kernel_parameter("net.ipv6.conf.default.accept_source_route", "0")
+    ipv6_source_route_all = cis_check_kernel_parameter("net.ipv6.conf.all.accept_source_route", "0")
+    ipv6_source_route_default = cis_check_kernel_parameter("net.ipv6.conf.default.accept_source_route", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.3 - IPv6",
         status="Pass" if ipv6_source_route_all and ipv6_source_route_default else "Fail",
@@ -1549,8 +1495,8 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any],
     ))
     
     # 3.3.5 - Ensure IPv6 router advertisements are not accepted
-    ipv6_accept_ra_all = check_kernel_parameter("net.ipv6.conf.all.accept_ra", "0")
-    ipv6_accept_ra_default = check_kernel_parameter("net.ipv6.conf.default.accept_ra", "0")
+    ipv6_accept_ra_all = cis_check_kernel_parameter("net.ipv6.conf.all.accept_ra", "0")
+    ipv6_accept_ra_default = cis_check_kernel_parameter("net.ipv6.conf.default.accept_ra", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.3 - IPv6",
         status="Pass" if ipv6_accept_ra_all and ipv6_accept_ra_default else "Fail",
@@ -1569,7 +1515,7 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any],
     ))
     
     # 3.3.7 - Ensure IPv6 router solicitations are disabled
-    ipv6_router_solicitations = check_kernel_parameter("net.ipv6.conf.all.router_solicitations", "0")
+    ipv6_router_solicitations = cis_check_kernel_parameter("net.ipv6.conf.all.router_solicitations", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.3 - IPv6",
         status="Info",
@@ -1579,7 +1525,7 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any],
     ))
     
     # 3.3.8 - Ensure IPv6 accept_ra_rtr_pref is disabled
-    ipv6_ra_rtr_pref = check_kernel_parameter("net.ipv6.conf.all.accept_ra_rtr_pref", "0")
+    ipv6_ra_rtr_pref = cis_check_kernel_parameter("net.ipv6.conf.all.accept_ra_rtr_pref", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.3 - IPv6",
         status="Info",
@@ -1589,7 +1535,7 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any],
     ))
     
     # 3.3.9 - Ensure IPv6 accept_ra_pinfo is disabled
-    ipv6_ra_pinfo = check_kernel_parameter("net.ipv6.conf.all.accept_ra_pinfo", "0")
+    ipv6_ra_pinfo = cis_check_kernel_parameter("net.ipv6.conf.all.accept_ra_pinfo", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.3 - IPv6",
         status="Info",
@@ -1599,8 +1545,8 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any],
     ))
     
     # 3.3.10 - Ensure IPv6 autoconf is disabled
-    ipv6_autoconf_all = check_kernel_parameter("net.ipv6.conf.all.autoconf", "0")
-    ipv6_autoconf_default = check_kernel_parameter("net.ipv6.conf.default.autoconf", "0")
+    ipv6_autoconf_all = cis_check_kernel_parameter("net.ipv6.conf.all.autoconf", "0")
+    ipv6_autoconf_default = cis_check_kernel_parameter("net.ipv6.conf.default.autoconf", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 3.3 - IPv6",
         status="Info",
@@ -1611,6 +1557,9 @@ def check_section3_ipv6(results: List[AuditResult], shared_data: Dict[str, Any],
 
 def check_section3_firewall(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 3.4 - Firewall Configuration"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 3.4 - Firewall...")
     
     # 3.4.1 - Ensure firewall is installed
@@ -1675,6 +1624,9 @@ def check_section3_firewall(results: List[AuditResult], shared_data: Dict[str, A
 
 def check_section4_system_logging(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 4.1 - Configure System Accounting (auditd)"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 4.1 - System Auditing...")
     
     # 4.1.1 - Ensure auditing is enabled
@@ -1830,6 +1782,9 @@ def check_section4_system_logging(results: List[AuditResult], shared_data: Dict[
 
 def check_section4_logging(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 4.2 - Configure Logging"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 4.2 - System Logging...")
     
     # 4.2.1 - Ensure rsyslog is installed
@@ -1942,6 +1897,9 @@ def check_section4_logging(results: List[AuditResult], shared_data: Dict[str, An
 
 def check_section5_cron(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 5.1 - Configure cron"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 5.1 - Cron Configuration...")
     
     # 5.1.1 - Ensure cron daemon is enabled
@@ -2045,6 +2003,9 @@ def check_section5_cron(results: List[AuditResult], shared_data: Dict[str, Any],
 
 def check_section5_ssh(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 5.2 - SSH Server Configuration"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 5.2 - SSH Server Configuration...")
     
     sshd_config = read_file_safe("/etc/ssh/sshd_config")
@@ -2260,6 +2221,9 @@ def check_section5_ssh(results: List[AuditResult], shared_data: Dict[str, Any], 
 
 def check_section5_pam(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 5.3 - Configure PAM"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 5.3 - PAM Configuration...")
     
     # 5.3.1 - Ensure password creation requirements are configured
@@ -2324,6 +2288,9 @@ def check_section5_pam(results: List[AuditResult], shared_data: Dict[str, Any], 
 
 def check_section5_user_password_aging(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 5.4.1 - Set Shadow Password Suite Parameters"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 5.4.1 - Password Aging...")
     
     login_defs = read_file_safe("/etc/login.defs")
@@ -2478,6 +2445,9 @@ def check_section5_user_password_aging(results: List[AuditResult], shared_data: 
 
 def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 1.7 - Command Line Warning Banners"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 1.7 - Warning Banners...")
     
     # 1.7.1 - Ensure message of the day is configured
@@ -2538,6 +2508,9 @@ def check_section1_warning_banners(results: List[AuditResult], shared_data: Dict
 
 def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 1.4 - Secure Boot Settings"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 1.4 - Bootloader Security...")
     
     # 1.4.1 - Ensure bootloader password is set (GRUB)
@@ -2596,7 +2569,7 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
     limits_conf = read_file_safe("/etc/security/limits.conf")
     sysctl_conf = read_file_safe("/etc/sysctl.conf")
     core_dumps_disabled = "hard core 0" in limits_conf
-    suid_dumpable = check_kernel_parameter("fs.suid_dumpable", "0")
+    suid_dumpable = cis_check_kernel_parameter("fs.suid_dumpable", "0")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.4 - Boot Security",
         status="Pass" if core_dumps_disabled and suid_dumpable else "Fail",
@@ -2616,7 +2589,7 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # 1.4.6 - Ensure address space layout randomization (ASLR) is enabled
-    aslr_enabled = check_kernel_parameter("kernel.randomize_va_space", "2")
+    aslr_enabled = cis_check_kernel_parameter("kernel.randomize_va_space", "2")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.4 - Boot Security",
         status="Pass" if aslr_enabled else "Fail",
@@ -2636,7 +2609,7 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # 1.4.8 - Ensure kernel pointer restriction
-    kptr_restrict = check_kernel_parameter("kernel.kptr_restrict", "1")
+    kptr_restrict = cis_check_kernel_parameter("kernel.kptr_restrict", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.4 - Boot Security",
         status="Pass" if kptr_restrict else "Warning",
@@ -2646,7 +2619,7 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # 1.4.9 - Ensure kernel dmesg restriction
-    dmesg_restrict = check_kernel_parameter("kernel.dmesg_restrict", "1")
+    dmesg_restrict = cis_check_kernel_parameter("kernel.dmesg_restrict", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.4 - Boot Security",
         status="Pass" if dmesg_restrict else "Warning",
@@ -2656,7 +2629,7 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # 1.4.10 - Ensure kernel module loading is disabled
-    modules_disabled = check_kernel_parameter("kernel.modules_disabled", "1")
+    modules_disabled = cis_check_kernel_parameter("kernel.modules_disabled", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.4 - Boot Security",
         status="Info",
@@ -2666,7 +2639,7 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
     ))
     
     # 1.4.11 - Ensure ptrace scope is restricted
-    ptrace_scope = check_kernel_parameter("kernel.yama.ptrace_scope", "1")
+    ptrace_scope = cis_check_kernel_parameter("kernel.yama.ptrace_scope", "1")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 1.4 - Boot Security",
         status="Pass" if ptrace_scope else "Warning",
@@ -2677,6 +2650,9 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
 
 def check_section6_file_permissions(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 6.1 - System File Permissions"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 6.1 - System File Permissions...")
     
     # 6.1.1 - Audit system file permissions
@@ -2847,6 +2823,9 @@ def check_section6_file_permissions(results: List[AuditResult], shared_data: Dic
 
 def check_section6_user_accounts(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
     """CIS Section 6.2 - User and Group Settings"""
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Section 6.2 - User and Group Settings...")
     
     # 6.2.1 - Ensure password fields are not empty
@@ -2981,6 +2960,292 @@ def check_section6_user_accounts(results: List[AuditResult], shared_data: Dict[s
         remediation="Find and correct: find /home -name '.*' -type f -exec chmod go-w {} \\;"
     ))
 
+
+# ============================================================================
+# CIS 1.5 - Additional Process Hardening
+# ============================================================================
+
+def check_section1_process_hardening(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 1.5 - Additional Process Hardening checks"""
+    print(f"[{MODULE_NAME}] Checking Section 1.5 - Additional Process Hardening...")
+    
+    cache = shared_data.get('cache')
+    
+    # 1.5.1 - Ensure core dumps are restricted
+    limits_conf = read_file_safe("/etc/security/limits.conf", use_cache=True) or ""
+    limits_d_dir = "/etc/security/limits.d"
+    core_hard_set = "* hard core 0" in limits_conf
+    if not core_hard_set and os.path.isdir(limits_d_dir):
+        for lf in os.listdir(limits_d_dir):
+            ld_content = read_file_safe(os.path.join(limits_d_dir, lf), use_cache=True) or ""
+            if "* hard core 0" in ld_content or "hard core 0" in ld_content:
+                core_hard_set = True
+                break
+    
+    exists, suid_dump = check_kernel_parameter("fs.suid_dumpable")
+    suid_ok = suid_dump == "0"
+    
+    # Also check systemd coredump config
+    coredump_conf = read_file_safe("/etc/systemd/coredump.conf", use_cache=True) or ""
+    coredump_storage_none = "Storage=none" in coredump_conf
+    
+    results.append(AuditResult(
+        module=MODULE_NAME, category="CIS 1.5 - Process Hardening",
+        status="Pass" if (core_hard_set and suid_ok) else "Fail",
+        message="1.5.1 Ensure core dumps are restricted",
+        details=f"limits.conf '* hard core 0': {'set' if core_hard_set else 'not set'}; "
+                f"suid_dumpable={suid_dump}; systemd Storage=none: {coredump_storage_none}",
+        remediation="Set '* hard core 0' in /etc/security/limits.conf; "
+                    "sysctl -w fs.suid_dumpable=0; Set Storage=none in /etc/systemd/coredump.conf"
+    ))
+    
+    # 1.5.2 - Ensure XD/NX support is enabled
+    cpuflags = read_file_safe("/proc/cpuinfo", use_cache=True) or ""
+    nx_enabled = " nx " in cpuflags or " nx\n" in cpuflags
+    results.append(AuditResult(
+        module=MODULE_NAME, category="CIS 1.5 - Process Hardening",
+        status="Pass" if nx_enabled else "Warning",
+        message="1.5.2 Ensure XD/NX support is enabled",
+        details=f"NX (Execute Disable) bit: {'supported' if nx_enabled else 'not detected in /proc/cpuinfo'}",
+        remediation="Enable NX/XD in BIOS/UEFI firmware settings"
+    ))
+    
+    # 1.5.3 - Ensure ASLR is enabled
+    exists, aslr = check_kernel_parameter("kernel.randomize_va_space")
+    aslr_full = aslr == "2"
+    results.append(AuditResult(
+        module=MODULE_NAME, category="CIS 1.5 - Process Hardening",
+        status="Pass" if aslr_full else "Fail",
+        message="1.5.3 Ensure address space layout randomization (ASLR) is enabled",
+        details=f"randomize_va_space = {aslr} ({'full randomization' if aslr_full else 'not fully enabled, expected 2'})",
+        remediation="Enable: sysctl -w kernel.randomize_va_space=2; add to /etc/sysctl.d/99-security.conf"
+    ))
+    
+    # 1.5.4 - Ensure prelink is not installed
+    prelink_installed = command_exists("prelink")
+    results.append(AuditResult(
+        module=MODULE_NAME, category="CIS 1.5 - Process Hardening",
+        status="Fail" if prelink_installed else "Pass",
+        message="1.5.4 Ensure prelink is not installed",
+        details=f"prelink: {'installed (weakens ASLR)' if prelink_installed else 'not installed'}",
+        remediation="Remove: prelink -ua && apt remove prelink (or yum remove prelink)"
+    ))
+
+
+# ============================================================================
+# CIS 3.5 - Uncommon Network Protocols
+# ============================================================================
+
+def check_section3_uncommon_protocols(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 3.5 - Ensure uncommon network protocols are disabled"""
+    print(f"[{MODULE_NAME}] Checking Section 3.5 - Uncommon Network Protocols...")
+    
+    cache = shared_data.get('cache')
+    
+    # Get loaded kernel modules from cache if available
+    loaded_modules = set()
+    if cache:
+        loaded_modules = cache.get_parsed('loaded_modules') or set()
+    else:
+        lsmod_out = run_command("lsmod 2>/dev/null")
+        if lsmod_out.returncode == 0:
+            for line in lsmod_out.stdout.splitlines()[1:]:
+                parts = line.split()
+                if parts:
+                    loaded_modules.add(parts[0])
+    
+    # Protocols that should be disabled per CIS
+    uncommon_protocols = {
+        "dccp": ("3.5.1", "DCCP (Datagram Congestion Control Protocol)"),
+        "sctp": ("3.5.2", "SCTP (Stream Control Transmission Protocol)"),
+        "rds": ("3.5.3", "RDS (Reliable Datagram Sockets)"),
+        "tipc": ("3.5.4", "TIPC (Transparent Inter-Process Communication)"),
+    }
+    
+    for module_name, (check_num, description) in uncommon_protocols.items():
+        # Check if module is currently loaded
+        is_loaded = module_name in loaded_modules
+        
+        # Check if module is blacklisted
+        is_blacklisted = False
+        blacklist_details = ""
+        
+        # Check modprobe blacklist configs
+        modprobe_dirs = ["/etc/modprobe.d"]
+        for mpdir in modprobe_dirs:
+            if os.path.isdir(mpdir):
+                for conf in os.listdir(mpdir):
+                    if conf.endswith('.conf'):
+                        content = read_file_safe(os.path.join(mpdir, conf), use_cache=True) or ""
+                        if (f"blacklist {module_name}" in content or
+                                f"install {module_name} /bin/true" in content or
+                                f"install {module_name} /bin/false" in content):
+                            is_blacklisted = True
+                            blacklist_details = f"in {conf}"
+                            break
+        
+        status = "Pass" if (not is_loaded and is_blacklisted) else (
+            "Warning" if is_blacklisted else "Fail" if is_loaded else "Warning"
+        )
+        
+        results.append(AuditResult(
+            module=MODULE_NAME, category="CIS 3.5 - Protocols",
+            status=status,
+            message=f"{check_num} Ensure {description} is disabled",
+            details=f"Module {module_name}: {'loaded' if is_loaded else 'not loaded'}; "
+                    f"Blacklisted: {'yes' if is_blacklisted else 'no'} {blacklist_details}",
+            remediation=f"echo 'install {module_name} /bin/true' >> /etc/modprobe.d/CIS.conf; "
+                        f"echo 'blacklist {module_name}' >> /etc/modprobe.d/CIS.conf"
+        ))
+    
+    # 3.5.5 - Ensure wireless interfaces are disabled (if no wifi needed)
+    wireless_ifaces = run_command("iw dev 2>/dev/null | grep -c 'Interface'")
+    wifi_count = safe_int_parse(wireless_ifaces.stdout.strip(), 0) if wireless_ifaces.returncode == 0 else 0
+    
+    # Also check rfkill
+    rfkill_check = run_command("rfkill list wifi 2>/dev/null")
+    wifi_blocked = "Soft blocked: yes" in rfkill_check.stdout if rfkill_check.returncode == 0 else False
+    
+    results.append(AuditResult(
+        module=MODULE_NAME, category="CIS 3.5 - Protocols",
+        status="Pass" if (wifi_count == 0 or wifi_blocked) else "Warning",
+        message="3.5.5 Ensure wireless interfaces are disabled",
+        details=f"Wireless interfaces: {wifi_count}; "
+                f"{'RF-kill blocked' if wifi_blocked else 'active' if wifi_count > 0 else 'none detected'}",
+        remediation="Disable wireless: rfkill block wifi; or nmcli radio wifi off"
+    ))
+
+
+# ============================================================================
+# CIS 5.4.2+ - Advanced User Account Controls
+# ============================================================================
+
+def check_section5_advanced_user_controls(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """CIS Section 5.4.2+ - Advanced user account security controls"""
+    print(f"[{MODULE_NAME}] Checking Section 5.4.2+ - Advanced User Account Controls...")
+    
+    cache = shared_data.get('cache')
+    
+    # 5.4.2 - Ensure system accounts are secured (non-login shell)
+    passwd_content = read_file_safe("/etc/passwd", use_cache=True) or ""
+    system_login_accounts = []
+    for line in passwd_content.splitlines():
+        parts = line.strip().split(':')
+        if len(parts) >= 7:
+            username = parts[0]
+            uid = safe_int_parse(parts[2], -1)
+            shell = parts[6]
+            # System accounts (UID < 1000) should not have login shells
+            if uid > 0 and uid < 1000 and username != "root":
+                if shell not in ["/usr/sbin/nologin", "/sbin/nologin", "/bin/false",
+                                 "/usr/bin/false", "/dev/null"]:
+                    system_login_accounts.append(f"{username}(uid={uid},shell={shell})")
+    
+    results.append(AuditResult(
+        module=MODULE_NAME, category="CIS 5.4 - User Accounts",
+        status="Pass" if len(system_login_accounts) == 0 else "Warning",
+        message="5.4.2 Ensure system accounts are secured",
+        details=f"System accounts with login shells: {len(system_login_accounts)}"
+                + (f" [{', '.join(system_login_accounts[:5])}]" if system_login_accounts else ""),
+        remediation="Set nologin shell: usermod -s /usr/sbin/nologin <username>"
+    ))
+    
+    # 5.4.3 - Ensure default group for root is GID 0
+    root_entry = [l for l in passwd_content.splitlines() if l.startswith("root:")]
+    if root_entry:
+        root_gid = root_entry[0].split(':')[3] if len(root_entry[0].split(':')) > 3 else ""
+        results.append(AuditResult(
+            module=MODULE_NAME, category="CIS 5.4 - User Accounts",
+            status="Pass" if root_gid == "0" else "Fail",
+            message="5.4.3 Ensure default group for the root account is GID 0",
+            details=f"Root GID: {root_gid}",
+            remediation="Set: usermod -g 0 root"
+        ))
+    
+    # 5.4.4 - Ensure default user umask is 027 or more restrictive
+    umask_files = ["/etc/profile", "/etc/bashrc", "/etc/bash.bashrc",
+                   "/etc/profile.d/*.sh", "/etc/login.defs"]
+    umask_found = False
+    umask_restrictive = False
+    umask_value = ""
+    
+    login_defs = read_file_safe("/etc/login.defs", use_cache=True) or ""
+    for line in login_defs.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("UMASK") and not stripped.startswith("#"):
+            parts = stripped.split()
+            if len(parts) >= 2:
+                umask_value = parts[1]
+                umask_found = True
+                umask_restrictive = umask_value in ["027", "077"]
+    
+    # Also check profile files
+    for uf in ["/etc/profile", "/etc/bashrc", "/etc/bash.bashrc"]:
+        content = read_file_safe(uf, use_cache=True) or ""
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("umask") and not stripped.startswith("#"):
+                parts = stripped.split()
+                if len(parts) >= 2 and not umask_found:
+                    umask_value = parts[1]
+                    umask_found = True
+                    umask_restrictive = umask_value in ["027", "077"]
+    
+    results.append(AuditResult(
+        module=MODULE_NAME, category="CIS 5.4 - User Accounts",
+        status="Pass" if umask_restrictive else ("Warning" if umask_found else "Fail"),
+        message="5.4.4 Ensure default user umask is 027 or more restrictive",
+        details=f"Default umask: {umask_value if umask_value else 'not explicitly set (default 022)'}",
+        remediation="Set UMASK 027 in /etc/login.defs and umask 027 in /etc/profile"
+    ))
+    
+    # 5.4.5 - Ensure default user shell timeout is configured
+    tmout_set = False
+    tmout_value = ""
+    for tf in ["/etc/profile", "/etc/bashrc", "/etc/bash.bashrc",
+               "/etc/profile.d/tmout.sh"]:
+        content = read_file_safe(tf, use_cache=True) or ""
+        for line in content.splitlines():
+            if "TMOUT=" in line and not line.strip().startswith("#"):
+                tmout_set = True
+                tmout_value = line.strip()
+                break
+        if tmout_set:
+            break
+    
+    results.append(AuditResult(
+        module=MODULE_NAME, category="CIS 5.4 - User Accounts",
+        status="Pass" if tmout_set else "Warning",
+        message="5.4.5 Ensure default user shell timeout is configured",
+        details=f"{'TMOUT configured: ' + tmout_value if tmout_set else 'TMOUT not set - no idle timeout'}",
+        remediation="Add to /etc/profile.d/tmout.sh: TMOUT=900; readonly TMOUT; export TMOUT"
+    ))
+    
+    # 5.5 - Ensure root login is restricted to system console
+    securetty = read_file_safe("/etc/securetty", use_cache=True)
+    if securetty is not None:
+        console_count = len([l for l in securetty.splitlines()
+                             if l.strip() and not l.strip().startswith('#')])
+        results.append(AuditResult(
+            module=MODULE_NAME, category="CIS 5.5 - Root Access",
+            status="Pass" if console_count <= 2 else "Warning",
+            message="5.5 Ensure root login is restricted to system console",
+            details=f"/etc/securetty: {console_count} consoles configured",
+            remediation="Limit consoles in /etc/securetty to only necessary terminals"
+        ))
+    
+    # 5.6 - Ensure access to su command is restricted
+    su_pam = read_file_safe("/etc/pam.d/su", use_cache=True) or ""
+    wheel_required = "pam_wheel.so" in su_pam and "required" in su_pam
+    results.append(AuditResult(
+        module=MODULE_NAME, category="CIS 5.6 - Su Access",
+        status="Pass" if wheel_required else "Warning",
+        message="5.6 Ensure access to the su command is restricted",
+        details=f"pam_wheel.so in /etc/pam.d/su: {'required (wheel group only)' if wheel_required else 'not enforced'}",
+        remediation="Add to /etc/pam.d/su: auth required pam_wheel.so use_uid"
+    ))
+
+
 # ============================================================================
 # Main Entry Point
 # ============================================================================
@@ -2989,13 +3254,20 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     """Main entry point for CIS Benchmark module"""
     results = []
     
+    # Extract SharedDataCache from shared_data (populated by main script)
+    cache = shared_data.get('cache')
+    
     print(f"\n[{MODULE_NAME}] ===== CIS BENCHMARK SECURITY AUDIT =====")
     print(f"[{MODULE_NAME}] Version: {MODULE_VERSION} - Comprehensive OS-Aware Coverage")
     print(f"[{MODULE_NAME}] Target: 200+ distinct security checks")
     print(f"[{MODULE_NAME}] Scope: All CIS Benchmark sections\n")
     
     # Detect operating system
-    os_info = detect_os()
+    # Get OS info from cache if available (avoids redundant detection)
+    if cache and hasattr(cache, 'os_info') and cache.os_info:
+        os_info = cache.os_info
+    else:
+        os_info = detect_os()
     shared_data['os_info'] = os_info
     
     print(f"[{MODULE_NAME}] Operating System: {os_info}")
@@ -3005,7 +3277,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
-        print(f"[{MODULE_NAME}] âš ï¸  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}]    Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
     try:
@@ -3014,6 +3286,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         check_section1_package_management(results, shared_data, os_info)
         check_section1_bootloader(results, shared_data, os_info)
         check_section1_mandatory_access_control(results, shared_data, os_info)
+        check_section1_process_hardening(results, shared_data, os_info)
         check_section1_warning_banners(results, shared_data, os_info)
         
         # Section 2: Services
@@ -3023,6 +3296,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         check_section3_network_parameters(results, shared_data, os_info)
         check_section3_network_host_and_router(results, shared_data, os_info)
         check_section3_ipv6(results, shared_data, os_info)
+        check_section3_uncommon_protocols(results, shared_data, os_info)
         check_section3_firewall(results, shared_data, os_info)
         
         # Section 4: Logging and Auditing
@@ -3034,6 +3308,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         check_section5_ssh(results, shared_data, os_info)
         check_section5_pam(results, shared_data, os_info)
         check_section5_user_password_aging(results, shared_data, os_info)
+        check_section5_advanced_user_controls(results, shared_data, os_info)
         
         # Section 6: System Maintenance
         check_section6_file_permissions(results, shared_data, os_info)
@@ -3062,12 +3337,11 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
-    print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ❌ Fail:    {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
-    if error_count > 0:
-        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
+    print(f"[{MODULE_NAME}]   Passed:  {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Failed:  {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Warnings: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Errors:  {error_count:3d} ({error_count/len(results)*100:.1f}%)")
     print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     return results
@@ -3124,3 +3398,7 @@ if __name__ == "__main__":
         print(f"   Category: {result.category}")
         if result.details:
             print(f"   Details: {result.details}")
+
+# ============================================================================
+# End of module_cis.py
+# ============================================================================
