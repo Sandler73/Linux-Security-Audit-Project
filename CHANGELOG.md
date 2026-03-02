@@ -8,14 +8,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned Features
-- Additional output formats (PDF, Markdown)
-- Web-based dashboard interface
-- Container image support
-- Remote execution capabilities
-- Integration with popular CI/CD platforms
-- Enhanced trend analysis and reporting
-- Module-specific configuration files
-- Custom check framework
+- Additional output formats (PDF, Markdown, SARIF, SCAP)
+- SQLite audit trail database
+- Delta reporting and baseline comparison
+- Syslog/CEF output for SIEM integration
+- Container and Kubernetes security modules
+
+## [2.2] - 2026-03-02
+
+### Added
+
+- **Performance Architecture**:
+  - Shared components library (`shared_components/audit_common.py`, 2,174 lines) with caching, parallel execution, and /proc filesystem reads
+  - Intelligent file and command caching with ~50% hit rate across modules
+  - Parallel module execution via `--parallel` flag with configurable `--workers` count
+  - Direct /proc filesystem reads replacing subprocess calls for performance
+  - Dynamic module discovery from `modules/` directory with validation
+  - OS-aware functionality supporting Debian, Red Hat, SUSE, and Arch families with respective package managers (apt, yum/dnf, zypper, pacman)
+  - Performance profiling via `--profile` flag with cache statistics and module timing
+
+- **Structured Logging**:
+  - Dedicated `logs/` directory with hostname-stamped filenames
+  - Configurable log levels via `--log-level` (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  - Custom log file path via `--log-file`
+  - JSON-structured logging via `--json-log` for SIEM ingestion
+  - Hybrid `log_and_print()` for simultaneous console and file output
+  - Verbose mode (`--verbose`) and quiet mode (`--quiet`)
+  - Per-module execution timing in performance profile
+
+- **Interactive HTML Report Rewrite**:
+  - Executive dashboard with SVG donut chart visualization
+  - Cross-framework compliance matrix with weighted scores
+  - Remediation priority ranking table
+  - Column resizing via drag handles
+  - In-column filtering per table column
+  - Column visibility toggles
+  - Global search with include/exclude modes
+  - Per-module and global export (CSV, Excel, JSON, XML, TXT formats)
+  - Row selection via checkboxes with selection-based export
+  - Print-friendly CSS with `@media print` support
+  - Table of Contents with smooth-scroll navigation
+  - Full-width header with dark blue gradient
+  - Garamond typography throughout
+  - Dark/light theme toggle with CSS custom properties
+
+- **Compliance Scoring System**:
+  - `ComplianceScore` dataclass with three scoring methods
+  - Simple pass percentage (Pass / Applicable, Info excluded)
+  - Weighted scoring (Pass=1.0, Warning=0.5, Fail=0, Error=0)
+  - Severity-weighted compliance (Critical=5x, High=3x, Medium=1.5x, Low=0.5x penalty factors)
+  - Configurable pass/fail threshold (default 70%)
+  - Per-module and overall compliance scores in HTML, console, JSON, and XML
+
+- **Interactive Dashboard Filtering**:
+  - Clickable donut chart segments filter by status
+  - Clickable summary cards filter by status (Pass/Fail/Warning/Info/Error)
+  - Clickable severity cards filter by severity level
+  - Toggle behavior (click again to deselect)
+  - Filter notification bar with clear button
+  - Filters apply across ALL module tables simultaneously
+
+- **IP Address Identification**:
+  - `get_system_ip_addresses()` with four detection methods
+  - Three paired identification points (hostname + OS + IPs) for SIEM attribution
+  - Displayed in HTML info cards, console summary, JSON, and XML exports
+
+- **STIG DISA V-Number Mapping**: 65 checks mapped to official V-numbers (38.9% coverage)
+- **ISO27001 Secure Development Checks**: A.8.25 and A.8.26 controls (7 new checks)
+
+### Changed
+
+- **Project Structure**: Reorganized from flat layout to `modules/` + `shared_components/` + `logs/` + `reports/`
+- **Python Requirement**: Minimum version raised from 3.6 to 3.7 (dataclasses dependency)
+- **Module Architecture**: All 8 modules use shared_components caching and /proc reads
+- **Check Count**: Validated at 1,207 total checks (was ~1,100 approximate)
+- **Report Directory**: Reports saved to `reports/` directory by default
+- **JSON Export**: Companion JSON auto-generated alongside all report formats
+- **XML Export**: Enhanced metadata including IP addresses and compliance scores
+- **Console Summary**: Now displays hostname, IP addresses, OS, and compliance scores
+- **HTML Report**: Complete rewrite with 18+ interactive features
+
+### Fixed
+- Emoji corruption in module banners resolved via Unicode codepoint encoding
+- Results Summary format standardized across all 8 modules
+- CSV export properly handles special characters and multi-line content
+
+### Security
+- Report files created with 600 permissions in dedicated `reports/` directory
+- Log files created with 644 permissions in dedicated `logs/` directory
 
 ## [1.1] - 2025-01-07
 
@@ -133,10 +213,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Release Date | Modules | Checks | Key Features |
 |---------|--------------|---------|--------|--------------|
-| 1.1 | 2025-01-07 | 8 | 1,100+ | Full framework coverage, advanced remediation, interactive reports |
+| 2.0 | 2026-03-02 | 8 | 1,207 | Performance architecture, compliance scoring, interactive HTML, logging |
+| 1.1 | 2025-01-07 | 8 | ~1,100 | Full framework coverage, advanced remediation, interactive reports |
 | 1.0 | 2024-12-15 | 3 | 500+ | Initial release, basic functionality |
 
 ## Upgrade Guide
+
+### Upgrading from 1.1 to 2.2
+
+**Directory Structure Change** - Version 2.2 reorganizes the project layout.
+
+**New Structure**: `modules/` + `shared_components/` + `logs/` + `reports/`
+
+**Python Requirement**: 3.7+ (was 3.6+) due to dataclasses dependency.
+
+**Migration Steps**:
+```bash
+cp -r Linux-Security-Audit-Project Linux-Security-Audit-Project-1.1-backup
+cd Linux-Security-Audit-Project && git pull origin main
+ls modules/ shared_components/
+python3 linux_security_audit.py --list-modules
+sudo python3 linux_security_audit.py -m Core --profile
+```
+
+**New CLI Flags**: `--parallel`, `--workers`, `--profile`, `--log-level`, `--log-file`, `--json-log`, `--verbose`, `--quiet`
 
 ### Upgrading from 1.0 to 1.1
 
@@ -171,39 +271,25 @@ sudo python3 linux_security_audit.py -m Core
 
 ## Development Roadmap
 
-### Version 1.2 (Planned - Q2 2025)
+### Version 2.1 (Planned)
 
 **Target Features**:
 - [ ] PDF report generation
 - [ ] Markdown report format
-- [ ] Enhanced trend analysis
-- [ ] Compliance scoring system
-- [ ] Module configuration files
-- [ ] Custom check templates
-- [ ] Plugin system for third-party modules
-- [ ] API for programmatic access
+- [ ] SARIF / SCAP / XCCDF / Syslog / CEF output formats
+- [ ] SQLite audit trail database
+- [ ] Historical result tracking per host
+- [ ] Delta reporting (new/resolved/regressed)
+- [ ] Baseline comparison via `--compare` and `--baseline`
 
-### Version 1.3 (Planned - Q3 2025)
-
-**Target Features**:
-- [ ] Web-based dashboard
-- [ ] Real-time monitoring integration
-- [ ] Agent-based deployment
-- [ ] Centralized reporting server
-- [ ] Role-based access control
-- [ ] Email alert integration
-- [ ] Slack/Teams notifications
-
-### Version 2.0 (Planned - Q4 2025)
+### Version 3.0 (Planned)
 
 **Target Features**:
-- [ ] Complete rewrite with improved architecture
-- [ ] Database backend for historical data
+- [ ] Web-based dashboard interface
 - [ ] Multi-system management
-- [ ] Advanced analytics and ML-based risk scoring
 - [ ] Container and Kubernetes security modules
 - [ ] Cloud security posture management
-- [ ] Compliance workflow management
+- [ ] Advanced analytics and ML-based risk scoring
 
 ## Contributing
 
@@ -269,6 +355,7 @@ When submitting changes:
 - `Fixed` - Bug fixes
 - `Security` - Security updates
 
-[Unreleased]: https://github.com/Sandler73/Linux-Security-Audit-Project/compare/v1.1...HEAD
+[Unreleased]: https://github.com/Sandler73/Linux-Security-Audit-Project/compare/v2.0...HEAD
+[2.0]: https://github.com/Sandler73/Linux-Security-Audit-Project/compare/v1.1...v2.0
 [1.1]: https://github.com/Sandler73/Linux-Security-Audit-Project/compare/v1.0...v1.1
 [1.0]: https://github.com/Sandler73/Linux-Security-Audit-Project/releases/tag/v1.0
