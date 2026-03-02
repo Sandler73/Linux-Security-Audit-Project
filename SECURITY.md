@@ -16,8 +16,9 @@ We provide security updates for the following versions:
 
 | Version | Supported          | Status |
 | ------- | ------------------ | ------ |
-| 1.1.x   | ✅ Yes            | Current stable release |
-| 1.0.x   | ⚠️ Limited        | Security fixes only until 2025-06-30 |
+| 2.0.x   | ✅ Yes            | Current stable release |
+| 1.1.x   | ⚠️ Limited        | Security fixes only until 2026-09-30 |
+| 1.0.x   | ❌ No             | End of life |
 | < 1.0   | ❌ No             | No longer supported |
 
 **Recommendation**: Always use the latest stable release to ensure you have the most recent security updates and features.
@@ -81,9 +82,11 @@ This tool is designed to find security issues in Linux systems. If you find issu
 ### Tool Security Design
 
 #### What the Tool Does
-- ✅ Reads system configuration files
-- ✅ Executes read-only system commands
-- ✅ Generates local report files
+- ✅ Reads system configuration files and /proc filesystem
+- ✅ Executes read-only system commands with intelligent caching
+- ✅ Generates local report files in reports/ directory
+- ✅ Writes structured logs to logs/ directory
+- ✅ Computes compliance scores against configurable thresholds
 - ✅ Provides remediation commands (on request)
 
 #### What the Tool Does NOT Do
@@ -116,9 +119,11 @@ Reports may contain:
 - System configuration details
 - User account information (usernames, not passwords)
 - Service configurations
-- Network configurations
+- Network configurations and IP addresses
 - File system layouts
 - Security misconfigurations
+- Compliance scores and threshold results
+- Host identification data (hostname, OS, IPs)
 
 **Protection Measures**:
 - Reports created with 600 permissions (owner read/write only)
@@ -215,7 +220,7 @@ sudo python3 linux_security_audit.py --remediate-fail --auto-remediate
 #### Dependencies
 
 **Zero External Dependencies**:
-- Uses only Python standard library
+- Uses only Python standard library (requires Python 3.7+ for dataclasses)
 - No pip packages required
 - No external API calls
 - No internet connectivity required
@@ -394,6 +399,7 @@ shred -u audit.html
 ```bash
 # Check current version
 grep "SCRIPT_VERSION = " linux_security_audit.py
+# Current: 2.0
 
 # Backup current version
 cp -r Linux-Security-Audit-Project Linux-Security-Audit-Project.backup
@@ -494,7 +500,7 @@ We appreciate responsible disclosure and will acknowledge security researchers w
 
 ---
 
-**Last Updated**: January 7, 2026  
-**Security Policy Version**: 1.1  
+**Last Updated**: March 2, 2026  
+**Security Policy Version**: 2.0  
 
 *This security policy is subject to change. Check this file regularly for updates.*
