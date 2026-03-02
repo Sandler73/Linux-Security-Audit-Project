@@ -2,7 +2,7 @@
 """
 module_core.py
 Core Security Baseline Module for Linux
-Version: 1.1
+Version: 2.2
 
 SYNOPSIS:
     Comprehensive baseline security assessment for Linux systems based on
@@ -42,6 +42,7 @@ DESCRIPTION:
 
 PARAMETERS:
     shared_data : Dictionary containing shared data from main script
+                  shared_data['cache'] provides SharedDataCache for performance
 
 USAGE:
     Standalone testing
@@ -52,15 +53,17 @@ USAGE:
         python3 linux_security_audit.py -m CORE
 
 NOTES:
-    Version: 1.1
+    Version: 2.0
     Focus: Industry best practices with OS-specific optimizations
     Target: 150+ comprehensive, OS-aware security checks
     
-    OS Detection Methods:
-    - /etc/os-release parsing
-    - Distribution-specific files
-    - Package manager detection
-    - Kernel and init system detection
+    v2.0 Changes:
+    - Uses audit_common.py shared library (eliminates duplicated helpers)
+    - SharedDataCache integration for cached file/command lookups
+    - Severity levels on all AuditResults
+    - Cross-framework references where applicable
+    - Structured logging via get_module_logger()
+    - Thread-safe for parallel execution
 """
 
 import os
@@ -72,222 +75,90 @@ import grp
 import glob
 import socket
 import platform
+import time
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
-# Import AuditResult from main script
+# ============================================================================
+# Shared Library Integration
+# ============================================================================
+# Import consolidated utilities from audit_common.py
+# This eliminates ~200 lines of duplicated helper functions
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from linux_security_audit import AuditResult
+sys.path.insert(0, str(Path(__file__).parent))
+
+try:
+    # Try shared_components package first (standard deployment)
+    from shared_components.audit_common import (
+        # Core classes
+        AuditResult, OSInfo, SharedDataCache,
+        # OS detection
+        detect_os,
+        # Command execution (cached)
+        run_command, command_exists, read_file_safe,
+        # Service checks (cache-aware)
+        check_service_enabled, check_service_active,
+        # Package checks (OS-aware)
+        check_package_installed,
+        # File checks
+        get_file_permissions, get_file_owner_group, check_file_exists,
+        # Kernel parameters (cache-aware)
+        check_kernel_parameter,
+        # Security subsystems (cache-aware)
+        get_selinux_status, get_apparmor_status,
+        # Parsing helpers
+        safe_int_parse,
+        # ID generation
+        generate_check_id,
+        # Logging
+        get_module_logger,
+    )
+    HAS_COMMON_LIB = True
+except ImportError:
+    try:
+        # Fallback: flat-file layout (audit_common.py in same directory)
+        from audit_common import (
+            AuditResult, OSInfo, SharedDataCache, detect_os,
+            run_command, command_exists, read_file_safe,
+            check_service_enabled, check_service_active,
+            check_package_installed, get_file_permissions,
+            get_file_permissions_full, get_file_owner_group,
+            check_file_exists, check_kernel_parameter,
+            check_mount_option, get_selinux_status,
+            get_apparmor_status, get_firewall_status,
+            check_fips_mode, check_ipv6_enabled,
+            get_ssh_config_value, get_ssh_config_all,
+            get_listening_ports, get_loaded_kernel_modules,
+            check_pam_module, get_password_policy,
+            get_user_accounts, get_system_users, get_human_users,
+            safe_int_parse, safe_float_parse,
+            get_audit_rules, get_grub_cmdline, check_grub_parameter,
+            get_available_updates, get_security_updates,
+            generate_check_id, get_module_logger,
+        )
+        HAS_COMMON_LIB = True
+    except ImportError:
+        # Fallback: import AuditResult from main script (backward compatibility)
+        from linux_security_audit import AuditResult
+        HAS_COMMON_LIB = False
 
 MODULE_NAME = "CORE"
-MODULE_VERSION = "1.1"
+MODULE_VERSION = "2.2"
+
+# Module logger (uses structured logging if audit_common is available)
+logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
 
 # ============================================================================
-# OS Detection and Classification
+# Module-Specific Helper Functions
 # ============================================================================
-
-class OSInfo:
-    """Store and manage OS information"""
-    def __init__(self):
-        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
-        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
-        self.version = "Unknown"
-        self.version_id = "Unknown"
-        self.codename = "Unknown"
-        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
-        self.init_system = "Unknown"  # systemd, sysvinit, upstart
-        self.architecture = platform.machine()
-        self.kernel_version = platform.release()
-        
-    def __str__(self):
-        return f"{self.distro} {self.version} ({self.family})"
-
-def detect_os() -> OSInfo:
-    """
-    Comprehensive OS detection
-    Returns OSInfo object with detailed system information
-    """
-    os_info = OSInfo()
-    
-    # Read /etc/os-release (standard location)
-    if os.path.exists("/etc/os-release"):
-        with open("/etc/os-release", 'r') as f:
-            os_release = {}
-            for line in f:
-                if '=' in line:
-                    key, value = line.strip().split('=', 1)
-                    os_release[key] = value.strip('"')
-        
-        os_info.distro = os_release.get('ID', 'unknown').lower()
-        os_info.version = os_release.get('VERSION', 'unknown')
-        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
-        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
-        
-        # Determine OS family
-        id_like = os_release.get('ID_LIKE', '').lower()
-        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
-            os_info.family = 'debian'
-        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
-            os_info.family = 'redhat'
-        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
-            os_info.family = 'suse'
-        elif os_info.distro == 'arch':
-            os_info.family = 'arch'
-    
-    # Fallback detection methods
-    if os_info.family == "Unknown":
-        if os.path.exists("/etc/debian_version"):
-            os_info.family = 'debian'
-            os_info.distro = 'debian'
-        elif os.path.exists("/etc/redhat-release"):
-            os_info.family = 'redhat'
-            with open("/etc/redhat-release", 'r') as f:
-                content = f.read().lower()
-                if 'centos' in content:
-                    os_info.distro = 'centos'
-                elif 'red hat' in content or 'rhel' in content:
-                    os_info.distro = 'rhel'
-                elif 'fedora' in content:
-                    os_info.distro = 'fedora'
-    
-    # Detect package manager
-    if command_exists('apt-get'):
-        os_info.package_manager = 'apt'
-    elif command_exists('dnf'):
-        os_info.package_manager = 'dnf'
-    elif command_exists('yum'):
-        os_info.package_manager = 'yum'
-    elif command_exists('zypper'):
-        os_info.package_manager = 'zypper'
-    elif command_exists('pacman'):
-        os_info.package_manager = 'pacman'
-    
-    # Detect init system
-    if os.path.exists("/run/systemd/system"):
-        os_info.init_system = 'systemd'
-    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
-        link = os.readlink("/sbin/init")
-        if 'systemd' in link:
-            os_info.init_system = 'systemd'
-        elif 'upstart' in link:
-            os_info.init_system = 'upstart'
-    else:
-        os_info.init_system = 'sysvinit'
-    
-    return os_info
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-def run_command(command: str, check: bool = False) -> subprocess.CompletedProcess:
-    """Execute a shell command and return the result"""
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            check=check,
-            timeout=30
-        )
-        return result
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            args=command, returncode=-1, stdout="", stderr="Command timeout"
-        )
-    except Exception as e:
-        return subprocess.CompletedProcess(
-            args=command, returncode=-1, stdout="", stderr=str(e)
-        )
-
-def command_exists(command: str) -> bool:
-    """Check if a command exists"""
-    result = run_command(f"which {command} 2>/dev/null")
-    return result.returncode == 0
-
-def read_file_safe(filepath: str) -> str:
-    """Safely read a file"""
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except Exception:
-        return ""
-
-def check_service_enabled(service_name: str) -> bool:
-    """Check if a systemd service is enabled"""
-    result = run_command(f"systemctl is-enabled {service_name} 2>/dev/null")
-    return result.returncode == 0 and result.stdout.strip() == "enabled"
-
-def check_service_active(service_name: str) -> bool:
-    """Check if a systemd service is active"""
-    result = run_command(f"systemctl is-active {service_name} 2>/dev/null")
-    return result.returncode == 0 and result.stdout.strip() == "active"
-
-def check_package_installed(package_name: str, os_info: OSInfo) -> bool:
-    """Check if a package is installed (OS-aware)"""
-    if os_info.package_manager == 'apt':
-        result = run_command(f"dpkg -l {package_name} 2>/dev/null | grep -q '^ii'")
-        return result.returncode == 0
-    elif os_info.package_manager in ['yum', 'dnf']:
-        result = run_command(f"rpm -q {package_name} 2>/dev/null")
-        return result.returncode == 0
-    elif os_info.package_manager == 'zypper':
-        result = run_command(f"rpm -q {package_name} 2>/dev/null")
-        return result.returncode == 0
-    elif os_info.package_manager == 'pacman':
-        result = run_command(f"pacman -Q {package_name} 2>/dev/null")
-        return result.returncode == 0
-    return False
-
-def get_file_permissions(filepath: str) -> Optional[str]:
-    """Get file permissions as octal string"""
-    try:
-        stat_info = os.stat(filepath)
-        return oct(stat_info.st_mode)[-3:]
-    except Exception:
-        return None
-
-def get_file_owner_group(filepath: str) -> Tuple[Optional[str], Optional[str]]:
-    """Get file owner and group"""
-    try:
-        stat_info = os.stat(filepath)
-        owner = pwd.getpwuid(stat_info.st_uid).pw_name
-        group = grp.getgrgid(stat_info.st_gid).gr_name
-        return owner, group
-    except Exception:
-        return None, None
-
-def check_kernel_parameter(parameter: str) -> Tuple[bool, str]:
-    """Check kernel parameter value"""
-    result = run_command(f"sysctl {parameter} 2>/dev/null")
-    if result.returncode == 0:
-        match = re.search(r'=\s*(.+)', result.stdout)
-        if match:
-            return True, match.group(1).strip()
-    return False, ""
 
 def get_core_id(category: str, number: int) -> str:
     """Generate CORE control ID"""
+    if HAS_COMMON_LIB:
+        return generate_check_id("CORE", category, number)
     return f"CORE-{category}-{number:03d}"
-
-def safe_int_parse(value: str, default: int = 0) -> int:
-    """
-    Safely parse a string to integer
-    """
-    try:
-        if not value:
-            return default
-        clean_value = value.strip().split('\n')[0].strip()
-        if clean_value and clean_value.isdigit():
-            return int(clean_value)
-        # Handle negative numbers
-        if clean_value.startswith('-') and clean_value[1:].isdigit():
-            return int(clean_value)
-        return default
-    except (ValueError, AttributeError):
-        return default
 
 def get_available_updates(os_info: OSInfo) -> int:
     """Get count of available updates (OS-specific)"""
@@ -371,8 +242,11 @@ def get_repositories(os_info: OSInfo) -> List[str]:
     
     return repos
 
-def check_selinux_status() -> Dict[str, Any]:
-    """Get SELinux status (relevant for RedHat-based systems)"""
+def check_selinux_status_core(cache=None) -> Dict[str, Any]:
+    """Get SELinux status - delegates to audit_common if available"""
+    if HAS_COMMON_LIB:
+        return get_selinux_status(cache=cache)
+    # Fallback for backward compatibility
     status = {
         'installed': False,
         'enabled': False,
@@ -393,8 +267,11 @@ def check_selinux_status() -> Dict[str, Any]:
     
     return status
 
-def check_apparmor_status() -> Dict[str, Any]:
-    """Get AppArmor status (relevant for Debian-based systems)"""
+def check_apparmor_status_core(cache=None) -> Dict[str, Any]:
+    """Get AppArmor status - delegates to audit_common if available"""
+    if HAS_COMMON_LIB:
+        return get_apparmor_status(cache=cache)
+    # Fallback for backward compatibility
     status = {
         'installed': False,
         'enabled': False,
@@ -419,10 +296,15 @@ def check_apparmor_status() -> Dict[str, Any]:
     
     return status
 
-def get_running_services(os_info: OSInfo) -> List[str]:
-    """Get list of running services"""
-    services = []
+def get_running_services(os_info: OSInfo, cache=None) -> List[str]:
+    """Get list of running services (cache-aware)"""
+    # Use cached service data if available
+    if cache:
+        running = cache.get_parsed('running_services')
+        if running is not None:
+            return sorted(running)
     
+    services = []
     if os_info.init_system == 'systemd':
         result = run_command("systemctl list-units --type=service --state=running --no-pager --no-legend | awk '{print $1}'")
         if result.returncode == 0:
@@ -430,10 +312,15 @@ def get_running_services(os_info: OSInfo) -> List[str]:
     
     return services
 
-def get_enabled_services(os_info: OSInfo) -> List[str]:
-    """Get list of enabled services"""
-    services = []
+def get_enabled_services(os_info: OSInfo, cache=None) -> List[str]:
+    """Get list of enabled services (cache-aware)"""
+    # Use cached service data if available
+    if cache:
+        enabled = cache.get_parsed('enabled_services')
+        if enabled is not None:
+            return sorted(enabled)
     
+    services = []
     if os_info.init_system == 'systemd':
         result = run_command("systemctl list-unit-files --type=service --state=enabled --no-pager --no-legend | awk '{print $1}'")
         if result.returncode == 0:
@@ -451,6 +338,9 @@ def check_os_package_management(results: List[AuditResult], shared_data: Dict[st
     OS Detection and Package Management Security Audit Checks
     """
     print(f"[{MODULE_NAME}] Checking OS & OS-Specfic Package Management...")
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     
     # OS-001: Operating System Identified
     results.append(AuditResult(
@@ -885,7 +775,7 @@ def check_os_package_management(results: List[AuditResult], shared_data: Dict[st
     
     # PKG-024: SELinux status (RedHat-specific)
     if os_info.family == 'redhat':
-        selinux_status = check_selinux_status()
+        selinux_status = check_selinux_status_core(cache=cache)
         
         results.append(AuditResult(
             module=MODULE_NAME,
@@ -898,7 +788,7 @@ def check_os_package_management(results: List[AuditResult], shared_data: Dict[st
     
     # PKG-025: AppArmor status (Debian-specific)
     if os_info.family == 'debian':
-        apparmor_status = check_apparmor_status()
+        apparmor_status = check_apparmor_status_core(cache=cache)
         
         results.append(AuditResult(
             module=MODULE_NAME,
@@ -995,7 +885,10 @@ def check_service_user_management(results: List[AuditResult], shared_data: Dict[
     """
     print(f"[{MODULE_NAME}] Checking Service & User Management...")
     
-    # Get service information
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
+    
+    # Get service information (cache-aware)
     running_services = get_running_services(os_info)
     enabled_services = get_enabled_services(os_info)
     
@@ -1346,6 +1239,9 @@ def check_filesystem_network(results: List[AuditResult], shared_data: Dict[str, 
     Filesystem and Network Security Security Audit Checks
     """
     print(f"[{MODULE_NAME}] Checking Filesystem & Network Security...")
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     
     # FS-001: Root filesystem mounted
     result = run_command("mount | grep ' / '")
@@ -1698,6 +1594,9 @@ def check_system_hardening_tools(results: List[AuditResult], shared_data: Dict[s
     """
     print(f"[{MODULE_NAME}] Checking System Hardening & Security Tools...")
     
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
+    
     # HARD-001: ASLR enabled
     exists, aslr = check_kernel_parameter("kernel.randomize_va_space")
     aslr_enabled = aslr == "2"
@@ -2049,6 +1948,1826 @@ def check_system_hardening_tools(results: List[AuditResult], shared_data: Dict[s
 
 
 # ============================================================================
+# Advanced Security Checks
+# Covers: Kernel Security Modules, systemd Hardening, Crypto Policy,
+#         SELinux/AppArmor Deep, Container Security, UEFI, Supply Chain
+# ============================================================================
+
+def check_advanced_security(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Advanced Security Checks - Cross-cutting controls applicable to multiple frameworks.
+    
+    Covers:
+        - Kernel security modules (YAMA, Lockdown, IMA/EVM)
+        - systemd unit hardening (ProtectSystem, PrivateTmp, etc.)
+        - Cryptographic policy assessment (crypto-policies, TLS, FIPS)
+        - SELinux/AppArmor deep inspection (profiles, enforcement)
+        - Container/Docker security detection
+        - UEFI Secure Boot validation
+        - Supply chain security (package signing, repository integrity)
+    """
+    print(f"[{MODULE_NAME}] Checking Advanced Security Controls...")
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
+    
+    # ----------------------------------------------------------------
+    # Kernel Security Modules
+    # ----------------------------------------------------------------
+    
+    # ADVK-001: YAMA ptrace scope
+    exists, yama_val = check_kernel_parameter("kernel.yama.ptrace_scope")
+    if exists:
+        yama_ok = yama_val in ["1", "2", "3"]
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Kernel Security",
+            status="Pass" if yama_ok else "Warning",
+            message=f"{get_core_id('ADVK', 1)}: YAMA ptrace scope restriction",
+            details=f"ptrace_scope = {yama_val} ({'restricted' if yama_ok else 'unrestricted - any process can ptrace'})",
+            remediation="Enable: sysctl -w kernel.yama.ptrace_scope=1"
+        ))
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Kernel Security",
+            status="Warning",
+            message=f"{get_core_id('ADVK', 1)}: YAMA ptrace scope restriction",
+            details="YAMA LSM not loaded or not available",
+            remediation="Enable YAMA: ensure CONFIG_SECURITY_YAMA=y in kernel config"
+        ))
+    
+    # ADVK-002: Kernel lockdown mode
+    lockdown_path = "/sys/kernel/security/lockdown"
+    lockdown_val = ""
+    try:
+        if os.path.exists(lockdown_path):
+            with open(lockdown_path, 'r') as f:
+                lockdown_val = f.read().strip()
+        # Parse: format is "[none] integrity confidentiality" with brackets on active
+        lockdown_active = "none" not in lockdown_val.split('[')[1].split(']')[0] if '[' in lockdown_val else False
+    except (IOError, IndexError, PermissionError):
+        lockdown_active = False
+    
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status="Pass" if lockdown_active else "Info",
+        message=f"{get_core_id('ADVK', 2)}: Kernel lockdown mode",
+        details=f"Lockdown: {lockdown_val if lockdown_val else 'not available'}",
+        remediation="Enable via kernel boot parameter: lockdown=integrity"
+    ))
+    
+    # ADVK-003: Integrity Measurement Architecture (IMA)
+    ima_active = os.path.exists("/sys/kernel/security/ima")
+    ima_policy = ""
+    if ima_active:
+        try:
+            with open("/sys/kernel/security/ima/runtime_measurements_count", 'r') as f:
+                ima_count = f.read().strip()
+            ima_policy = f"{ima_count} measurements recorded"
+        except (IOError, PermissionError):
+            ima_policy = "Active but measurements not readable"
+    
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status="Pass" if ima_active else "Info",
+        message=f"{get_core_id('ADVK', 3)}: Integrity Measurement Architecture (IMA)",
+        details=f"IMA: {'enabled - ' + ima_policy if ima_active else 'not enabled'}",
+        remediation="Enable IMA via kernel boot parameter: ima_policy=tcb"
+    ))
+    
+    # ADVK-004: Extended Verification Module (EVM)
+    evm_active = os.path.exists("/sys/kernel/security/evm")
+    evm_status = ""
+    if evm_active:
+        try:
+            with open("/sys/kernel/security/evm", 'r') as f:
+                evm_status = f.read().strip()
+        except (IOError, PermissionError):
+            evm_status = "active but not readable"
+    
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status="Pass" if evm_active else "Info",
+        message=f"{get_core_id('ADVK', 4)}: Extended Verification Module (EVM)",
+        details=f"EVM: {'enabled (status=' + evm_status + ')' if evm_active else 'not enabled'}",
+        remediation="Enable EVM via kernel configuration: CONFIG_EVM=y"
+    ))
+    
+    # ADVK-005: Unprivileged BPF disabled
+    exists, bpf_val = check_kernel_parameter("kernel.unprivileged_bpf_disabled")
+    bpf_restricted = bpf_val == "1" or bpf_val == "2"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status="Pass" if bpf_restricted else "Warning",
+        message=f"{get_core_id('ADVK', 5)}: Unprivileged BPF programs restricted",
+        details=f"unprivileged_bpf_disabled = {bpf_val if exists else 'not set'}",
+        remediation="Restrict: sysctl -w kernel.unprivileged_bpf_disabled=1"
+    ))
+    
+    # ADVK-006: Unprivileged user namespaces
+    exists, userns_val = check_kernel_parameter("kernel.unprivileged_userns_clone")
+    if exists:
+        userns_restricted = userns_val == "0"
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Kernel Security",
+            status="Pass" if userns_restricted else "Warning",
+            message=f"{get_core_id('ADVK', 6)}: Unprivileged user namespaces restricted",
+            details=f"unprivileged_userns_clone = {userns_val}",
+            remediation="Restrict: sysctl -w kernel.unprivileged_userns_clone=0"
+        ))
+    else:
+        # Check max_user_namespaces as alternative
+        exists2, maxns = check_kernel_parameter("user.max_user_namespaces")
+        ns_restricted = exists2 and maxns == "0"
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Kernel Security",
+            status="Pass" if ns_restricted else "Info",
+            message=f"{get_core_id('ADVK', 6)}: Unprivileged user namespaces",
+            details=f"max_user_namespaces = {maxns if exists2 else 'kernel default'}",
+            remediation="Restrict: sysctl -w user.max_user_namespaces=0"
+        ))
+    
+    # ADVK-007: kexec_load restricted
+    exists, kexec_val = check_kernel_parameter("kernel.kexec_load_disabled")
+    kexec_disabled = exists and kexec_val == "1"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status="Pass" if kexec_disabled else "Warning",
+        message=f"{get_core_id('ADVK', 7)}: kexec_load disabled",
+        details=f"kexec_load_disabled = {kexec_val if exists else 'not set (kexec allowed)'}",
+        remediation="Disable: sysctl -w kernel.kexec_load_disabled=1"
+    ))
+    
+    # ----------------------------------------------------------------
+    # systemd Unit Hardening
+    # ----------------------------------------------------------------
+    
+    # Check critical services for hardening directives
+    critical_services = ["sshd", "ssh", "systemd-resolved", "systemd-journald",
+                         "systemd-logind", "systemd-networkd", "dbus"]
+    
+    hardening_directives = [
+        "ProtectSystem", "ProtectHome", "PrivateTmp",
+        "NoNewPrivileges", "ProtectKernelTunables",
+        "ProtectKernelModules", "ProtectControlGroups"
+    ]
+    
+    services_checked = 0
+    services_hardened = 0
+    hardening_details = []
+    
+    for svc in critical_services:
+        svc_result = run_command(f"systemctl show {svc}.service 2>/dev/null "
+                                f"--property=ProtectSystem,ProtectHome,PrivateTmp,"
+                                f"NoNewPrivileges,ProtectKernelTunables,"
+                                f"ProtectKernelModules,ProtectControlGroups")
+        if svc_result.returncode == 0 and svc_result.stdout.strip():
+            props = {}
+            for line in svc_result.stdout.strip().splitlines():
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    props[k] = v
+            
+            # Only count if the service actually exists/is loaded
+            if any(v not in ['', 'no'] for v in props.values()):
+                services_checked += 1
+                active_directives = [k for k, v in props.items()
+                                     if v.lower() not in ['no', 'false', '', '0']]
+                if len(active_directives) >= 3:
+                    services_hardened += 1
+                hardening_details.append(f"{svc}: {len(active_directives)}/{len(hardening_directives)} directives")
+    
+    # ADVS-001: systemd service hardening overview
+    if services_checked > 0:
+        hardening_ratio = services_hardened / services_checked
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - systemd Hardening",
+            status="Pass" if hardening_ratio >= 0.5 else ("Warning" if hardening_ratio > 0 else "Fail"),
+            message=f"{get_core_id('ADVS', 1)}: systemd service security hardening",
+            details=f"{services_hardened}/{services_checked} critical services have 3+ hardening directives; "
+                    f"{'; '.join(hardening_details[:5])}",
+            remediation="Add hardening directives to unit files: ProtectSystem=strict, PrivateTmp=true, "
+                        "NoNewPrivileges=true, ProtectKernelTunables=true"
+        ))
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - systemd Hardening",
+            status="Info",
+            message=f"{get_core_id('ADVS', 1)}: systemd service security hardening",
+            details="No critical systemd services found to assess",
+            remediation="Verify systemd is the init system"
+        ))
+    
+    # ADVS-002: SSH service specific hardening
+    ssh_svc = "sshd" if command_exists("sshd") else "ssh"
+    ssh_show = run_command(f"systemctl show {ssh_svc}.service 2>/dev/null "
+                           f"--property=ProtectSystem,PrivateTmp,NoNewPrivileges")
+    if ssh_show.returncode == 0 and ssh_show.stdout.strip():
+        ssh_props = {}
+        for line in ssh_show.stdout.strip().splitlines():
+            if '=' in line:
+                k, v = line.split('=', 1)
+                ssh_props[k] = v
+        ssh_hardened = sum(1 for v in ssh_props.values()
+                          if v.lower() not in ['no', 'false', '', '0'])
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - systemd Hardening",
+            status="Pass" if ssh_hardened >= 2 else "Warning",
+            message=f"{get_core_id('ADVS', 2)}: SSH service unit hardening",
+            details=f"{ssh_svc}.service: {ssh_hardened}/3 key hardening directives active "
+                    f"({', '.join(k + '=' + v for k, v in ssh_props.items())})",
+            remediation=f"Add to {ssh_svc}.service override: ProtectSystem=strict, "
+                        f"PrivateTmp=true, NoNewPrivileges=true"
+        ))
+    
+    # ADVS-003: Default umask for systemd services
+    default_umask = run_command("systemctl show --property=DefaultLimitNOFILE,DefaultLimitCORE 2>/dev/null")
+    # Check /etc/login.defs UMASK
+    umask_val = ""
+    login_defs = read_file_safe("/etc/login.defs", use_cache=True)
+    if login_defs:
+        for line in login_defs.splitlines():
+            if line.strip().startswith("UMASK") and not line.strip().startswith("#"):
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    umask_val = parts[1]
+    
+    umask_secure = umask_val in ["027", "077"]
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - systemd Hardening",
+        status="Pass" if umask_secure else "Warning",
+        message=f"{get_core_id('ADVS', 3)}: Default system umask",
+        details=f"UMASK = {umask_val if umask_val else 'not set (default 022)'}",
+        remediation="Set UMASK 027 in /etc/login.defs for restrictive default permissions"
+    ))
+    
+    # ----------------------------------------------------------------
+    # Cryptographic Policy
+    # ----------------------------------------------------------------
+    
+    # ADVC-001: System-wide crypto policy (RHEL/Fedora)
+    crypto_policy_file = "/etc/crypto-policies/config"
+    if os.path.exists(crypto_policy_file):
+        crypto_policy = read_file_safe(crypto_policy_file, use_cache=True).strip()
+        # LEGACY < DEFAULT < FUTURE < FIPS
+        policy_ok = crypto_policy.upper() in ["DEFAULT", "FUTURE", "FIPS", "FIPS:OSPP"]
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cryptographic Policy",
+            status="Pass" if policy_ok else "Fail",
+            message=f"{get_core_id('ADVC', 1)}: System-wide cryptographic policy",
+            details=f"Crypto policy: {crypto_policy}",
+            remediation="Set policy: update-crypto-policies --set FUTURE (or FIPS)"
+        ))
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cryptographic Policy",
+            status="Info",
+            message=f"{get_core_id('ADVC', 1)}: System-wide cryptographic policy",
+            details="crypto-policies not available (non-RHEL/Fedora system)",
+            remediation="On Debian/Ubuntu, manage crypto settings per-application"
+        ))
+    
+    # ADVC-002: OpenSSL version and configuration
+    openssl_ver = run_command("openssl version 2>/dev/null")
+    if openssl_ver.returncode == 0:
+        ver_str = openssl_ver.stdout.strip()
+        # Check for known vulnerable versions (OpenSSL < 3.0 is end of life)
+        is_v3 = "OpenSSL 3." in ver_str
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cryptographic Policy",
+            status="Pass" if is_v3 else "Warning",
+            message=f"{get_core_id('ADVC', 2)}: OpenSSL version",
+            details=f"{ver_str}",
+            remediation="Upgrade to OpenSSL 3.x for current security features and support"
+        ))
+    
+    # ADVC-003: SSH protocol and cipher strength
+    ssh_config = {}
+    if cache:
+        ssh_config = cache.get_parsed('ssh_config') or {}
+    
+    # Check for weak ciphers
+    ciphers = ssh_config.get('ciphers', '')
+    weak_ciphers = ['3des-cbc', 'arcfour', 'blowfish-cbc', 'cast128-cbc']
+    has_weak = any(wc in ciphers.lower() for wc in weak_ciphers) if ciphers else False
+    
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Cryptographic Policy",
+        status="Fail" if has_weak else ("Pass" if ciphers else "Info"),
+        message=f"{get_core_id('ADVC', 3)}: SSH cipher configuration",
+        details=f"Ciphers: {ciphers if ciphers else 'system default'}; "
+                f"{'Weak ciphers detected!' if has_weak else 'No weak ciphers'}",
+        remediation="Set strong ciphers in /etc/ssh/sshd_config: "
+                    "Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr"
+    ))
+    
+    # ADVC-004: SSH key exchange algorithms
+    kex = ssh_config.get('kexalgorithms', '')
+    weak_kex = ['diffie-hellman-group1-sha1', 'diffie-hellman-group14-sha1',
+                'diffie-hellman-group-exchange-sha1']
+    has_weak_kex = any(wk in kex.lower() for wk in weak_kex) if kex else False
+    
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Cryptographic Policy",
+        status="Fail" if has_weak_kex else ("Pass" if kex else "Info"),
+        message=f"{get_core_id('ADVC', 4)}: SSH key exchange algorithms",
+        details=f"KexAlgorithms: {kex if kex else 'system default'}; "
+                f"{'Weak KEX detected!' if has_weak_kex else 'No weak KEX algorithms'}",
+        remediation="Set strong KEX in /etc/ssh/sshd_config: "
+                    "KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,"
+                    "diffie-hellman-group16-sha512"
+    ))
+    
+    # ADVC-005: SSH MAC algorithms
+    macs = ssh_config.get('macs', '')
+    weak_macs = ['hmac-md5', 'hmac-sha1', 'umac-64', 'hmac-sha1-96', 'hmac-md5-96']
+    has_weak_macs = any(wm in macs.lower() for wm in weak_macs) if macs else False
+    
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Cryptographic Policy",
+        status="Fail" if has_weak_macs else ("Pass" if macs else "Info"),
+        message=f"{get_core_id('ADVC', 5)}: SSH MAC algorithms",
+        details=f"MACs: {macs if macs else 'system default'}; "
+                f"{'Weak MACs detected!' if has_weak_macs else 'No weak MAC algorithms'}",
+        remediation="Set strong MACs in /etc/ssh/sshd_config: "
+                    "MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com"
+    ))
+    
+    # ADVC-006: TLS minimum version check (system OpenSSL)
+    tls_min = run_command("openssl s_client -help 2>&1 | grep -o 'tls1_[0-9]'")
+    # Check openssl.cnf for MinProtocol
+    openssl_cnf = read_file_safe("/etc/ssl/openssl.cnf", use_cache=True)
+    min_protocol = ""
+    if openssl_cnf:
+        for line in openssl_cnf.splitlines():
+            if 'MinProtocol' in line and not line.strip().startswith('#'):
+                min_protocol = line.strip()
+    
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Cryptographic Policy",
+        status="Pass" if "TLSv1.2" in min_protocol or "TLSv1.3" in min_protocol else "Info",
+        message=f"{get_core_id('ADVC', 6)}: System TLS minimum protocol version",
+        details=f"{min_protocol if min_protocol else 'No MinProtocol set in openssl.cnf (default applies)'}",
+        remediation="Set MinProtocol = TLSv1.2 in /etc/ssl/openssl.cnf [system_default_sect]"
+    ))
+    
+    # ----------------------------------------------------------------
+    # SELinux / AppArmor Deep Inspection
+    # ----------------------------------------------------------------
+    
+    # ADVM-001: SELinux detailed mode (beyond boolean)
+    selinux_status = run_command("sestatus 2>/dev/null")
+    if selinux_status.returncode == 0 and selinux_status.stdout.strip():
+        se_lines = selinux_status.stdout.strip().splitlines()
+        se_dict = {}
+        for line in se_lines:
+            if ':' in line:
+                k, v = line.split(':', 1)
+                se_dict[k.strip()] = v.strip()
+        
+        current_mode = se_dict.get('Current mode', 'unknown')
+        policy_name = se_dict.get('Loaded policy name', 'unknown')
+        mode_from_config = se_dict.get('Mode from config file', 'unknown')
+        
+        enforcing = current_mode.lower() == 'enforcing'
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Mandatory Access Control",
+            status="Pass" if enforcing else "Fail",
+            message=f"{get_core_id('ADVM', 1)}: SELinux enforcement mode",
+            details=f"Current mode: {current_mode}, Config mode: {mode_from_config}, "
+                    f"Policy: {policy_name}",
+            remediation="Set SELINUX=enforcing in /etc/selinux/config and reboot"
+        ))
+        
+        # ADVM-002: SELinux denials / permissive domains
+        denials = run_command("ausearch -m avc --start today 2>/dev/null | head -5")
+        denial_count = len([l for l in denials.stdout.splitlines() if 'avc:' in l]) if denials.returncode == 0 else -1
+        
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Mandatory Access Control",
+            status="Pass" if denial_count == 0 else ("Warning" if denial_count > 0 else "Info"),
+            message=f"{get_core_id('ADVM', 2)}: SELinux recent denials",
+            details=f"{'No AVC denials today' if denial_count == 0 else (str(denial_count) + ' recent AVC denials' if denial_count > 0 else 'Unable to query audit log')}",
+            remediation="Review denials: ausearch -m avc --start today; resolve with sealert or audit2allow"
+        ))
+        
+        # ADVM-003: SELinux boolean hardening
+        booleans_check = run_command("getsebool -a 2>/dev/null | grep -c 'on$'")
+        booleans_total = run_command("getsebool -a 2>/dev/null | wc -l")
+        if booleans_check.returncode == 0:
+            on_count = safe_int_parse(booleans_check.stdout.strip(), 0)
+            total_count = safe_int_parse(booleans_total.stdout.strip(), 0)
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Mandatory Access Control",
+                status="Info",
+                message=f"{get_core_id('ADVM', 3)}: SELinux boolean policy",
+                details=f"{on_count}/{total_count} SELinux booleans enabled",
+                remediation="Review enabled booleans: getsebool -a | grep on; "
+                            "disable unnecessary with setsebool -P <bool> off"
+            ))
+    
+    # AppArmor deep inspection
+    aa_status = run_command("aa-status 2>/dev/null")
+    if aa_status.returncode == 0 and aa_status.stdout.strip():
+        aa_lines = aa_status.stdout.strip().splitlines()
+        enforce_count = 0
+        complain_count = 0
+        for line in aa_lines:
+            if 'enforce' in line.lower() and 'profiles' in line.lower():
+                enforce_count = safe_int_parse(line.split()[0], 0)
+            elif 'complain' in line.lower() and 'profiles' in line.lower():
+                complain_count = safe_int_parse(line.split()[0], 0)
+        
+        # ADVM-004: AppArmor profile enforcement
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Mandatory Access Control",
+            status="Pass" if enforce_count > 0 else "Warning",
+            message=f"{get_core_id('ADVM', 4)}: AppArmor profile enforcement",
+            details=f"{enforce_count} profiles in enforce mode, {complain_count} in complain mode",
+            remediation="Set profiles to enforce: aa-enforce /etc/apparmor.d/*"
+        ))
+        
+        # ADVM-005: Unconfined processes
+        unconfined = run_command("aa-unconfined 2>/dev/null | wc -l")
+        if unconfined.returncode == 0:
+            unconfined_count = safe_int_parse(unconfined.stdout.strip(), 0)
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Mandatory Access Control",
+                status="Warning" if unconfined_count > 10 else "Pass",
+                message=f"{get_core_id('ADVM', 5)}: AppArmor unconfined processes",
+                details=f"{unconfined_count} unconfined processes detected",
+                remediation="Create AppArmor profiles for unconfined network-facing services"
+            ))
+    
+    # ADVM-006: MAC system present check (either SELinux or AppArmor)
+    has_selinux = selinux_status.returncode == 0 if 'selinux_status' in dir() else False
+    has_apparmor = aa_status.returncode == 0 if 'aa_status' in dir() else False
+    
+    if not has_selinux and not has_apparmor:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Mandatory Access Control",
+            status="Fail",
+            message=f"{get_core_id('ADVM', 6)}: Mandatory Access Control system active",
+            details="Neither SELinux nor AppArmor is active on this system",
+            remediation="Enable SELinux or AppArmor for mandatory access control"
+        ))
+    
+    # ----------------------------------------------------------------
+    # Container / Docker Security Detection
+    # ----------------------------------------------------------------
+    
+    # ADVD-001: Running inside a container?
+    in_container = False
+    container_type = "none"
+    
+    if os.path.exists("/.dockerenv"):
+        in_container = True
+        container_type = "Docker"
+    elif os.path.exists("/run/.containerenv"):
+        in_container = True
+        container_type = "Podman"
+    else:
+        cgroup_content = read_file_safe("/proc/1/cgroup", use_cache=True)
+        if cgroup_content and ('docker' in cgroup_content or 'lxc' in cgroup_content
+                               or 'kubepods' in cgroup_content):
+            in_container = True
+            container_type = "container (cgroup detected)"
+    
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Container Security",
+        status="Info",
+        message=f"{get_core_id('ADVD', 1)}: Container environment detection",
+        details=f"Running in: {container_type if in_container else 'bare metal / VM'}",
+        remediation="If containerized, ensure host-level security is also audited"
+    ))
+    
+    # ADVD-002: Docker daemon present and configuration
+    if command_exists("docker"):
+        docker_info = run_command("docker info --format '{{.SecurityOptions}}' 2>/dev/null")
+        docker_running = docker_info.returncode == 0
+        
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Container Security",
+            status="Info" if docker_running else "Info",
+            message=f"{get_core_id('ADVD', 2)}: Docker daemon status",
+            details=f"Docker: {'running, security options: ' + docker_info.stdout.strip() if docker_running else 'installed but not accessible'}",
+            remediation="Review Docker security: enable content trust, use rootless mode, "
+                        "restrict container capabilities"
+        ))
+        
+        # ADVD-003: Docker content trust
+        docker_trust = os.environ.get("DOCKER_CONTENT_TRUST", "0")
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Container Security",
+            status="Pass" if docker_trust == "1" else "Warning",
+            message=f"{get_core_id('ADVD', 3)}: Docker Content Trust enabled",
+            details=f"DOCKER_CONTENT_TRUST={docker_trust}",
+            remediation="Enable: export DOCKER_CONTENT_TRUST=1"
+        ))
+        
+        # ADVD-004: Docker daemon configuration
+        docker_config = read_file_safe("/etc/docker/daemon.json", use_cache=True)
+        has_config = bool(docker_config and docker_config.strip() != '{}')
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Container Security",
+            status="Pass" if has_config else "Warning",
+            message=f"{get_core_id('ADVD', 4)}: Docker daemon configuration file",
+            details=f"/etc/docker/daemon.json: {'configured' if has_config else 'empty or missing'}",
+            remediation="Configure /etc/docker/daemon.json with: userns-remap, no-new-privileges, "
+                        "log-driver, storage-driver, icc=false"
+        ))
+    
+    # ----------------------------------------------------------------
+    # UEFI Secure Boot
+    # ----------------------------------------------------------------
+    
+    # ADVB-001: UEFI Secure Boot status
+    secureboot_enabled = False
+    sb_details = "Unable to determine"
+    
+    if os.path.isdir("/sys/firmware/efi"):
+        # System is UEFI
+        sb_check = run_command("mokutil --sb-state 2>/dev/null")
+        if sb_check.returncode == 0:
+            sb_details = sb_check.stdout.strip()
+            secureboot_enabled = "SecureBoot enabled" in sb_details
+        else:
+            # Try reading EFI variable directly
+            sb_var = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+            if os.path.exists(sb_var):
+                try:
+                    with open(sb_var, 'rb') as f:
+                        data = f.read()
+                    secureboot_enabled = data[-1] == 1 if data else False
+                    sb_details = f"SecureBoot {'enabled' if secureboot_enabled else 'disabled'} (EFI variable)"
+                except (IOError, PermissionError):
+                    sb_details = "EFI variable not readable"
+        
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Boot Security",
+            status="Pass" if secureboot_enabled else "Warning",
+            message=f"{get_core_id('ADVB', 1)}: UEFI Secure Boot",
+            details=f"{sb_details}",
+            remediation="Enable Secure Boot in UEFI/BIOS firmware settings"
+        ))
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Boot Security",
+            status="Info",
+            message=f"{get_core_id('ADVB', 1)}: UEFI Secure Boot",
+            details="System uses legacy BIOS (not UEFI) - Secure Boot not applicable",
+            remediation="Consider migrating to UEFI for Secure Boot support"
+        ))
+    
+    # ADVB-002: Boot loader password protection
+    grub_cfg_paths = ["/boot/grub/grub.cfg", "/boot/grub2/grub.cfg", "/boot/efi/EFI/*/grub.cfg"]
+    grub_password = False
+    for grub_path in grub_cfg_paths:
+        import glob as _glob
+        for gpath in _glob.glob(grub_path):
+            grub_content = read_file_safe(gpath, use_cache=True)
+            if grub_content and ('password_pbkdf2' in grub_content or 'set superusers' in grub_content):
+                grub_password = True
+                break
+    
+    grub_user_cfg = read_file_safe("/etc/grub.d/40_custom", use_cache=True)
+    if grub_user_cfg and 'password_pbkdf2' in grub_user_cfg:
+        grub_password = True
+    
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Boot Security",
+        status="Pass" if grub_password else "Warning",
+        message=f"{get_core_id('ADVB', 2)}: Boot loader password protection",
+        details=f"GRUB password: {'configured' if grub_password else 'not configured'}",
+        remediation="Set GRUB password: grub-mkpasswd-pbkdf2, then add to /etc/grub.d/40_custom"
+    ))
+    
+    # ----------------------------------------------------------------
+    # Supply Chain / Package Signing
+    # ----------------------------------------------------------------
+    
+    # ADVP-001: Package repository GPG verification
+    if os_info.package_manager == "apt":
+        apt_config = run_command("apt-config dump 2>/dev/null | grep -i 'AllowUnauthenticated\\|AllowInsecure'")
+        unauthenticated = "true" in apt_config.stdout.lower() if apt_config.returncode == 0 else False
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Supply Chain",
+            status="Fail" if unauthenticated else "Pass",
+            message=f"{get_core_id('ADVP', 1)}: APT package signature verification",
+            details=f"{'AllowUnauthenticated/AllowInsecure is enabled - packages not verified!' if unauthenticated else 'Package signature verification enforced'}",
+            remediation="Remove any AllowUnauthenticated or AllowInsecure settings from apt configuration"
+        ))
+    elif os_info.package_manager in ["yum", "dnf"]:
+        yum_conf = read_file_safe("/etc/yum.conf", use_cache=True) or ""
+        dnf_conf = read_file_safe("/etc/dnf/dnf.conf", use_cache=True) or ""
+        conf = yum_conf + dnf_conf
+        gpgcheck_disabled = "gpgcheck=0" in conf
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Supply Chain",
+            status="Fail" if gpgcheck_disabled else "Pass",
+            message=f"{get_core_id('ADVP', 1)}: RPM package GPG verification",
+            details=f"{'gpgcheck=0 found - GPG verification disabled!' if gpgcheck_disabled else 'GPG verification enabled in package manager config'}",
+            remediation="Set gpgcheck=1 in /etc/yum.conf or /etc/dnf/dnf.conf"
+        ))
+    
+    # ADVP-002: Repository HTTPS usage
+    repo_files = []
+    if os_info.package_manager == "apt":
+        sources_list = read_file_safe("/etc/apt/sources.list", use_cache=True) or ""
+        http_repos = [l for l in sources_list.splitlines()
+                      if l.strip() and not l.strip().startswith('#') and 'http://' in l]
+        https_repos = [l for l in sources_list.splitlines()
+                       if l.strip() and not l.strip().startswith('#') and 'https://' in l]
+        total_repos = len(http_repos) + len(https_repos)
+    elif os_info.package_manager in ["yum", "dnf"]:
+        repo_dir = "/etc/yum.repos.d"
+        http_repos = []
+        https_repos = []
+        if os.path.isdir(repo_dir):
+            for rf in os.listdir(repo_dir):
+                if rf.endswith('.repo'):
+                    content = read_file_safe(os.path.join(repo_dir, rf), use_cache=True) or ""
+                    for line in content.splitlines():
+                        if line.strip().startswith('baseurl') or line.strip().startswith('metalink'):
+                            if 'http://' in line:
+                                http_repos.append(line.strip())
+                            elif 'https://' in line:
+                                https_repos.append(line.strip())
+        total_repos = len(http_repos) + len(https_repos)
+    else:
+        http_repos = []
+        https_repos = []
+        total_repos = 0
+    
+    if total_repos > 0:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Supply Chain",
+            status="Pass" if len(http_repos) == 0 else "Warning",
+            message=f"{get_core_id('ADVP', 2)}: Package repository transport security",
+            details=f"{len(https_repos)} HTTPS repos, {len(http_repos)} HTTP repos "
+                    f"({len(http_repos)}/{total_repos} unencrypted)",
+            remediation="Switch all repository URLs from http:// to https://"
+        ))
+    
+    # ADVP-003: Automatic security updates configuration
+    if os_info.package_manager == "apt":
+        unattended = os.path.exists("/etc/apt/apt.conf.d/50unattended-upgrades")
+        auto_update = os.path.exists("/etc/apt/apt.conf.d/20auto-upgrades")
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Supply Chain",
+            status="Pass" if (unattended and auto_update) else "Warning",
+            message=f"{get_core_id('ADVP', 3)}: Automatic security updates",
+            details=f"unattended-upgrades: {'configured' if unattended else 'not configured'}, "
+                    f"auto-upgrades: {'configured' if auto_update else 'not configured'}",
+            remediation="Install and configure: apt install unattended-upgrades && "
+                        "dpkg-reconfigure unattended-upgrades"
+        ))
+    elif os_info.package_manager in ["yum", "dnf"]:
+        dnf_auto = command_exists("dnf-automatic") or os.path.exists("/etc/dnf/automatic.conf")
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Supply Chain",
+            status="Pass" if dnf_auto else "Warning",
+            message=f"{get_core_id('ADVP', 3)}: Automatic security updates",
+            details=f"dnf-automatic: {'configured' if dnf_auto else 'not configured'}",
+            remediation="Install and enable: dnf install dnf-automatic && "
+                        "systemctl enable --now dnf-automatic-install.timer"
+        ))
+
+
+# ============================================================================
+# Kernel Security Modules (YAMA, Lockdown, IMA/EVM)
+# Phase 1 Gap: Core baseline, NSA, NIST cross-cutting
+# ============================================================================
+
+def check_kernel_security_modules(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Check kernel security module status including YAMA LSM, Kernel Lockdown,
+    and IMA/EVM integrity measurement subsystems.
+
+    These checks address gaps identified in CIS 1.5, NIST SI, NSA Kernel Security,
+    and STIG System & Information Integrity categories.
+    """
+    cache = shared_data.get('cache')
+
+    # --- YAMA ptrace scope ---
+    # Controls process tracing; 1+ restricts ptrace to parent-child only
+    yama_exists, yama_value = check_kernel_parameter("kernel.yama.ptrace_scope", cache=cache)
+    if yama_exists:
+        yama_int = safe_int_parse(yama_value, default=0)
+        # 0 = classic (permissive), 1 = restricted, 2 = admin-only, 3 = no attach
+        if yama_int >= 1:
+            status = "Pass"
+            detail = f"YAMA ptrace_scope = {yama_int} (restricted)"
+        else:
+            status = "Fail"
+            detail = f"YAMA ptrace_scope = {yama_int} (permissive - any process can ptrace)"
+    else:
+        status = "Warning"
+        detail = "YAMA LSM not available or not loaded"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status=status,
+        message=f"{get_core_id('KSEC', 1)}: YAMA ptrace restriction",
+        details=detail,
+        remediation="echo 'kernel.yama.ptrace_scope = 1' >> /etc/sysctl.d/90-security.conf && sysctl -p",
+        severity="Medium"
+    ))
+
+    # --- Kernel Lockdown mode ---
+    # Prevents modification of running kernel; 'integrity' or 'confidentiality' modes
+    lockdown_path = "/sys/kernel/security/lockdown"
+    lockdown_status = "none"
+    try:
+        if os.path.exists(lockdown_path):
+            with open(lockdown_path, 'r') as f:
+                lockdown_content = f.read().strip()
+            # Format: [none] integrity confidentiality  (brackets = active)
+            if '[integrity]' in lockdown_content:
+                lockdown_status = "integrity"
+            elif '[confidentiality]' in lockdown_content:
+                lockdown_status = "confidentiality"
+            elif '[none]' in lockdown_content:
+                lockdown_status = "none"
+    except (PermissionError, IOError, OSError):
+        lockdown_status = "unreadable"
+
+    if lockdown_status in ("integrity", "confidentiality"):
+        status = "Pass"
+    elif lockdown_status == "none":
+        status = "Warning"
+    else:
+        status = "Info"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status=status,
+        message=f"{get_core_id('KSEC', 2)}: Kernel Lockdown mode",
+        details=f"Lockdown mode: {lockdown_status}",
+        remediation="Add 'lockdown=integrity' to GRUB_CMDLINE_LINUX in /etc/default/grub && update-grub",
+        severity="Medium"
+    ))
+
+    # --- IMA (Integrity Measurement Architecture) ---
+    # Measures file integrity at kernel level
+    ima_active = os.path.exists("/sys/kernel/security/ima")
+    ima_policy = os.path.exists("/sys/kernel/security/ima/policy")
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status="Pass" if ima_active else "Info",
+        message=f"{get_core_id('KSEC', 3)}: IMA (Integrity Measurement Architecture)",
+        details=f"IMA subsystem: {'active' if ima_active else 'not active'}, "
+                f"IMA policy: {'loaded' if ima_policy else 'not loaded'}",
+        remediation="Enable IMA: add 'ima_policy=tcb ima_appraise=fix' to kernel command line",
+        severity="Low"
+    ))
+
+    # --- EVM (Extended Verification Module) ---
+    # Protects file extended attributes used by IMA
+    evm_active = os.path.exists("/sys/kernel/security/evm")
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status="Pass" if evm_active else "Info",
+        message=f"{get_core_id('KSEC', 4)}: EVM (Extended Verification Module)",
+        details=f"EVM subsystem: {'active' if evm_active else 'not active'}",
+        remediation="Enable EVM alongside IMA for extended attribute protection",
+        severity="Low"
+    ))
+
+    # --- Loaded LSMs ---
+    lsm_path = "/sys/kernel/security/lsm"
+    lsm_list = ""
+    try:
+        if os.path.exists(lsm_path):
+            with open(lsm_path, 'r') as f:
+                lsm_list = f.read().strip()
+    except (PermissionError, IOError, OSError):
+        pass
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status="Pass" if lsm_list else "Warning",
+        message=f"{get_core_id('KSEC', 5)}: Active Linux Security Modules",
+        details=f"LSM stack: {lsm_list if lsm_list else 'unable to determine'}",
+        remediation="Ensure at least one MAC LSM is active (AppArmor or SELinux)",
+        severity="Medium"
+    ))
+
+    # --- Address Space Layout Randomization (ASLR) ---
+    aslr_exists, aslr_value = check_kernel_parameter("kernel.randomize_va_space", cache=cache)
+    if aslr_exists:
+        aslr_int = safe_int_parse(aslr_value, default=0)
+        # 0 = disabled, 1 = conservative, 2 = full
+        if aslr_int >= 2:
+            status, detail = "Pass", f"ASLR = {aslr_int} (full randomization)"
+        elif aslr_int == 1:
+            status, detail = "Warning", f"ASLR = {aslr_int} (partial - stack only)"
+        else:
+            status, detail = "Fail", f"ASLR = {aslr_int} (disabled)"
+    else:
+        status, detail = "Warning", "Unable to read ASLR setting"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status=status,
+        message=f"{get_core_id('KSEC', 6)}: Address Space Layout Randomization (ASLR)",
+        details=detail,
+        remediation="sysctl -w kernel.randomize_va_space=2",
+        severity="High"
+    ))
+
+    # --- Core dumps restriction ---
+    core_exists, core_value = check_kernel_parameter("fs.suid_dumpable", cache=cache)
+    if core_exists:
+        core_int = safe_int_parse(core_value, default=2)
+        if core_int == 0:
+            status, detail = "Pass", "SUID core dumps disabled (fs.suid_dumpable = 0)"
+        else:
+            status, detail = "Fail", f"SUID core dumps enabled (fs.suid_dumpable = {core_int})"
+    else:
+        status, detail = "Warning", "Unable to read fs.suid_dumpable"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status=status,
+        message=f"{get_core_id('KSEC', 7)}: SUID core dump restriction",
+        details=detail,
+        remediation="echo 'fs.suid_dumpable = 0' >> /etc/sysctl.d/90-security.conf && sysctl -p",
+        severity="Medium"
+    ))
+
+    # --- Kernel pointer hiding ---
+    kptr_exists, kptr_value = check_kernel_parameter("kernel.kptr_restrict", cache=cache)
+    if kptr_exists:
+        kptr_int = safe_int_parse(kptr_value, default=0)
+        if kptr_int >= 1:
+            status = "Pass"
+            detail = f"Kernel pointer restriction = {kptr_int}"
+        else:
+            status = "Fail"
+            detail = "Kernel pointers exposed to unprivileged users (kptr_restrict = 0)"
+    else:
+        status, detail = "Warning", "Unable to read kernel.kptr_restrict"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status=status,
+        message=f"{get_core_id('KSEC', 8)}: Kernel pointer restriction",
+        details=detail,
+        remediation="echo 'kernel.kptr_restrict = 2' >> /etc/sysctl.d/90-security.conf && sysctl -p",
+        severity="Medium"
+    ))
+
+    # --- dmesg restriction ---
+    dmesg_exists, dmesg_value = check_kernel_parameter("kernel.dmesg_restrict", cache=cache)
+    if dmesg_exists:
+        dmesg_int = safe_int_parse(dmesg_value, default=0)
+        status = "Pass" if dmesg_int >= 1 else "Fail"
+        detail = f"dmesg_restrict = {dmesg_int}"
+    else:
+        status, detail = "Warning", "Unable to read kernel.dmesg_restrict"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status=status,
+        message=f"{get_core_id('KSEC', 9)}: Restrict dmesg access",
+        details=detail,
+        remediation="echo 'kernel.dmesg_restrict = 1' >> /etc/sysctl.d/90-security.conf && sysctl -p",
+        severity="Low"
+    ))
+
+    # --- Unprivileged BPF disabled ---
+    bpf_exists, bpf_value = check_kernel_parameter("kernel.unprivileged_bpf_disabled", cache=cache)
+    if bpf_exists:
+        bpf_int = safe_int_parse(bpf_value, default=0)
+        status = "Pass" if bpf_int >= 1 else "Warning"
+        detail = f"unprivileged_bpf_disabled = {bpf_int}"
+    else:
+        status, detail = "Info", "kernel.unprivileged_bpf_disabled not available"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status=status,
+        message=f"{get_core_id('KSEC', 10)}: Restrict unprivileged BPF",
+        details=detail,
+        remediation="echo 'kernel.unprivileged_bpf_disabled = 1' >> /etc/sysctl.d/90-security.conf && sysctl -p",
+        severity="Medium"
+    ))
+
+    # --- Unprivileged user namespaces ---
+    userns_exists, userns_value = check_kernel_parameter(
+        "kernel.unprivileged_userns_clone", cache=cache)
+    if userns_exists:
+        userns_int = safe_int_parse(userns_value, default=1)
+        status = "Pass" if userns_int == 0 else "Info"
+        detail = f"unprivileged_userns_clone = {userns_int}"
+    else:
+        # Not all kernels expose this; check via /proc/sys alternate
+        status, detail = "Info", "kernel.unprivileged_userns_clone not available (kernel may not support)"
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Kernel Security",
+        status=status,
+        message=f"{get_core_id('KSEC', 11)}: Unprivileged user namespaces",
+        details=detail,
+        remediation="echo 'kernel.unprivileged_userns_clone = 0' >> /etc/sysctl.d/90-security.conf && sysctl -p",
+        severity="Low"
+    ))
+
+
+# ============================================================================
+# systemd Unit Hardening Assessment
+# Phase 1 Gap: Core, CIS, STIG cross-cutting
+# ============================================================================
+
+def check_systemd_hardening(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Assess systemd service hardening features including ProtectSystem,
+    PrivateTmp, NoNewPrivileges, and other sandboxing directives.
+
+    Evaluates critical system services for security sandboxing posture.
+    """
+    cache = shared_data.get('cache')
+
+    # Critical services to assess for hardening properties
+    critical_services = [
+        "sshd", "ssh",
+        "httpd", "apache2", "nginx",
+        "mariadb", "mysql", "postgresql",
+        "named", "bind9",
+        "docker", "containerd",
+        "systemd-resolved", "systemd-journald", "systemd-logind",
+        "cron", "crond", "atd",
+        "rsyslog", "syslog-ng",
+        "NetworkManager", "systemd-networkd",
+    ]
+
+    # Security properties to check (directive: description)
+    hardening_directives = {
+        "ProtectSystem": "Restrict writes to /usr and /boot",
+        "ProtectHome": "Restrict access to /home, /root, /run/user",
+        "PrivateTmp": "Private /tmp and /var/tmp namespaces",
+        "NoNewPrivileges": "Prevent privilege escalation via execve",
+        "ProtectKernelTunables": "Read-only access to /proc and /sys",
+        "ProtectKernelModules": "Deny loading kernel modules",
+        "ProtectControlGroups": "Read-only access to cgroup filesystem",
+        "RestrictSUIDSGID": "Restrict creation of SUID/SGID files",
+    }
+
+    # Determine which critical services are actually running
+    running_services = set()
+    for svc in critical_services:
+        result = run_command(f"systemctl is-active {svc}.service 2>/dev/null", check=False)
+        if result.returncode == 0 and result.stdout.strip() == "active":
+            running_services.add(svc)
+
+    if not running_services:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - systemd Hardening",
+            status="Info",
+            message=f"{get_core_id('SYSD', 1)}: systemd service hardening assessment",
+            details="No critical services detected as running for hardening assessment",
+            severity="Low"
+        ))
+        return
+
+    # Assess each running service
+    total_hardened = 0
+    total_checked = 0
+    weak_services = []
+
+    for svc in sorted(running_services):
+        # Use systemctl show to get security properties
+        result = run_command(
+            f"systemctl show {svc}.service "
+            f"--property=ProtectSystem,ProtectHome,PrivateTmp,NoNewPrivileges,"
+            f"ProtectKernelTunables,ProtectKernelModules,ProtectControlGroups,"
+            f"RestrictSUIDSGID 2>/dev/null",
+            check=False
+        )
+        if result.returncode != 0:
+            continue
+
+        total_checked += 1
+        props = {}
+        for line in result.stdout.strip().splitlines():
+            if '=' in line:
+                key, val = line.split('=', 1)
+                props[key.strip()] = val.strip()
+
+        # Count enabled hardening directives
+        enabled_count = 0
+        for directive in hardening_directives:
+            val = props.get(directive, "no")
+            # ProtectSystem can be "strict" or "full" or "true"
+            if val.lower() in ("yes", "true", "strict", "full", "read-only"):
+                enabled_count += 1
+
+        svc_score = enabled_count / len(hardening_directives) * 100
+        if svc_score >= 50:
+            total_hardened += 1
+        else:
+            weak_services.append(f"{svc} ({enabled_count}/{len(hardening_directives)})")
+
+    # Overall systemd hardening score
+    if total_checked > 0:
+        hardening_pct = total_hardened / total_checked * 100
+        if hardening_pct >= 75:
+            status = "Pass"
+        elif hardening_pct >= 50:
+            status = "Warning"
+        else:
+            status = "Fail"
+    else:
+        status = "Info"
+        hardening_pct = 0
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - systemd Hardening",
+        status=status,
+        message=f"{get_core_id('SYSD', 1)}: systemd service hardening posture",
+        details=f"{total_hardened}/{total_checked} running services adequately hardened "
+                f"({hardening_pct:.0f}%)"
+                f"{'; Weak: ' + ', '.join(weak_services[:5]) if weak_services else ''}",
+        remediation="Use 'systemd-analyze security <service>' to review and add hardening "
+                    "directives to unit files in /etc/systemd/system/<service>.d/override.conf",
+        severity="Medium"
+    ))
+
+    # Individual directive assessments across all services
+    for directive, description in hardening_directives.items():
+        enabled_svc_count = 0
+        for svc in running_services:
+            result = run_command(
+                f"systemctl show {svc}.service --property={directive} 2>/dev/null",
+                check=False
+            )
+            if result.returncode == 0:
+                val = result.stdout.strip().split('=', 1)[-1] if '=' in result.stdout else ""
+                if val.lower() in ("yes", "true", "strict", "full", "read-only"):
+                    enabled_svc_count += 1
+
+        if len(running_services) > 0:
+            pct = enabled_svc_count / len(running_services) * 100
+        else:
+            pct = 0
+
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - systemd Hardening",
+            status="Pass" if pct >= 50 else ("Warning" if pct >= 25 else "Info"),
+            message=f"{get_core_id('SYSD', 2)}: {directive} adoption",
+            details=f"{description}: {enabled_svc_count}/{len(running_services)} "
+                    f"services ({pct:.0f}%)",
+            remediation=f"Add '{directive}=yes' to service unit override files",
+            severity="Low"
+        ))
+
+    # --- systemd-analyze security score ---
+    # Run on a representative service to demonstrate capability
+    test_svc = next(iter(running_services), None)
+    if test_svc:
+        result = run_command(
+            f"systemd-analyze security {test_svc}.service 2>/dev/null | tail -1",
+            check=False
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - systemd Hardening",
+                status="Info",
+                message=f"{get_core_id('SYSD', 3)}: systemd-analyze security capability",
+                details=f"Security analysis available. Sample ({test_svc}): "
+                        f"{result.stdout.strip()[:100]}",
+                remediation="Run 'systemd-analyze security' to review all service exposure scores",
+                severity="Low"
+            ))
+
+
+# ============================================================================
+# Cryptographic Policy Assessment
+# Phase 1 Gap: NIST SC, NSA Crypto, STIG cross-cutting
+# ============================================================================
+
+def check_crypto_policy(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Check system-wide cryptographic policy settings including crypto-policies
+    (RHEL/Fedora), OpenSSL configuration, and TLS version enforcement.
+    """
+    cache = shared_data.get('cache')
+
+    # --- System-wide crypto-policies (RHEL/Fedora) ---
+    crypto_policy_file = "/etc/crypto-policies/config"
+    if os.path.exists(crypto_policy_file):
+        try:
+            with open(crypto_policy_file, 'r') as f:
+                policy = f.read().strip()
+            # Policies: LEGACY, DEFAULT, FUTURE, FIPS
+            if policy in ("FUTURE", "FIPS"):
+                status = "Pass"
+            elif policy == "DEFAULT":
+                status = "Warning"
+            else:
+                status = "Fail"
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Cryptographic Policy",
+                status=status,
+                message=f"{get_core_id('CRYPTO', 1)}: System-wide crypto-policy (RHEL/Fedora)",
+                details=f"Active crypto-policy: {policy}",
+                remediation="update-crypto-policies --set FUTURE  (or FIPS for FIPS compliance)",
+                severity="High"
+            ))
+        except (PermissionError, IOError):
+            pass
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cryptographic Policy",
+            status="Info",
+            message=f"{get_core_id('CRYPTO', 1)}: System-wide crypto-policy",
+            details="crypto-policies framework not available (non-RHEL/Fedora system)",
+            remediation="On RHEL/Fedora: update-crypto-policies --set FUTURE",
+            severity="Low"
+        ))
+
+    # --- OpenSSL version and FIPS status ---
+    result = run_command("openssl version 2>/dev/null", check=False)
+    if result.returncode == 0:
+        openssl_ver = result.stdout.strip()
+        # Check if version is reasonably current (3.x preferred)
+        is_v3 = "OpenSSL 3." in openssl_ver or "OpenSSL 4." in openssl_ver
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cryptographic Policy",
+            status="Pass" if is_v3 else "Warning",
+            message=f"{get_core_id('CRYPTO', 2)}: OpenSSL version",
+            details=openssl_ver,
+            remediation="Update to OpenSSL 3.x+ for current security features and algorithm support",
+            severity="Medium"
+        ))
+
+    # --- TLS minimum version in OpenSSL config ---
+    openssl_conf_paths = [
+        "/etc/ssl/openssl.cnf",
+        "/etc/pki/tls/openssl.cnf",
+        "/etc/crypto-policies/back-ends/opensslcnf.config",
+    ]
+    min_tls_found = False
+    for conf_path in openssl_conf_paths:
+        content = read_file_safe(conf_path)
+        if content:
+            if "MinProtocol" in content:
+                for line in content.splitlines():
+                    if "MinProtocol" in line and not line.strip().startswith('#'):
+                        min_proto = line.split('=')[-1].strip() if '=' in line else "unknown"
+                        is_safe = min_proto in ("TLSv1.2", "TLSv1.3")
+                        results.append(AuditResult(
+                            module=MODULE_NAME,
+                            category="CORE - Cryptographic Policy",
+                            status="Pass" if is_safe else "Fail",
+                            message=f"{get_core_id('CRYPTO', 3)}: Minimum TLS protocol version",
+                            details=f"MinProtocol = {min_proto} (in {conf_path})",
+                            remediation="Set MinProtocol = TLSv1.2 in OpenSSL configuration",
+                            severity="High"
+                        ))
+                        min_tls_found = True
+                        break
+            if min_tls_found:
+                break
+
+    if not min_tls_found:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cryptographic Policy",
+            status="Warning",
+            message=f"{get_core_id('CRYPTO', 3)}: Minimum TLS protocol version",
+            details="No explicit MinProtocol found in OpenSSL configuration",
+            remediation="Add 'MinProtocol = TLSv1.2' to [system_default_sect] in openssl.cnf",
+            severity="High"
+        ))
+
+    # --- SSH cryptographic settings ---
+    ssh_config = {}
+    if cache:
+        ssh_config = cache.get_parsed('ssh_config') or {}
+
+    # Check SSH Ciphers
+    ssh_ciphers = ssh_config.get('ciphers', '')
+    weak_ciphers = ['3des-cbc', 'arcfour', 'blowfish-cbc', 'cast128-cbc']
+    has_weak = any(wc in ssh_ciphers.lower() for wc in weak_ciphers) if ssh_ciphers else False
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Cryptographic Policy",
+        status="Fail" if has_weak else ("Pass" if ssh_ciphers else "Warning"),
+        message=f"{get_core_id('CRYPTO', 4)}: SSH cipher strength",
+        details=f"Ciphers: {ssh_ciphers if ssh_ciphers else 'using system defaults (verify manually)'}",
+        remediation="Set strong ciphers in /etc/ssh/sshd_config: "
+                    "Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr",
+        severity="High"
+    ))
+
+    # Check SSH MACs
+    ssh_macs = ssh_config.get('macs', '')
+    weak_macs = ['hmac-md5', 'hmac-sha1', 'hmac-ripemd160']
+    has_weak_mac = any(wm in ssh_macs.lower() for wm in weak_macs) if ssh_macs else False
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Cryptographic Policy",
+        status="Fail" if has_weak_mac else ("Pass" if ssh_macs else "Warning"),
+        message=f"{get_core_id('CRYPTO', 5)}: SSH MAC algorithm strength",
+        details=f"MACs: {ssh_macs if ssh_macs else 'using system defaults (verify manually)'}",
+        remediation="Set strong MACs in /etc/ssh/sshd_config: "
+                    "MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com",
+        severity="Medium"
+    ))
+
+    # Check SSH Key Exchange algorithms
+    ssh_kex = ssh_config.get('kexalgorithms', '')
+    weak_kex = ['diffie-hellman-group1-sha1', 'diffie-hellman-group14-sha1',
+                'diffie-hellman-group-exchange-sha1']
+    has_weak_kex = any(wk in ssh_kex.lower() for wk in weak_kex) if ssh_kex else False
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Cryptographic Policy",
+        status="Fail" if has_weak_kex else ("Pass" if ssh_kex else "Warning"),
+        message=f"{get_core_id('CRYPTO', 6)}: SSH key exchange algorithm strength",
+        details=f"KexAlgorithms: {ssh_kex if ssh_kex else 'using system defaults (verify manually)'}",
+        remediation="Set strong KexAlgorithms in /etc/ssh/sshd_config: "
+                    "KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,"
+                    "diffie-hellman-group16-sha512",
+        severity="Medium"
+    ))
+
+
+# ============================================================================
+# Container / Docker Security
+# Phase 1 Gap: Core, CIS, NIST, STIG cross-cutting
+# ============================================================================
+
+def check_container_security(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Detect container runtime presence (Docker, Podman, containerd) and assess
+    basic security configuration including daemon settings, user namespaces,
+    and rootless mode.
+    """
+    cache = shared_data.get('cache')
+
+    # --- Detect container runtimes ---
+    runtimes_detected = []
+    for runtime in ["docker", "podman", "containerd", "crio"]:
+        if command_exists(runtime):
+            runtimes_detected.append(runtime)
+
+    if not runtimes_detected:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Container Security",
+            status="Info",
+            message=f"{get_core_id('CONT', 1)}: Container runtime detection",
+            details="No container runtimes detected (Docker, Podman, containerd, CRI-O)",
+            severity="Low"
+        ))
+        return
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Container Security",
+        status="Info",
+        message=f"{get_core_id('CONT', 1)}: Container runtime detection",
+        details=f"Detected runtimes: {', '.join(runtimes_detected)}",
+        severity="Low"
+    ))
+
+    # --- Docker-specific checks ---
+    if "docker" in runtimes_detected:
+        # Check Docker daemon configuration
+        docker_config_paths = ["/etc/docker/daemon.json"]
+        docker_config = ""
+        for dpath in docker_config_paths:
+            content = read_file_safe(dpath)
+            if content:
+                docker_config = content
+                break
+
+        # Docker daemon.json existence
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Container Security",
+            status="Pass" if docker_config else "Warning",
+            message=f"{get_core_id('CONT', 2)}: Docker daemon configuration",
+            details=f"daemon.json: {'configured' if docker_config else 'not found (using defaults)'}",
+            remediation="Create /etc/docker/daemon.json with security hardening options",
+            severity="Medium"
+        ))
+
+        if docker_config:
+            # Check for user namespace remapping
+            userns_remap = '"userns-remap"' in docker_config
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Container Security",
+                status="Pass" if userns_remap else "Warning",
+                message=f"{get_core_id('CONT', 3)}: Docker user namespace remapping",
+                details=f"userns-remap: {'enabled' if userns_remap else 'not configured'}",
+                remediation='Add "userns-remap": "default" to /etc/docker/daemon.json',
+                severity="Medium"
+            ))
+
+            # Check for live-restore
+            live_restore = '"live-restore"' in docker_config and "true" in docker_config.lower()
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Container Security",
+                status="Pass" if live_restore else "Info",
+                message=f"{get_core_id('CONT', 4)}: Docker live restore",
+                details=f"live-restore: {'enabled' if live_restore else 'not configured'}",
+                remediation='Add "live-restore": true to /etc/docker/daemon.json',
+                severity="Low"
+            ))
+
+            # Check for no-new-privileges default
+            no_new_priv = '"no-new-privileges"' in docker_config
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Container Security",
+                status="Pass" if no_new_priv else "Warning",
+                message=f"{get_core_id('CONT', 5)}: Docker no-new-privileges default",
+                details=f"no-new-privileges: {'enabled' if no_new_priv else 'not configured'}",
+                remediation='Add "no-new-privileges": true to /etc/docker/daemon.json',
+                severity="Medium"
+            ))
+
+        # Check Docker socket permissions
+        docker_sock = "/var/run/docker.sock"
+        if os.path.exists(docker_sock):
+            sock_perms = get_file_permissions(docker_sock)
+            sock_owner, sock_group = get_file_owner_group(docker_sock)
+            is_safe = sock_perms and int(sock_perms, 8) <= 0o660
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Container Security",
+                status="Pass" if is_safe else "Warning",
+                message=f"{get_core_id('CONT', 6)}: Docker socket permissions",
+                details=f"docker.sock: mode={sock_perms}, owner={sock_owner}:{sock_group}",
+                remediation="chmod 660 /var/run/docker.sock && chown root:docker /var/run/docker.sock",
+                severity="High"
+            ))
+
+    # --- Podman-specific: check for rootless configuration ---
+    if "podman" in runtimes_detected:
+        # Podman rootless check
+        result = run_command("podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null",
+                            check=False)
+        is_rootless = result.returncode == 0 and "true" in result.stdout.strip().lower()
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Container Security",
+            status="Pass" if is_rootless else "Info",
+            message=f"{get_core_id('CONT', 7)}: Podman rootless mode",
+            details=f"Rootless mode: {'active' if is_rootless else 'not active or not determinable'}",
+            remediation="Run Podman as non-root user for rootless container execution",
+            severity="Medium"
+        ))
+
+
+# ============================================================================
+# UEFI Secure Boot Validation
+# Phase 1 Gap: Core, STIG cross-cutting
+# ============================================================================
+
+def check_uefi_secureboot(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Validate UEFI Secure Boot status and related boot integrity settings
+    including GRUB password protection and kernel module signing.
+    """
+    cache = shared_data.get('cache')
+
+    # --- UEFI vs Legacy BIOS detection ---
+    is_uefi = os.path.isdir("/sys/firmware/efi")
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Boot Security",
+        status="Info",
+        message=f"{get_core_id('BOOT', 1)}: Boot firmware type",
+        details=f"Firmware: {'UEFI' if is_uefi else 'Legacy BIOS'}",
+        severity="Low"
+    ))
+
+    # --- Secure Boot status ---
+    if is_uefi:
+        # Check via mokutil (most reliable)
+        result = run_command("mokutil --sb-state 2>/dev/null", check=False)
+        if result.returncode == 0:
+            sb_output = result.stdout.strip()
+            sb_enabled = "enabled" in sb_output.lower() and "not" not in sb_output.lower()
+        else:
+            # Fallback: check EFI variable directly
+            sb_var = "/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c"
+            sb_enabled = False
+            if os.path.exists(sb_var):
+                try:
+                    with open(sb_var, 'rb') as f:
+                        data = f.read()
+                    # Last byte indicates state: 1 = enabled
+                    if len(data) >= 5 and data[-1] == 1:
+                        sb_enabled = True
+                except (PermissionError, IOError, OSError):
+                    pass
+            sb_output = f"SecureBoot: {'enabled' if sb_enabled else 'disabled/unknown'}"
+
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Boot Security",
+            status="Pass" if sb_enabled else "Warning",
+            message=f"{get_core_id('BOOT', 2)}: UEFI Secure Boot status",
+            details=sb_output,
+            remediation="Enable Secure Boot in UEFI firmware settings. "
+                        "Ensure all bootloaders and kernel modules are signed.",
+            severity="High"
+        ))
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Boot Security",
+            status="Info",
+            message=f"{get_core_id('BOOT', 2)}: UEFI Secure Boot status",
+            details="Not applicable (Legacy BIOS system)",
+            severity="Low"
+        ))
+
+    # --- GRUB password protection ---
+    grub_configs = [
+        "/boot/grub2/user.cfg",
+        "/boot/grub/grub.cfg",
+        "/boot/grub2/grub.cfg",
+        "/etc/grub.d/40_custom",
+        "/etc/grub.d/01_users",
+    ]
+    grub_password_set = False
+    for gpath in grub_configs:
+        content = read_file_safe(gpath)
+        if content and ("password_pbkdf2" in content or "set superusers" in content):
+            grub_password_set = True
+            break
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Boot Security",
+        status="Pass" if grub_password_set else "Warning",
+        message=f"{get_core_id('BOOT', 3)}: GRUB bootloader password protection",
+        details=f"GRUB password: {'configured' if grub_password_set else 'not configured'}",
+        remediation="grub2-setpassword  (or grub-mkpasswd-pbkdf2 and add to /etc/grub.d/40_custom)",
+        severity="High"
+    ))
+
+    # --- Kernel module signature enforcement ---
+    sig_enforce_path = "/proc/sys/kernel/modules_disabled"
+    mod_sig_exists, mod_sig_value = check_kernel_parameter("kernel.modules_disabled", cache=cache)
+    # Also check kernel config for CONFIG_MODULE_SIG_FORCE
+    result = run_command("cat /boot/config-$(uname -r) 2>/dev/null | grep CONFIG_MODULE_SIG_FORCE",
+                        check=False)
+    sig_force = "CONFIG_MODULE_SIG_FORCE=y" in result.stdout if result.returncode == 0 else False
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Boot Security",
+        status="Pass" if sig_force else ("Info" if mod_sig_exists else "Info"),
+        message=f"{get_core_id('BOOT', 4)}: Kernel module signature enforcement",
+        details=f"CONFIG_MODULE_SIG_FORCE: {'enabled' if sig_force else 'not enforced'}, "
+                f"modules_disabled: {mod_sig_value if mod_sig_exists else 'not set'}",
+        remediation="Rebuild kernel with CONFIG_MODULE_SIG_FORCE=y for mandatory module signing",
+        severity="Medium"
+    ))
+
+    # --- Kernel command line security parameters ---
+    cmdline = read_file_safe("/proc/cmdline") or ""
+    security_params = {
+        "quiet": "Suppress verbose boot messages",
+        "init_on_alloc=1": "Zero-fill memory on allocation",
+        "init_on_free=1": "Zero-fill memory on deallocation",
+        "slab_nomerge": "Prevent slab cache merging (hardening)",
+        "page_alloc.shuffle=1": "Randomize page allocator freelists",
+        "randomize_kstack_offset=on": "Randomize kernel stack offset",
+        "vsyscall=none": "Disable vsyscall (legacy interface)",
+    }
+    found_params = []
+    missing_params = []
+    for param, desc in security_params.items():
+        if param in cmdline:
+            found_params.append(param)
+        else:
+            missing_params.append(param)
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Boot Security",
+        status="Pass" if len(found_params) >= 3 else (
+            "Warning" if len(found_params) >= 1 else "Info"),
+        message=f"{get_core_id('BOOT', 5)}: Kernel command line hardening parameters",
+        details=f"Present: {', '.join(found_params) if found_params else 'none'}; "
+                f"Missing: {', '.join(missing_params[:4]) if missing_params else 'none'}",
+        remediation="Add hardening parameters to GRUB_CMDLINE_LINUX in /etc/default/grub "
+                    "and run update-grub",
+        severity="Medium"
+    ))
+
+
+def check_cloud_security(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Cloud instance security checks.
+
+    Detects whether the system is running in a cloud environment (AWS, Azure, GCP)
+    and validates metadata endpoint protection, instance identity, and cloud-specific
+    hardening. These checks are skipped gracefully on non-cloud systems.
+
+    Relevant frameworks: NIST AC-4, CISA Zero Trust, CIS cloud benchmarks
+    """
+    cache = shared_data.get('cache')
+    is_root = shared_data.get("is_root", os.geteuid() == 0)
+
+    # ---- Detect cloud environment ----
+    cloud_provider = "none"
+    cloud_indicators = []
+
+    # Check DMI/BIOS for cloud signatures
+    dmi_paths = [
+        "/sys/class/dmi/id/board_vendor",
+        "/sys/class/dmi/id/sys_vendor",
+        "/sys/class/dmi/id/bios_vendor",
+        "/sys/class/dmi/id/chassis_asset_tag",
+        "/sys/class/dmi/id/product_name",
+    ]
+    for dmi_path in dmi_paths:
+        try:
+            if os.path.exists(dmi_path):
+                with open(dmi_path, 'r') as f:
+                    value = f.read().strip().lower()
+                if 'amazon' in value or 'ec2' in value:
+                    cloud_provider = "AWS"
+                    cloud_indicators.append(f"{dmi_path}: {value}")
+                elif 'microsoft' in value or 'azure' in value:
+                    cloud_provider = "Azure"
+                    cloud_indicators.append(f"{dmi_path}: {value}")
+                elif 'google' in value or 'gce' in value:
+                    cloud_provider = "GCP"
+                    cloud_indicators.append(f"{dmi_path}: {value}")
+        except (PermissionError, IOError):
+            pass
+
+    # CLOUD-001: Cloud environment detection
+    if cloud_provider != "none":
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cloud Security",
+            status="Info",
+            message=f"{get_core_id('CLOUD', 1)}: Cloud environment detected: {cloud_provider}",
+            details=f"Indicators: {'; '.join(cloud_indicators[:3])}",
+            severity="Informational",
+        ))
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cloud Security",
+            status="Info",
+            message=f"{get_core_id('CLOUD', 1)}: No cloud environment detected (bare metal or VM)",
+            details="No AWS/Azure/GCP DMI signatures found",
+            severity="Informational",
+        ))
+        # Skip remaining cloud checks if not in cloud
+        return
+
+    # CLOUD-002: IMDS (Instance Metadata Service) protection
+    # AWS IMDSv2, Azure IMDS, GCP metadata - check if iptables blocks 169.254.169.254
+    imds_blocked = False
+    iptables_result = run_command("iptables -L OUTPUT -n 2>/dev/null")
+    if iptables_result.returncode == 0:
+        if '169.254.169.254' in iptables_result.stdout:
+            imds_blocked = True
+
+    # Also check if IMDSv2 is enforced (AWS-specific: check for hop limit)
+    imds_details = "Metadata endpoint 169.254.169.254 "
+    if cloud_provider == "AWS":
+        # Token-based IMDSv2 detection: check if curl to metadata works without token
+        token_check = run_command(
+            "curl -s -o /dev/null -w '%{http_code}' --connect-timeout 2 "
+            "http://169.254.169.254/latest/meta-data/ 2>/dev/null", cache=cache
+        )
+        if token_check.returncode == 0 and token_check.stdout.strip() == '401':
+            imds_details += "IMDSv2 enforced (token required)"
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Cloud Security",
+                status="Pass",
+                message=f"{get_core_id('CLOUD', 2)}: AWS IMDSv2 enforced (High)",
+                details=imds_details,
+                severity="High",
+            ))
+        elif imds_blocked:
+            imds_details += "blocked via iptables"
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Cloud Security",
+                status="Pass",
+                message=f"{get_core_id('CLOUD', 2)}: Metadata endpoint blocked by firewall (High)",
+                details=imds_details,
+                severity="High",
+            ))
+        else:
+            imds_details += "may be accessible without IMDSv2 token"
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Cloud Security",
+                status="Fail",
+                message=f"{get_core_id('CLOUD', 2)}: AWS IMDSv1 may be enabled - enforce IMDSv2 (High)",
+                details=imds_details,
+                remediation="aws ec2 modify-instance-metadata-options --instance-id <ID> "
+                            "--http-tokens required --http-endpoint enabled",
+                severity="High",
+            ))
+    else:
+        # Generic IMDS firewall check for Azure/GCP
+        if imds_blocked:
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Cloud Security",
+                status="Pass",
+                message=f"{get_core_id('CLOUD', 2)}: Metadata endpoint restricted by firewall (High)",
+                details="iptables rule blocks 169.254.169.254",
+                severity="High",
+            ))
+        else:
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Cloud Security",
+                status="Warning",
+                message=f"{get_core_id('CLOUD', 2)}: No firewall rule restricting metadata endpoint (High)",
+                details="Consider restricting 169.254.169.254 to authorized processes only",
+                remediation="iptables -A OUTPUT -d 169.254.169.254 -j REJECT "
+                            "(or use cloud-native IMDS restrictions)",
+                severity="High",
+            ))
+
+    # CLOUD-003: Cloud-init configuration security
+    cloud_init_paths = ["/etc/cloud/cloud.cfg", "/etc/cloud/cloud.cfg.d/"]
+    cloud_init_found = False
+    for ci_path in cloud_init_paths:
+        if os.path.exists(ci_path):
+            cloud_init_found = True
+            break
+
+    if cloud_init_found:
+        # Check if user-data scripts are restricted
+        ci_content = read_file_safe("/etc/cloud/cloud.cfg")
+        if ci_content:
+            user_data_disabled = 'allow_userdata: false' in ci_content.lower()
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Cloud Security",
+                status="Pass" if user_data_disabled else "Warning",
+                message=f"{get_core_id('CLOUD', 3)}: Cloud-init user-data script execution (Medium)",
+                details="User-data disabled" if user_data_disabled else
+                        "User-data scripts are enabled (potential code execution vector)",
+                severity="Medium",
+            ))
+        else:
+            results.append(AuditResult(
+                module=MODULE_NAME,
+                category="CORE - Cloud Security",
+                status="Info",
+                message=f"{get_core_id('CLOUD', 3)}: Cloud-init present but config unreadable (Medium)",
+                details="Unable to read /etc/cloud/cloud.cfg",
+                severity="Medium",
+            ))
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cloud Security",
+            status="Info",
+            message=f"{get_core_id('CLOUD', 3)}: Cloud-init not installed",
+            details="Not applicable for this instance configuration",
+            severity="Informational",
+        ))
+
+    # CLOUD-004: Instance identity document / credentials on disk
+    credential_paths = [
+        "/root/.aws/credentials",
+        "/home/*/.aws/credentials",
+        "/root/.azure/accessTokens.json",
+        "/root/.config/gcloud/credentials.db",
+        "/root/.config/gcloud/application_default_credentials.json",
+    ]
+    creds_found = []
+    for cred_pattern in credential_paths:
+        import glob as _glob
+        matches = _glob.glob(cred_pattern)
+        creds_found.extend(matches)
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Cloud Security",
+        status="Fail" if creds_found else "Pass",
+        message=f"{get_core_id('CLOUD', 4)}: Cloud credentials stored on disk (Critical)" if creds_found else
+                f"{get_core_id('CLOUD', 4)}: No cloud credentials on disk (Critical)",
+        details=f"Found: {', '.join(creds_found[:5])}" if creds_found else
+                "No AWS/Azure/GCP credential files found in common locations",
+        remediation="Use IAM instance roles/managed identities instead of stored credentials. "
+                    "Remove credential files and rotate exposed keys." if creds_found else "",
+        severity="Critical" if creds_found else "Critical",
+    ))
+
+    # CLOUD-005: Instance tags / role assignment check
+    # Check if instance has an IAM role (AWS), managed identity (Azure), or service account (GCP)
+    if cloud_provider == "AWS":
+        role_check = run_command(
+            "curl -s --connect-timeout 2 http://169.254.169.254/latest/meta-data/iam/info 2>/dev/null"
+        )
+        has_role = role_check.returncode == 0 and 'InstanceProfileArn' in role_check.stdout
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cloud Security",
+            status="Pass" if has_role else "Warning",
+            message=f"{get_core_id('CLOUD', 5)}: IAM instance role assignment (High)",
+            details="Instance has IAM role attached" if has_role else
+                    "No IAM instance role detected - use roles for API access instead of keys",
+            severity="High",
+        ))
+    elif cloud_provider == "Azure":
+        identity_check = run_command(
+            "curl -s --connect-timeout 2 -H 'Metadata:true' "
+            "'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01"
+            "&resource=https://management.azure.com/' 2>/dev/null"
+        )
+        has_identity = identity_check.returncode == 0 and 'access_token' in identity_check.stdout
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cloud Security",
+            status="Info",
+            message=f"{get_core_id('CLOUD', 5)}: Azure managed identity {'enabled' if has_identity else 'not detected'}",
+            details="Managed identity available" if has_identity else
+                    "No managed identity - consider enabling for Azure resource access",
+            severity="High",
+        ))
+    elif cloud_provider == "GCP":
+        sa_check = run_command(
+            "curl -s --connect-timeout 2 -H 'Metadata-Flavor: Google' "
+            "'http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/email' 2>/dev/null"
+        )
+        has_sa = sa_check.returncode == 0 and '@' in sa_check.stdout
+        sa_email = sa_check.stdout.strip() if has_sa else "none"
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Cloud Security",
+            status="Pass" if has_sa else "Warning",
+            message=f"{get_core_id('CLOUD', 5)}: GCP service account {'attached' if has_sa else 'not detected'} (High)",
+            details=f"Service account: {sa_email}" if has_sa else
+                    "No service account attached - consider assigning one with least-privilege scope",
+            severity="High",
+        ))
+
+
+# ============================================================================
 # Main Orchestration Function
 # ============================================================================
 
@@ -2059,17 +3778,27 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     """
     results = []
     
+    # Extract SharedDataCache from shared_data (populated by main script)
+    cache = shared_data.get('cache')
+    
     print(f"\n[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] CORE SECURITY BASELINE AUDIT")
     print(f"[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
     print(f"[{MODULE_NAME}] Focus: Industry Best Practices with OS-Specific Guidance")
-    print(f"[{MODULE_NAME}] Areas: OS, Packages, Services, Users, Filesystem, Network, Hardening")
-    print(f"[{MODULE_NAME}] Target: 130+ comprehensive OS-aware checks")
+    print(f"[{MODULE_NAME}] Areas: OS, Packages, Services, Users, Filesystem, Network, Hardening, Advanced,")
+    print(f"[{MODULE_NAME}]        Kernel Security, systemd, Cryptography, Containers, Boot, Cloud Security")
+    print(f"[{MODULE_NAME}] Target: 200+ comprehensive OS-aware checks")
+    if cache:
+        print(f"[{MODULE_NAME}] Cache: Enabled ({cache.get_summary()['files_cached']} files, "
+              f"{cache.get_summary()['commands_cached']} commands cached)")
     print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
-    # Detect operating system
-    os_info = detect_os()
+    # Get OS info from cache if available (avoids redundant detection)
+    if cache and cache.os_info:
+        os_info = cache.os_info
+    else:
+        os_info = detect_os()
     shared_data['os_info'] = os_info
     
     print(f"[{MODULE_NAME}] Operating System: {os_info}")
@@ -2079,7 +3808,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
-        print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}]   Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
     try:
@@ -2088,9 +3817,17 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         check_service_user_management(results, shared_data, os_info)
         check_filesystem_network(results, shared_data, os_info)
         check_system_hardening_tools(results, shared_data, os_info)
+        check_advanced_security(results, shared_data, os_info)
+        # Phase 1 cross-cutting checks
+        check_kernel_security_modules(results, shared_data, os_info)
+        check_systemd_hardening(results, shared_data, os_info)
+        check_crypto_policy(results, shared_data, os_info)
+        check_container_security(results, shared_data, os_info)
+        check_uefi_secureboot(results, shared_data, os_info)
+        check_cloud_security(results, shared_data, os_info)
         
     except Exception as e:
-        print(f"[{MODULE_NAME}] ❌ Error during audit execution: {str(e)}")
+        print(f"[{MODULE_NAME}]  Error during audit execution: {str(e)}")
         results.append(AuditResult(
             module=MODULE_NAME,
             category="CORE - Error",
@@ -2121,12 +3858,11 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
-    print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ❌ Fail:    {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
-    if error_count > 0:
-        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
+    print(f"[{MODULE_NAME}]   Passed:  {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Failed:  {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Warnings: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Errors:  {error_count:3d} ({error_count/len(results)*100:.1f}%)")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Check Categories:")
     print(f"[{MODULE_NAME}]   OS & Packages:         {os_checks:3d} checks")
@@ -2152,12 +3888,21 @@ if __name__ == "__main__":
     print("Comprehensive Linux Security Baseline")
     print("="*80)
     
+    # Initialize cache if shared library is available
+    cache = None
+    if HAS_COMMON_LIB:
+        os_info = detect_os()
+        cache = SharedDataCache(os_info)
+        cache.warm_up()
+        print(f"  Cache: Enabled ({cache.get_summary()['files_cached']} files cached)")
+    
     # Prepare test environment data
     test_data = {
         "hostname": socket.gethostname(),
         "scan_date": datetime.datetime.now(),
         "is_root": os.geteuid() == 0,
-        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd()
+        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd(),
+        "cache": cache,
     }
     
     print(f"\nTest Environment:")
@@ -2184,7 +3929,7 @@ if __name__ == "__main__":
         count = status_counts.get(status, 0)
         if count > 0:
             pct = (count / len(test_results)) * 100
-            bar = '█' * int(pct / 2)
+            bar = '#' * int(pct / 2)
             print(f"  {status:8s}: {count:3d} ({pct:5.1f}%) {bar}")
     
     # Category breakdown
@@ -2198,3 +3943,7 @@ if __name__ == "__main__":
     print(f"CORE module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
+
+# ============================================================================
+# End of module_core.py
+# ============================================================================
