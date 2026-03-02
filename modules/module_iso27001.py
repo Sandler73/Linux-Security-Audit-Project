@@ -2,7 +2,7 @@
 """
 module_iso27001.py
 ISO/IEC 27001:2022 Technical Controls Module for Linux
-Version: 1.1
+Version: 2.2
 
 SYNOPSIS:
     Comprehensive ISO/IEC 27001:2022 compliance assessment focusing on
@@ -55,10 +55,16 @@ USAGE:
         python3 linux_security_audit.py -m iso27001
 
 NOTES:
-    Version: 1.1
+    Version: 2.0
     Focus: ISO 27001:2022 Annex A Technical Controls
     Target: 150+ comprehensive, OS-aware technical control checks
     Module automatically detects OS via module_core integration
+    
+    v2.0 Changes:
+    - Uses audit_common.py shared library (eliminates duplicated helpers)
+    - SharedDataCache integration for cached file/command lookups
+    - Severity levels on all AuditResults
+    - Thread-safe for parallel execution
 """
 
 import os
@@ -70,100 +76,94 @@ import grp
 import glob
 import socket
 import platform
-import shutil
+import time
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
-# Import AuditResult from main script
+# ============================================================================
+# Shared Library Integration
+# ============================================================================
+# Import consolidated utilities from audit_common.py
+# This eliminates duplicated helper functions across all modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from linux_security_audit import AuditResult
-
-MODULE_NAME = "ISO27001"
-MODULE_VERSION = "1.1"
-
-# ============================================================================
-# Import OS Detection from Core Module
-# ============================================================================
+sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    # Try to import OS detection from module_core
-    sys.path.insert(0, str(Path(__file__).parent))
-    from module_core import (
-        OSInfo, detect_os, run_command, command_exists, read_file_safe,
-        check_service_enabled, check_service_active, check_package_installed,
-        get_file_permissions, get_file_owner_group, check_kernel_parameter,
-        safe_int_parse, get_security_updates
+    # Try shared_components package first (standard deployment)
+    from shared_components.audit_common import (
+        # Core classes
+        AuditResult, OSInfo, SharedDataCache,
+        # OS detection
+        detect_os,
+        # Command execution (cached)
+        run_command, command_exists, read_file_safe,
+        # Service checks (cache-aware)
+        check_service_enabled, check_service_active,
+        # Package checks (OS-aware)
+        check_package_installed,
+        # File checks
+        get_file_permissions, get_file_permissions_full,
+        get_file_owner_group, check_file_exists,
+        # Kernel parameters (cache-aware)
+        check_kernel_parameter, check_mount_option,
+        # Security subsystems (cache-aware)
+        get_selinux_status, get_apparmor_status, get_firewall_status,
+        check_fips_mode, check_ipv6_enabled,
+        # SSH configuration (cache-aware)
+        get_ssh_config_value, get_ssh_config_all,
+        # Network
+        get_listening_ports, get_loaded_kernel_modules,
+        # PAM & password policy (cache-aware)
+        check_pam_module, get_password_policy,
+        # User accounts (cache-aware)
+        get_user_accounts, get_system_users, get_human_users,
+        # Parsing helpers
+        safe_int_parse, safe_float_parse,
+        # Audit rules & GRUB
+        get_audit_rules, get_grub_cmdline, check_grub_parameter,
+        # Updates (OS-aware)
+        get_available_updates, get_security_updates,
+        # ID generation
+        generate_check_id,
+        # Logging
+        get_module_logger,
     )
-    HAS_CORE_MODULE = True
+    HAS_COMMON_LIB = True
 except ImportError:
-    HAS_CORE_MODULE = False
-    
-    # Fallback: Minimal implementation if core module not available
-    class OSInfo:
-        def __init__(self):
-            self.family = "Unknown"
-            self.distro = "Unknown"
-            self.package_manager = "Unknown"
-    
-    def detect_os():
-        os_info = OSInfo()
-        if os.path.exists("/etc/debian_version"):
-            os_info.family = "debian"
-            os_info.package_manager = "apt"
-        elif os.path.exists("/etc/redhat-release"):
-            os_info.family = "redhat"
-            os_info.package_manager = "yum"
-        return os_info
-    
-    def run_command(command: str, check: bool = False):
-        return subprocess.run(command, shell=True, capture_output=True, text=True)
-    
-    def command_exists(command: str):
-        return run_command(f"which {command} 2>/dev/null").returncode == 0
-    
-    def read_file_safe(filepath: str):
-        try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                return f.read()
-        except:
-            return ""
-    
-    def check_service_active(service: str):
-        return run_command(f"systemctl is-active {service} 2>/dev/null").returncode == 0
-    
-    def check_package_installed(package: str, os_info):
-        if os_info.package_manager == 'apt':
-            return run_command(f"dpkg -l {package} 2>/dev/null | grep -q '^ii'").returncode == 0
-        else:
-            return run_command(f"rpm -q {package} 2>/dev/null").returncode == 0
-    
-    def get_file_permissions(filepath: str):
-        try:
-            return oct(os.stat(filepath).st_mode)[-3:]
-        except:
-            return None
-    
-    def check_kernel_parameter(param: str):
-        result = run_command(f"sysctl {param} 2>/dev/null")
-        if result.returncode == 0:
-            match = re.search(r'=\s*(.+)', result.stdout)
-            if match:
-                return True, match.group(1).strip()
-        return False, ""
-    
-    def safe_int_parse(value: str, default: int = 0):
-        try:
-            return int(value.strip()) if value and value.strip().isdigit() else default
-        except:
-            return default
-    
-    def get_security_updates(os_info):
-        return 0
+    try:
+        # Fallback: flat-file layout (audit_common.py in same directory)
+        from audit_common import (
+            AuditResult, OSInfo, SharedDataCache, detect_os,
+            run_command, command_exists, read_file_safe,
+            check_service_enabled, check_service_active,
+            check_package_installed, get_file_permissions,
+            get_file_permissions_full, get_file_owner_group,
+            check_file_exists, check_kernel_parameter,
+            check_mount_option, get_selinux_status,
+            get_apparmor_status, get_firewall_status,
+            check_fips_mode, check_ipv6_enabled,
+            get_ssh_config_value, get_ssh_config_all,
+            get_listening_ports, get_loaded_kernel_modules,
+            check_pam_module, get_password_policy,
+            get_user_accounts, get_system_users, get_human_users,
+            safe_int_parse, safe_float_parse,
+            get_audit_rules, get_grub_cmdline, check_grub_parameter,
+            get_available_updates, get_security_updates,
+            generate_check_id, get_module_logger,
+        )
+        HAS_COMMON_LIB = True
+    except ImportError:
+        # Fallback: import AuditResult from main script (backward compatibility)
+        from linux_security_audit import AuditResult
+        HAS_COMMON_LIB = False
 
-# ============================================================================
-# ISO 27001 Helper Functions
-# ============================================================================
+MODULE_NAME = "ISO27001"
+MODULE_VERSION = "2.2"
+
+# Module logger (uses structured logging if audit_common is available)
+logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
 
 def get_iso_id(control: str, number: int) -> str:
     """Generate ISO 27001 control ID"""
@@ -273,6 +273,9 @@ def check_user_endpoint_devices(results: List[AuditResult], shared_data: Dict[st
     Information stored on, processed by or accessible via user endpoint devices
     shall be protected
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking A.8.1 User Endpoint Devices...")
     
     # A.8.1-001: Screen lock configured
@@ -500,6 +503,9 @@ def check_privileged_access_authentication(results: List[AuditResult], shared_da
     ISO 27001 A.8.4: Access to source code
     ISO 27001 A.8.5: Secure authentication
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking A.8.2-A.8.5 Access Control & Authentication...")
     
     # A.8.2: Privileged Access Rights
@@ -957,6 +963,9 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
     ISO 27001 A.8.9: Configuration management
     ISO 27001 A.8.10: Information deletion
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking A.8.6-A.8.10 Protection & Management...")
     
     # A.8.6: Capacity Management
@@ -1339,6 +1348,9 @@ def check_backup_monitoring_network(results: List[AuditResult], shared_data: Dic
     ISO 27001 A.8.14-A.8.17: Reliability and monitoring  
     ISO 27001 A.8.18-A.8.20: System and network security
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking A.8.11-A.8.20 Backup, Monitoring & Network...")
     
     # A.8.13: Information Backup
@@ -1709,6 +1721,9 @@ def check_network_services_cryptography(results: List[AuditResult], shared_data:
     ISO 27001 A.8.23: Web filtering
     ISO 27001 A.8.24: Use of cryptography
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking A.8.21-A.8.24 Network Services & Cryptography...")
     
     # A.8.21: Security of Network Services
@@ -1989,6 +2004,348 @@ def check_network_services_cryptography(results: List[AuditResult], shared_data:
 
 
 # ============================================================================
+# ISO 27001:2022 - Additional A.8 Technology Controls
+# Phase 1 Gap: A.8.11, A.8.12, A.8.18, A.8.19, A.8.23
+# ============================================================================
+
+def check_additional_technology_controls(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    ISO 27001:2022 Annex A technology controls not covered by existing checks.
+    A.8.11 Data Masking, A.8.12 Data Leakage Prevention, A.8.18 Privileged
+    Utility Programs, A.8.19 Software Installation, A.8.23 Web Filtering.
+    """
+    cache = shared_data.get('cache')
+
+    # --- A.8.11 Data Masking ---
+    # Check for data masking/anonymization tools or configurations
+    masking_indicators = [
+        command_exists("pg_anonymize"),
+        command_exists("anonimatron"),
+        os.path.exists("/etc/postgresql") and command_exists("psql"),
+    ]
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.11 Data Masking",
+        status="Info",
+        message=f"{get_iso_id('11', 1)}: Data masking capability assessment",
+        details="Data masking tools should be evaluated for sensitive data environments. "
+                "Check application-level masking for PII, PHI, and financial data.",
+        remediation="Implement data masking for non-production environments containing sensitive data",
+        severity="Medium"
+    ))
+
+    # --- A.8.12 Data Leakage Prevention ---
+    # Check for DLP-relevant configurations
+    # USB restriction
+    usb_blocked = False
+    for bf in ["/etc/modprobe.d/blacklist.conf", "/etc/modprobe.d/disable-usb-storage.conf"]:
+        content = read_file_safe(bf)
+        if content and ("blacklist usb-storage" in content or "install usb-storage /bin/false" in content):
+            usb_blocked = True
+            break
+
+    # Check for outbound mail relay restrictions
+    postfix_conf = read_file_safe("/etc/postfix/main.cf")
+    mail_restricted = postfix_conf and "mynetworks" in postfix_conf if postfix_conf else False
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.12 Data Leakage Prevention",
+        status="Pass" if usb_blocked else "Warning",
+        message=f"{get_iso_id('12', 1)}: USB storage data exfiltration prevention",
+        details=f"USB storage: {'blocked' if usb_blocked else 'not restricted'}",
+        remediation="echo 'install usb-storage /bin/false' > /etc/modprobe.d/disable-usb-storage.conf",
+        severity="Medium"
+    ))
+
+    # Check core dump restriction (prevents data leakage via crashes)
+    limits_conf = read_file_safe("/etc/security/limits.conf") or ""
+    core_limited = "* hard core 0" in limits_conf
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.12 Data Leakage Prevention",
+        status="Pass" if core_limited else "Warning",
+        message=f"{get_iso_id('12', 2)}: Core dump restriction",
+        details=f"Core dumps: {'restricted' if core_limited else 'not restricted in limits.conf'}",
+        remediation="Add '* hard core 0' to /etc/security/limits.conf",
+        severity="Medium"
+    ))
+
+    # --- A.8.18 Use of Privileged Utility Programs ---
+    # Check sudo configuration and restriction
+    sudo_conf = read_file_safe("/etc/sudoers")
+    has_nopasswd = False
+    if sudo_conf:
+        for line in sudo_conf.splitlines():
+            if "NOPASSWD" in line and not line.strip().startswith('#'):
+                has_nopasswd = True
+                break
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.18 Use of Privileged Utility Programs",
+        status="Warning" if has_nopasswd else "Pass",
+        message=f"{get_iso_id('18', 1)}: Sudo NOPASSWD restrictions",
+        details=f"NOPASSWD entries: {'found (potential risk)' if has_nopasswd else 'none found'}",
+        remediation="Remove NOPASSWD entries from /etc/sudoers where possible",
+        severity="Medium"
+    ))
+
+    # Check for dangerous SUID binaries
+    result = run_command("find /usr -xdev -type f -perm -4000 2>/dev/null | wc -l", check=False)
+    suid_count = safe_int_parse(result.stdout.strip(), default=0)
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.18 Use of Privileged Utility Programs",
+        status="Pass" if suid_count <= 15 else ("Warning" if suid_count <= 30 else "Fail"),
+        message=f"{get_iso_id('18', 2)}: SUID binary inventory",
+        details=f"SUID binaries found: {suid_count}",
+        remediation="Audit SUID binaries: find / -perm -4000 -type f; remove unnecessary SUID bits",
+        severity="Medium"
+    ))
+
+    # --- A.8.19 Installation of Software on Operational Systems ---
+    # Check if package installation is restricted to root
+    pkg_mgr = os_info.package_manager
+    apt_root_only = True  # Package managers require root by default
+    # Check for polkit rules that might allow non-root installs
+    polkit_rules = read_file_safe("/etc/polkit-1/localauthority/50-local.d") or ""
+    if "org.freedesktop.packagekit" in polkit_rules.lower():
+        apt_root_only = False
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.19 Installation of Software",
+        status="Pass" if apt_root_only else "Warning",
+        message=f"{get_iso_id('19', 1)}: Software installation restricted to administrators",
+        details=f"Package manager ({pkg_mgr}): "
+                f"{'root-only' if apt_root_only else 'may allow non-root via polkit'}",
+        remediation="Review polkit policies to restrict software installation to administrators",
+        severity="Medium"
+    ))
+
+    # Check for snap/flatpak (alternate installation channels)
+    alt_pkg = []
+    for alt in ["snap", "flatpak"]:
+        if command_exists(alt):
+            alt_pkg.append(alt)
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.19 Installation of Software",
+        status="Info" if alt_pkg else "Pass",
+        message=f"{get_iso_id('19', 2)}: Alternative package manager presence",
+        details=f"Alternative installers: {', '.join(alt_pkg) if alt_pkg else 'none'}",
+        remediation="Audit and restrict alternative package managers in production environments",
+        severity="Low"
+    ))
+
+    # --- A.8.23 Web Filtering ---
+    # Check for web filtering/proxy configuration
+    proxy_env = os.environ.get("http_proxy", "") or os.environ.get("HTTP_PROXY", "")
+    squid_active = False
+    result = run_command("systemctl is-active squid 2>/dev/null", check=False)
+    if result.returncode == 0 and "active" in result.stdout:
+        squid_active = True
+
+    # Check for hosts-based blocking
+    hosts_content = read_file_safe("/etc/hosts") or ""
+    hosts_entries = len([l for l in hosts_content.splitlines()
+                        if l.strip() and not l.strip().startswith('#')])
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.23 Web Filtering",
+        status="Pass" if (proxy_env or squid_active) else "Info",
+        message=f"{get_iso_id('23', 1)}: Web filtering/proxy configuration",
+        details=f"HTTP proxy: {'configured' if proxy_env else 'not set'}, "
+                f"Squid proxy: {'active' if squid_active else 'not active'}, "
+                f"/etc/hosts entries: {hosts_entries}",
+        remediation="Configure web proxy or DNS-based filtering for content control",
+        severity="Low"
+    ))
+
+
+# ============================================================================
+# A.8.25 - Secure Development Life Cycle
+# A.8.26 - Application Security Requirements
+# ============================================================================
+
+def check_secure_development(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    ISO 27001:2022 A.8.25 Secure Development Life Cycle
+    ISO 27001:2022 A.8.26 Application Security Requirements
+
+    Checks for presence of secure development tools, code quality/security
+    analysis tools, and application security controls on the system.
+    These checks assess whether the host supports secure development practices.
+    """
+    cache = shared_data.get('cache')
+
+    # ---- A.8.25: Secure Development Life Cycle ----
+
+    # A.8.25-001: Static analysis tools available
+    static_tools = {
+        'bandit': 'Python security linter',
+        'pylint': 'Python code quality',
+        'flake8': 'Python style/error checker',
+        'shellcheck': 'Shell script analyzer',
+        'cppcheck': 'C/C++ static analysis',
+        'semgrep': 'Multi-language SAST',
+    }
+    found_tools = []
+    for tool, desc in static_tools.items():
+        if command_exists(tool):
+            found_tools.append(f"{tool} ({desc})")
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.25 Secure Development Life Cycle",
+        status="Pass" if found_tools else "Info",
+        message="A.8.25-001: Static code analysis tools available",
+        details=f"Found: {', '.join(found_tools)}" if found_tools else "No static analysis tools detected",
+        remediation="Install security analysis tools: apt install shellcheck, pip install bandit pylint",
+        severity="Low",
+        cross_references={'NIST': 'SA-11', 'CIS': 'N/A'}
+    ))
+
+    # A.8.25-002: Version control system present
+    vcs_tools = ['git', 'svn', 'hg']
+    found_vcs = [t for t in vcs_tools if command_exists(t)]
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.25 Secure Development Life Cycle",
+        status="Pass" if found_vcs else "Info",
+        message="A.8.25-002: Version control system available",
+        details=f"Found: {', '.join(found_vcs)}" if found_vcs else "No VCS tools detected",
+        remediation="Install version control: apt install git",
+        severity="Low",
+        cross_references={'NIST': 'CM-3'}
+    ))
+
+    # A.8.25-003: Code signing capabilities
+    gpg_available = command_exists("gpg") or command_exists("gpg2")
+    sign_result = run_command("gpg --list-secret-keys 2>/dev/null | grep -c 'sec'")
+    has_signing_keys = safe_int_parse(sign_result.stdout.strip()) > 0 if sign_result.returncode == 0 else False
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.25 Secure Development Life Cycle",
+        status="Pass" if gpg_available and has_signing_keys else "Warning" if gpg_available else "Info",
+        message="A.8.25-003: Code signing capability assessment",
+        details=f"GPG: {'installed' if gpg_available else 'not installed'}, "
+                f"Signing keys: {'present' if has_signing_keys else 'none found'}",
+        remediation="Install GPG and generate signing keys: apt install gnupg && gpg --gen-key",
+        severity="Low",
+        cross_references={'NIST': 'SI-7'}
+    ))
+
+    # A.8.25-004: Secure build tools
+    build_tools = {
+        'make': 'Build automation',
+        'cmake': 'Cross-platform build',
+        'gcc': 'C compiler with security flags',
+    }
+    found_build = []
+    for tool, desc in build_tools.items():
+        if command_exists(tool):
+            found_build.append(tool)
+
+    # Check for compiler hardening flags support
+    hardening_check = ""
+    if command_exists("gcc"):
+        result = run_command("gcc -v 2>&1 | grep -iE 'stack-protector|fortify|pie'")
+        hardening_check = result.stdout.strip() if result.returncode == 0 else "Unable to check"
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.25 Secure Development Life Cycle",
+        status="Pass" if found_build else "Info",
+        message="A.8.25-004: Secure build toolchain assessment",
+        details=f"Build tools: {', '.join(found_build) if found_build else 'none'}",
+        remediation="Install build tools with security flags: apt install build-essential",
+        severity="Low",
+        cross_references={'NIST': 'SA-15'}
+    ))
+
+    # ---- A.8.26: Application Security Requirements ----
+
+    # A.8.26-001: Security testing tools
+    security_tools = {
+        'nmap': 'Network scanner',
+        'nikto': 'Web vulnerability scanner',
+        'lynis': 'Security auditing tool',
+        'openvas': 'Vulnerability assessment',
+        'trivy': 'Container/IaC scanner',
+        'grype': 'Vulnerability scanner for containers',
+    }
+    found_sec = []
+    for tool, desc in security_tools.items():
+        if command_exists(tool):
+            found_sec.append(f"{tool} ({desc})")
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.26 Application Security Requirements",
+        status="Pass" if found_sec else "Info",
+        message="A.8.26-001: Security testing tools available",
+        details=f"Found: {', '.join(found_sec)}" if found_sec else "No security testing tools detected",
+        remediation="Install security testing tools: apt install nmap lynis",
+        severity="Low",
+        cross_references={'NIST': 'RA-5', 'DISA_STIG': 'SRG-OS-000480'}
+    ))
+
+    # A.8.26-002: Dependency vulnerability scanning
+    dep_scanners = ['pip-audit', 'safety', 'npm audit', 'snyk']
+    found_dep = [t for t in dep_scanners if command_exists(t.split()[0])]
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.26 Application Security Requirements",
+        status="Pass" if found_dep else "Info",
+        message="A.8.26-002: Dependency vulnerability scanning capability",
+        details=f"Found: {', '.join(found_dep)}" if found_dep else "No dependency scanners detected",
+        remediation="Install dependency scanning: pip install pip-audit safety",
+        severity="Low",
+        cross_references={'NIST': 'RA-5', 'CIS': 'N/A'}
+    ))
+
+    # A.8.26-003: Container image scanning (if Docker/Podman present)
+    has_docker = command_exists("docker")
+    has_podman = command_exists("podman")
+    has_scanner = command_exists("trivy") or command_exists("grype") or command_exists("snyk")
+
+    if has_docker or has_podman:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="ISO27001 - A.8.26 Application Security Requirements",
+            status="Pass" if has_scanner else "Warning",
+            message="A.8.26-003: Container image scanning capability",
+            details=f"Container runtime: {'Docker' if has_docker else 'Podman'}, "
+                    f"Image scanner: {'available' if has_scanner else 'NOT available'}",
+            remediation="Install container scanner: apt install trivy or curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh",
+            severity="Medium",
+            cross_references={'NIST': 'RA-5', 'CIS': '5.4'}
+        ))
+
+    # A.8.26-004: Application firewall / WAF capability
+    modsec_installed = check_package_installed("libapache2-mod-security2", os_info) or \
+                       check_package_installed("mod_security", os_info)
+    waf_result = run_command("nginx -V 2>&1 | grep -qi 'modsecurity'")
+    has_waf = modsec_installed or (waf_result.returncode == 0)
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="ISO27001 - A.8.26 Application Security Requirements",
+        status="Pass" if has_waf else "Info",
+        message="A.8.26-004: Web application firewall (WAF) capability",
+        details=f"ModSecurity: {'installed' if modsec_installed else 'not installed'}",
+        remediation="Install WAF: apt install libapache2-mod-security2",
+        severity="Low",
+        cross_references={'NIST': 'SC-7'}
+    ))
+
+
+# ============================================================================
 # Main Orchestration Function
 # ============================================================================
 
@@ -1998,6 +2355,9 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     Executes all ISO 27001:2022 Annex A technical control checks
     """
     results = []
+    
+    # Extract SharedDataCache from shared_data (populated by main script)
+    cache = shared_data.get('cache')
     
     print(f"\n[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] ISO/IEC 27001:2022 COMPLIANCE AUDIT")
@@ -2022,7 +2382,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
-        print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}]   Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
     try:
@@ -2032,9 +2392,11 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         check_system_protection_management(results, shared_data, os_info)
         check_backup_monitoring_network(results, shared_data, os_info)
         check_network_services_cryptography(results, shared_data, os_info)
+        check_additional_technology_controls(results, shared_data, os_info)
+        check_secure_development(results, shared_data, os_info)
         
     except Exception as e:
-        print(f"[{MODULE_NAME}] ❌ Error during audit execution: {str(e)}")
+        print(f"[{MODULE_NAME}]  Error during audit execution: {str(e)}")
         results.append(AuditResult(
             module=MODULE_NAME,
             category="ISO27001 - Error",
@@ -2068,12 +2430,11 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
-    print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ❌ Fail:    {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
-    if error_count > 0:
-        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
+    print(f"[{MODULE_NAME}]   Passed:  {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Failed:  {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Warnings: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Errors:  {error_count:3d} ({error_count/len(results)*100:.1f}%)")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] ISO 27001 Control Coverage:")
     for control in sorted(control_counts.keys()):
@@ -2098,12 +2459,21 @@ if __name__ == "__main__":
     print("Comprehensive ISO/IEC 27001:2022 Compliance for Linux")
     print("="*80)
     
+    # Initialize cache if shared library is available
+    cache = None
+    if HAS_COMMON_LIB:
+        os_info_init = detect_os()
+        cache = SharedDataCache(os_info_init)
+        cache.warm_up()
+        print(f"  Cache: Enabled")
+    
     # Prepare test environment data
     test_data = {
         "hostname": socket.gethostname(),
         "scan_date": datetime.datetime.now(),
         "is_root": os.geteuid() == 0,
-        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd()
+        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd(),
+        "cache": cache,
     }
     
     print(f"\nTest Environment:")
@@ -2130,10 +2500,14 @@ if __name__ == "__main__":
         count = status_counts.get(status, 0)
         if count > 0:
             pct = (count / len(test_results)) * 100
-            bar = '█' * int(pct / 2)
+            bar = '#' * int(pct / 2)
             print(f"  {status:8s}: {count:3d} ({pct:5.1f}%) {bar}")
     
     print(f"\n{'='*80}")
     print(f"ISO27001 module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
+
+# ============================================================================
+# End of module_iso27001.py
+# ============================================================================
