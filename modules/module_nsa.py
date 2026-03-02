@@ -2,7 +2,7 @@
 """
 module_nsa.py
 NSA Cybersecurity Guidance Module for Linux
-Version: 2.1
+Version: 2.2
 
 SYNOPSIS:
     Comprehensive NSA (National Security Agency) cybersecurity guidance
@@ -56,6 +56,12 @@ NOTES:
     
     SELinux Note: Many checks focus on SELinux which was developed by NSA
     as a mandatory access control mechanism for Linux systems.
+    
+    v2.0 Changes:
+    - Uses audit_common.py shared library (eliminates duplicated helpers)
+    - SharedDataCache integration for cached file/command lookups
+    - Severity levels on all AuditResults
+    - Thread-safe for parallel execution
 """
 
 import os
@@ -66,381 +72,103 @@ import pwd
 import grp
 import glob
 import socket
-import struct
+import platform
+import time
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
 
-# Import AuditResult from main script
+# ============================================================================
+# Shared Library Integration
+# ============================================================================
+# Import consolidated utilities from audit_common.py
+# This eliminates duplicated helper functions across all modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from linux_security_audit import AuditResult
+sys.path.insert(0, str(Path(__file__).parent))
+
+try:
+    # Try shared_components package first (standard deployment)
+    from shared_components.audit_common import (
+        # Core classes
+        AuditResult, OSInfo, SharedDataCache,
+        # OS detection
+        detect_os,
+        # Command execution (cached)
+        run_command, command_exists, read_file_safe,
+        # Service checks (cache-aware)
+        check_service_enabled, check_service_active,
+        # Package checks (OS-aware)
+        check_package_installed,
+        # File checks
+        get_file_permissions, get_file_permissions_full,
+        get_file_owner_group, check_file_exists,
+        # Kernel parameters (cache-aware)
+        check_kernel_parameter, check_mount_option,
+        # Security subsystems (cache-aware)
+        get_selinux_status, get_apparmor_status, get_firewall_status,
+        check_fips_mode, check_ipv6_enabled,
+        # SSH configuration (cache-aware)
+        get_ssh_config_value, get_ssh_config_all,
+        # Network
+        get_listening_ports, get_loaded_kernel_modules,
+        # PAM & password policy (cache-aware)
+        check_pam_module, get_password_policy,
+        # User accounts (cache-aware)
+        get_user_accounts, get_system_users, get_human_users,
+        # Parsing helpers
+        safe_int_parse, safe_float_parse,
+        # Audit rules & GRUB
+        get_audit_rules, get_grub_cmdline, check_grub_parameter,
+        # Updates (OS-aware)
+        get_available_updates, get_security_updates,
+        # ID generation
+        generate_check_id,
+        # Logging
+        get_module_logger,
+    )
+    HAS_COMMON_LIB = True
+except ImportError:
+    try:
+        # Fallback: flat-file layout (audit_common.py in same directory)
+        from audit_common import (
+            AuditResult, OSInfo, SharedDataCache, detect_os,
+            run_command, command_exists, read_file_safe,
+            check_service_enabled, check_service_active,
+            check_package_installed, get_file_permissions,
+            get_file_permissions_full, get_file_owner_group,
+            check_file_exists, check_kernel_parameter,
+            check_mount_option, get_selinux_status,
+            get_apparmor_status, get_firewall_status,
+            check_fips_mode, check_ipv6_enabled,
+            get_ssh_config_value, get_ssh_config_all,
+            get_listening_ports, get_loaded_kernel_modules,
+            check_pam_module, get_password_policy,
+            get_user_accounts, get_system_users, get_human_users,
+            safe_int_parse, safe_float_parse,
+            get_audit_rules, get_grub_cmdline, check_grub_parameter,
+            get_available_updates, get_security_updates,
+            generate_check_id, get_module_logger,
+        )
+        HAS_COMMON_LIB = True
+    except ImportError:
+        # Fallback: import AuditResult from main script (backward compatibility)
+        from linux_security_audit import AuditResult
+        HAS_COMMON_LIB = False
 
 MODULE_NAME = "NSA"
-MODULE_VERSION = "2.1"
+MODULE_VERSION = "2.2"
 
-import platform
-
-# ============================================================================
-# OS Detection and Classification  
-# ============================================================================
-
-class OSInfo:
-    """Store and manage OS information"""
-    def __init__(self):
-        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
-        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
-        self.version = "Unknown"
-        self.version_id = "Unknown"
-        self.codename = "Unknown"
-        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
-        self.init_system = "Unknown"  # systemd, sysvinit, upstart
-        self.architecture = platform.machine()
-        self.kernel_version = platform.release()
-        
-    def __str__(self):
-        return f"{self.distro} {self.version} ({self.family})"
-
-def detect_os() -> OSInfo:
-    """
-    Comprehensive OS detection
-    Returns OSInfo object with detailed system information
-    """
-    os_info = OSInfo()
-    
-    # Read /etc/os-release (standard location)
-    if os.path.exists("/etc/os-release"):
-        with open("/etc/os-release", 'r') as f:
-            os_release = {}
-            for line in f:
-                if '=' in line:
-                    key, value = line.strip().split('=', 1)
-                    os_release[key] = value.strip('"')
-        
-        os_info.distro = os_release.get('ID', 'unknown').lower()
-        os_info.version = os_release.get('VERSION', 'unknown')
-        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
-        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
-        
-        # Determine OS family
-        id_like = os_release.get('ID_LIKE', '').lower()
-        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
-            os_info.family = 'debian'
-        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
-            os_info.family = 'redhat'
-        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
-            os_info.family = 'suse'
-        elif os_info.distro == 'arch':
-            os_info.family = 'arch'
-    
-    # Fallback detection methods
-    if os_info.family == "Unknown":
-        if os.path.exists("/etc/debian_version"):
-            os_info.family = 'debian'
-            os_info.distro = 'debian'
-        elif os.path.exists("/etc/redhat-release"):
-            os_info.family = 'redhat'
-            with open("/etc/redhat-release", 'r') as f:
-                content = f.read().lower()
-                if 'centos' in content:
-                    os_info.distro = 'centos'
-                elif 'red hat' in content or 'rhel' in content:
-                    os_info.distro = 'rhel'
-                elif 'fedora' in content:
-                    os_info.distro = 'fedora'
-    
-    # Detect package manager
-    if command_exists('apt-get'):
-        os_info.package_manager = 'apt'
-    elif command_exists('dnf'):
-        os_info.package_manager = 'dnf'
-    elif command_exists('yum'):
-        os_info.package_manager = 'yum'
-    elif command_exists('zypper'):
-        os_info.package_manager = 'zypper'
-    elif command_exists('pacman'):
-        os_info.package_manager = 'pacman'
-    
-    # Detect init system
-    if os.path.exists("/run/systemd/system"):
-        os_info.init_system = 'systemd'
-    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
-        link = os.readlink("/sbin/init")
-        if 'systemd' in link:
-            os_info.init_system = 'systemd'
-        elif 'upstart' in link:
-            os_info.init_system = 'upstart'
-    else:
-        os_info.init_system = 'sysvinit'
-    
-    return os_info
-
-MODULE_VERSION = "1.0.0"
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-def run_command(command: str, check: bool = False) -> subprocess.CompletedProcess:
-    """Execute a shell command and return the result"""
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            check=check,
-            timeout=30
-        )
-        return result
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            args=command, returncode=-1, stdout="", stderr="Command timeout"
-        )
-    except Exception as e:
-        return subprocess.CompletedProcess(
-            args=command, returncode=-1, stdout="", stderr=str(e)
-        )
-
-def command_exists(command: str) -> bool:
-    """Check if a command exists"""
-    result = run_command(f"which {command} 2>/dev/null")
-    return result.returncode == 0
-
-def read_file_safe(filepath: str) -> str:
-    """Safely read a file"""
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except Exception:
-        return ""
-
-def check_service_enabled(service_name: str) -> bool:
-    """Check if a systemd service is enabled"""
-    result = run_command(f"systemctl is-enabled {service_name} 2>/dev/null")
-    return result.returncode == 0 and result.stdout.strip() == "enabled"
-
-def check_service_active(service_name: str) -> bool:
-    """Check if a systemd service is active"""
-    result = run_command(f"systemctl is-active {service_name} 2>/dev/null")
-    return result.returncode == 0 and result.stdout.strip() == "active"
-
-def check_package_installed(package_name: str, os_info) -> bool:
-    """Check if a package is installed (works for both apt and rpm)"""
-    # Try dpkg (Debian/Ubuntu)
-    result = run_command(f"dpkg -l {package_name} 2>/dev/null | grep -q '^ii'")
-    if result.returncode == 0:
-        return True
-    
-    # Try rpm (RHEL/CentOS)
-    result = run_command(f"rpm -q {package_name} 2>/dev/null")
-    return result.returncode == 0
-
-def get_file_permissions(filepath: str) -> Optional[str]:
-    """Get file permissions as octal string"""
-    try:
-        stat_info = os.stat(filepath)
-        return oct(stat_info.st_mode)[-3:]
-    except Exception:
-        return None
-
-def get_file_owner_group(filepath: str) -> Tuple[Optional[str], Optional[str]]:
-    """Get file owner and group"""
-    try:
-        stat_info = os.stat(filepath)
-        owner = pwd.getpwuid(stat_info.st_uid).pw_name
-        group = grp.getgrgid(stat_info.st_gid).gr_name
-        return owner, group
-    except Exception:
-        return None, None
-
-def check_kernel_parameter(parameter: str) -> Tuple[bool, str]:
-    """Check kernel parameter value"""
-    result = run_command(f"sysctl {parameter} 2>/dev/null")
-    if result.returncode == 0:
-        match = re.search(r'=\s*(.+)', result.stdout)
-        if match:
-            return True, match.group(1).strip()
-    return False, ""
+# Module logger (uses structured logging if audit_common is available)
+logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
 
 def get_nsa_id(category: str, number: int) -> str:
     """Generate NSA control ID"""
     return f"NSA-{category}-{number:03d}"
 
-def check_file_exists(filepath: str) -> bool:
-    """Check if file exists"""
-    return os.path.exists(filepath)
-
-def safe_int_parse(value: str, default: int = 0) -> int:
-    """
-    Safely parse a string to integer, handling edge cases
-    - Strips whitespace
-    - Takes first line if multi-line
-    - Returns default if not a valid integer
-    """
-    try:
-        if not value:
-            return default
-        # Strip and take first line only
-        clean_value = value.strip().split('\n')[0].strip()
-        if clean_value and clean_value.isdigit():
-            return int(clean_value)
-        return default
-    except (ValueError, AttributeError):
-        return default
-
-def get_selinux_status(os_info: OSInfo) -> Dict[str, str]:
-    """Get comprehensive SELinux status"""
-    status = {
-        'installed': False,
-        'enabled': False,
-        'enforcing': False,
-        'mode': 'disabled',
-        'policy': 'unknown'
-    }
-    
-    # Check if SELinux is installed
-    if check_package_installed("selinux-policy", os_info) or os.path.exists("/etc/selinux/config"):
-        status['installed'] = True
-    
-    # Check current status
-    if command_exists("getenforce"):
-        result = run_command("getenforce")
-        if result.returncode == 0:
-            mode = result.stdout.strip().lower()
-            status['mode'] = mode
-            status['enabled'] = mode in ['enforcing', 'permissive']
-            status['enforcing'] = mode == 'enforcing'
-    
-    # Check policy
-    if command_exists("sestatus"):
-        result = run_command("sestatus | grep 'Loaded policy name'")
-        if result.returncode == 0:
-            match = re.search(r':\s*(\w+)', result.stdout)
-            if match:
-                status['policy'] = match.group(1)
-    
-    return status
-
-def get_apparmor_status() -> Dict[str, Any]:
-    """Get comprehensive AppArmor status"""
-    status = {
-        'installed': False,
-        'enabled': False,
-        'profiles_loaded': 0,
-        'profiles_enforcing': 0,
-        'profiles_complain': 0
-    }
-    
-    # Check if AppArmor is installed and active
-    if check_service_active("apparmor"):
-        status['installed'] = True
-        status['enabled'] = True
-        
-        # Get profile statistics
-        if command_exists("apparmor_status"):
-            result = run_command("apparmor_status 2>/dev/null")
-            if result.returncode == 0:
-                # Parse output
-                loaded = re.search(r'(\d+) profiles are loaded', result.stdout)
-                enforcing = re.search(r'(\d+) profiles are in enforce mode', result.stdout)
-                complain = re.search(r'(\d+) profiles are in complain mode', result.stdout)
-                
-                if loaded:
-                    status['profiles_loaded'] = int(loaded.group(1))
-                if enforcing:
-                    status['profiles_enforcing'] = int(enforcing.group(1))
-                if complain:
-                    status['profiles_complain'] = int(complain.group(1))
-    
-    return status
-
-def get_listening_ports() -> List[int]:
-    """Get list of listening TCP ports"""
-    result = run_command("ss -tuln 2>/dev/null | grep LISTEN | awk '{print $5}' | grep -oE '[0-9]+$' | sort -u")
-    if result.returncode == 0:
-        try:
-            return [int(p) for p in result.stdout.strip().split('\n') if p.isdigit()]
-        except:
-            return []
-    return []
-
-def check_ipv6_enabled() -> bool:
-    """Check if IPv6 is enabled"""
-    if not os.path.exists("/proc/sys/net/ipv6"):
-        return False
-    exists, value = check_kernel_parameter("net.ipv6.conf.all.disable_ipv6")
-    return exists and value != "1"
-
-def get_loaded_kernel_modules() -> List[str]:
-    """Get list of loaded kernel modules"""
-    result = run_command("lsmod | awk 'NR>1 {print $1}'")
-    if result.returncode == 0:
-        return result.stdout.strip().split('\n')
-    return []
-
-def check_fips_mode() -> bool:
-    """Check if FIPS 140-2/3 mode is enabled"""
-    # Check /proc/sys/crypto/fips_enabled
-    fips_file = "/proc/sys/crypto/fips_enabled"
-    if os.path.exists(fips_file):
-        content = read_file_safe(fips_file).strip()
-        if content == "1":
-            return True
-    
-    # Check kernel command line
-    cmdline = read_file_safe("/proc/cmdline")
-    if "fips=1" in cmdline:
-        return True
-    
-    return False
-
-def get_ssh_config_value(parameter: str, config_file: str = "/etc/ssh/sshd_config") -> Optional[str]:
-    """Get SSH configuration parameter value"""
-    if not os.path.exists(config_file):
-        return None
-    
-    content = read_file_safe(config_file)
-    # Look for parameter (case-insensitive, handle comments)
-    pattern = rf'^\s*{parameter}\s+(.+?)(?:\s*#.*)?$'
-    match = re.search(pattern, content, re.MULTILINE | re.IGNORECASE)
-    
-    if match:
-        return match.group(1).strip()
-    return None
-
 def check_tcp_wrapper() -> bool:
     """Check if TCP wrappers are configured"""
     return os.path.exists("/etc/hosts.allow") or os.path.exists("/etc/hosts.deny")
-
-def get_firewall_status() -> Dict[str, bool]:
-    """Get comprehensive firewall status"""
-    status = {
-        'ufw': False,
-        'firewalld': False,
-        'iptables': False,
-        'nftables': False,
-        'any_active': False
-    }
-    
-    # Check UFW
-    if command_exists("ufw"):
-        result = run_command("ufw status | grep -q 'Status: active'")
-        status['ufw'] = result.returncode == 0
-    
-    # Check firewalld
-    status['firewalld'] = check_service_active("firewalld")
-    
-    # Check iptables (has rules)
-    result = run_command("iptables -L -n 2>/dev/null | grep -q 'Chain'")
-    status['iptables'] = result.returncode == 0
-    
-    # Check nftables
-    result = run_command("nft list ruleset 2>/dev/null | grep -q 'table'")
-    status['nftables'] = result.returncode == 0
-    
-    status['any_active'] = any([status['ufw'], status['firewalld'], 
-                                 status['iptables'], status['nftables']])
-    
-    return status
 
 # ============================================================================
 # SELinux/MAC - Mandatory Access Control
@@ -452,10 +180,13 @@ def check_selinux_mac_controls(results: List[AuditResult], shared_data: Dict[str
     """
     SELinux and Mandatory Access Control Security Audit Checks Against NSA's SELinux guidance
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking SELinux/MAC Controls...")
     
-    selinux_status = get_selinux_status(os_info)
-    apparmor_status = get_apparmor_status()
+    selinux_status = get_selinux_status(cache=cache)
+    apparmor_status = get_apparmor_status(cache=cache)
     
     # MAC-001: SELinux or AppArmor installed
     mac_installed = selinux_status['installed'] or apparmor_status['installed']
@@ -868,6 +599,9 @@ def check_network_hardening(results: List[AuditResult], shared_data: Dict[str, A
     """
     Network Security Hardening Security Audit Checks Against NSA Network Guidance
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Network Security Hardening...")
     
     firewall_status = get_firewall_status()
@@ -1417,6 +1151,9 @@ def check_kernel_hardening(results: List[AuditResult], shared_data: Dict[str, An
     """
     Kernel Security Hardening Security Audit Checks Against NSA Kernel Guidance
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Kernel Security Hardening...")
     
     # KERN-001: Kernel version
@@ -1835,6 +1572,9 @@ def check_system_hardening(results: List[AuditResult], shared_data: Dict[str, An
     """
     System Hardening Security Audit Checks Against NSA System Guidance
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking System Hardening...")
     
     # SYS-001: Root account password set
@@ -2329,6 +2069,9 @@ def check_cryptography_services(results: List[AuditResult], shared_data: Dict[st
     """
     Cryptography and Services Security Audit Checks Against NSA Crypto Guidance
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Cryptography & Services...")
     
     fips_enabled = check_fips_mode()
@@ -2752,6 +2495,9 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
     """
     Additional Security Security Audit Checks for Miscellaneous NSA guidance
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Additional Security Controls...")
     
     # ADD-001: Time synchronization active
@@ -3018,6 +2764,144 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
 
 
 # ============================================================================
+# NSA DNS Security & Wireless Interface Control
+# Phase 1 Gap: DNS hardening, wireless disable, patch management
+# ============================================================================
+
+def check_dns_wireless_security(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    NSA guidance for DNS security configuration, wireless interface control,
+    and update/patch management cadence.
+    """
+    cache = shared_data.get('cache')
+
+    # --- DNS resolver configuration ---
+    resolv_content = read_file_safe("/etc/resolv.conf")
+    if resolv_content:
+        nameservers = [l.split()[1] for l in resolv_content.splitlines()
+                       if l.strip().startswith('nameserver') and len(l.split()) >= 2]
+        # Check for well-known secure DNS providers
+        secure_dns = ["1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4",
+                      "9.9.9.9", "149.112.112.112", "208.67.222.222"]
+        local_dns = any(ns.startswith("127.") or ns == "::1" for ns in nameservers)
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Network Security",
+            status="Pass" if nameservers else "Warning",
+            message=f"{get_nsa_id('NET', 20)}: DNS resolver configuration",
+            details=f"Nameservers: {', '.join(nameservers) if nameservers else 'none configured'}; "
+                    f"Local resolver: {'yes' if local_dns else 'no'}",
+            remediation="Configure trusted DNS resolvers in /etc/resolv.conf or use systemd-resolved",
+            severity="Medium"
+        ))
+
+    # --- DNSSEC validation ---
+    resolved_conf = read_file_safe("/etc/systemd/resolved.conf") or ""
+    dnssec_enabled = "DNSSEC=yes" in resolved_conf or "DNSSEC=allow-downgrade" in resolved_conf
+    result = run_command("systemctl is-active systemd-resolved 2>/dev/null", check=False)
+    resolved_active = result.returncode == 0 and "active" in result.stdout
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Network Security",
+        status="Pass" if dnssec_enabled and resolved_active else (
+            "Warning" if resolved_active else "Info"),
+        message=f"{get_nsa_id('NET', 21)}: DNSSEC validation",
+        details=f"systemd-resolved: {'active' if resolved_active else 'inactive'}, "
+                f"DNSSEC: {'enabled' if dnssec_enabled else 'not configured'}",
+        remediation="Set DNSSEC=yes in /etc/systemd/resolved.conf and restart systemd-resolved",
+        severity="Medium"
+    ))
+
+    # --- DNS over TLS ---
+    dot_enabled = "DNSOverTLS=yes" in resolved_conf or "DNSOverTLS=opportunistic" in resolved_conf
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Network Security",
+        status="Pass" if dot_enabled else "Warning",
+        message=f"{get_nsa_id('NET', 22)}: DNS over TLS (DoT)",
+        details=f"DNSOverTLS: {'enabled' if dot_enabled else 'not configured'}",
+        remediation="Set DNSOverTLS=yes in /etc/systemd/resolved.conf",
+        severity="Low"
+    ))
+
+    # --- Wireless interface detection and control ---
+    result = run_command("ip link show 2>/dev/null | grep -i 'wlan\\|wlp\\|wifi\\|wireless'", check=False)
+    wireless_present = result.returncode == 0 and result.stdout.strip()
+
+    if wireless_present:
+        # Check if rfkill is blocking wireless
+        result_rfkill = run_command("rfkill list wifi 2>/dev/null", check=False)
+        wifi_blocked = "Soft blocked: yes" in result_rfkill.stdout if result_rfkill.returncode == 0 else False
+
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Network Security",
+            status="Pass" if wifi_blocked else "Warning",
+            message=f"{get_nsa_id('NET', 23)}: Wireless interface control",
+            details=f"Wireless interfaces detected; "
+                    f"RF kill: {'active (blocked)' if wifi_blocked else 'not blocking'}",
+            remediation="rfkill block wifi  (or disable wireless in BIOS for servers)",
+            severity="Medium"
+        ))
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CORE - Network Security",
+            status="Pass",
+            message=f"{get_nsa_id('NET', 23)}: Wireless interface control",
+            details="No wireless interfaces detected",
+            severity="Low"
+        ))
+
+    # --- Bluetooth interface control ---
+    result = run_command("systemctl is-active bluetooth 2>/dev/null", check=False)
+    bt_active = result.returncode == 0 and "active" in result.stdout.strip()
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CORE - Network Security",
+        status="Fail" if bt_active else "Pass",
+        message=f"{get_nsa_id('NET', 24)}: Bluetooth service disabled",
+        details=f"bluetooth.service: {'active (should be disabled on servers)' if bt_active else 'inactive'}",
+        remediation="systemctl stop bluetooth && systemctl disable bluetooth && systemctl mask bluetooth",
+        severity="Medium"
+    ))
+
+    # --- Patch management cadence ---
+    # Check when packages were last updated
+    last_update = ""
+    if os_info.package_manager == "apt":
+        result = run_command(
+            "stat -c '%Y' /var/cache/apt/pkgcache.bin 2>/dev/null || "
+            "stat -c '%Y' /var/lib/apt/lists/lock 2>/dev/null",
+            check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            import time as _time
+            try:
+                update_ts = int(result.stdout.strip())
+                days_ago = (int(_time.time()) - update_ts) // 86400
+                last_update = f"{days_ago} days ago"
+            except (ValueError, TypeError):
+                last_update = "unknown"
+    elif os_info.package_manager in ("yum", "dnf"):
+        result = run_command(
+            f"{os_info.package_manager} history list 2>/dev/null | head -3 | tail -1",
+            check=False)
+        if result.returncode == 0:
+            last_update = result.stdout.strip()[:50]
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="NSA - Additional Security",
+        status="Info",
+        message=f"{get_nsa_id('ADD', 21)}: Package update recency",
+        details=f"Last package cache update: {last_update if last_update else 'unable to determine'}",
+        remediation="Establish regular patching cadence (at least monthly for security updates)",
+        severity="Medium"
+    ))
+
+
+# ============================================================================
 # Main Orchestration Function
 # ============================================================================
 
@@ -3028,9 +2912,16 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     """
     results = []
     
+    # Extract SharedDataCache from shared_data (populated by main script)
+    cache = shared_data.get('cache')
+    
 
     # Detect operating system
-    os_info = detect_os()
+    # Get OS info from cache if available (avoids redundant detection)
+    if cache and hasattr(cache, 'os_info') and cache.os_info:
+        os_info = cache.os_info
+    else:
+        os_info = detect_os()
     shared_data['os_info'] = os_info
     
     print(f"[{MODULE_NAME}] Operating System: {os_info}")
@@ -3040,7 +2931,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
-        print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}]   Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
     print(f"\n[{MODULE_NAME}] " + "="*70)
@@ -3054,7 +2945,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
-        print(f"[{MODULE_NAME}] âš ï¸  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}]   Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
     try:
@@ -3065,9 +2956,11 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         check_system_hardening(results, shared_data, os_info)
         check_cryptography_services(results, shared_data, os_info)
         check_additional_security(results, shared_data, os_info)
+        # Phase 1 new checks
+        check_dns_wireless_security(results, shared_data, os_info)
         
     except Exception as e:
-        print(f"[{MODULE_NAME}] âŒ Error during audit execution: {str(e)}")
+        print(f"[{MODULE_NAME}]  Error during audit execution: {str(e)}")
         results.append(AuditResult(
             module=MODULE_NAME,
             category="NSA - Error",
@@ -3092,12 +2985,11 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
-    print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ❌ Fail:    {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
-    if error_count > 0:
-        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
+    print(f"[{MODULE_NAME}]   Passed:  {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Failed:  {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Warnings: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Errors:  {error_count:3d} ({error_count/len(results)*100:.1f}%)")
     print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     return results
@@ -3119,13 +3011,22 @@ if __name__ == "__main__":
     print("Comprehensive NSA Cybersecurity Guidance")
     print("="*80)
     
+    # Initialize cache if shared library is available
+    cache = None
+    if HAS_COMMON_LIB:
+        os_info_init = detect_os()
+        cache = SharedDataCache(os_info_init)
+        cache.warm_up()
+        print(f"  Cache: Enabled")
+    
     # Prepare test environment data
     test_data = {
         "hostname": socket.gethostname(),
         "os_version": f"{platform.system()} {platform.release()}",
         "scan_date": datetime.datetime.now(),
         "is_root": os.geteuid() == 0,
-        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd()
+        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd(),
+        "cache": cache,
     }
     
     print(f"\nTest Environment:")
@@ -3153,7 +3054,7 @@ if __name__ == "__main__":
         count = status_counts.get(status, 0)
         if count > 0:
             pct = (count / len(test_results)) * 100
-            bar = '█' * int(pct / 2)
+            bar = '#' * int(pct / 2)
             print(f"  {status:8s}: {count:3d} ({pct:5.1f}%) {bar}")
     
     # Category breakdown
@@ -3166,9 +3067,9 @@ if __name__ == "__main__":
     # Critical findings
     critical_failures = [r for r in test_results if r.status == "Fail"]
     if critical_failures:
-        print(f"\n⚠️  Critical Failures ({len(critical_failures)}):")
+        print(f"\n  Critical Failures ({len(critical_failures)}):")
         for failure in critical_failures[:10]:
-            print(f"  • {failure.message}")
+            print(f"   {failure.message}")
         if len(critical_failures) > 10:
             print(f"  ... and {len(critical_failures) - 10} more")
     
@@ -3176,3 +3077,7 @@ if __name__ == "__main__":
     print(f"NSA module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
+
+# ============================================================================
+# End of module_nsa.py
+# ============================================================================
