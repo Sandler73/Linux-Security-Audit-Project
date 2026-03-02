@@ -211,6 +211,12 @@ $RECYCLE.BIN/
 # Project-Specific Files
 # ============================================================================
 
+# Generated Directories (v2.0)
+logs/
+reports/
+modules/__pycache__/
+shared_components/__pycache__/
+
 # Audit Reports (Generated Output)
 Security-Audit-Report-*.html
 Security-Audit-Report-*.csv
@@ -384,7 +390,14 @@ pip-delete-this-directory.txt
 
 # Main Scripts (DO COMMIT)
 !linux_security_audit.py
-!module_*.py
+
+# Module Files (DO COMMIT)
+!modules/
+!modules/module_*.py
+
+# Shared Components (DO COMMIT)
+!shared_components/
+!shared_components/audit_common.py
 
 # Documentation (DO COMMIT)
 !README.md
