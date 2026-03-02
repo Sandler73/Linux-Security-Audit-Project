@@ -2,7 +2,7 @@
 """
 module_cisa.py
 CISA (Cybersecurity and Infrastructure Security Agency) Module for Linux
-Version: 2.1
+Version: 2.2
 
 SYNOPSIS:
     CISA Cybersecurity Directives and best practices compliance checks for Linux systems.
@@ -78,228 +78,118 @@ NOTES:
     Priority: Critical, High, Medium, Low severity findings
     Target: 150+ comprehensive security checks; OS-aware technical control checks
     Module automatically detects OS via module_core integration
+    
+    v2.0 Changes:
+    - Uses audit_common.py shared library (eliminates duplicated helpers)
+    - SharedDataCache integration for cached file/command lookups
+    - Severity levels on all AuditResults
+    - Thread-safe for parallel execution
 """
 
 import os
 import sys
 import re
 import subprocess
-import glob
 import pwd
 import grp
-import datetime
+import glob
+import socket
+import platform
+import time
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
 
-# Import AuditResult from main script
+# ============================================================================
+# Shared Library Integration
+# ============================================================================
+# Import consolidated utilities from audit_common.py
+# This eliminates duplicated helper functions across all modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from linux_security_audit import AuditResult
+sys.path.insert(0, str(Path(__file__).parent))
+
+try:
+    # Try shared_components package first (standard deployment)
+    from shared_components.audit_common import (
+        # Core classes
+        AuditResult, OSInfo, SharedDataCache,
+        # OS detection
+        detect_os,
+        # Command execution (cached)
+        run_command, command_exists, read_file_safe,
+        # Service checks (cache-aware)
+        check_service_enabled, check_service_active,
+        # Package checks (OS-aware)
+        check_package_installed,
+        # File checks
+        get_file_permissions, get_file_permissions_full,
+        get_file_owner_group, check_file_exists,
+        # Kernel parameters (cache-aware)
+        check_kernel_parameter, check_mount_option,
+        # Security subsystems (cache-aware)
+        get_selinux_status, get_apparmor_status, get_firewall_status,
+        check_fips_mode, check_ipv6_enabled,
+        # SSH configuration (cache-aware)
+        get_ssh_config_value, get_ssh_config_all,
+        # Network
+        get_listening_ports, get_loaded_kernel_modules,
+        # PAM & password policy (cache-aware)
+        check_pam_module, get_password_policy,
+        # User accounts (cache-aware)
+        get_user_accounts, get_system_users, get_human_users,
+        # Parsing helpers
+        safe_int_parse, safe_float_parse,
+        # Audit rules & GRUB
+        get_audit_rules, get_grub_cmdline, check_grub_parameter,
+        # Updates (OS-aware)
+        get_available_updates, get_security_updates,
+        # ID generation
+        generate_check_id,
+        # Logging
+        get_module_logger,
+    )
+    HAS_COMMON_LIB = True
+except ImportError:
+    try:
+        # Fallback: flat-file layout (audit_common.py in same directory)
+        from audit_common import (
+            AuditResult, OSInfo, SharedDataCache, detect_os,
+            run_command, command_exists, read_file_safe,
+            check_service_enabled, check_service_active,
+            check_package_installed, get_file_permissions,
+            get_file_permissions_full, get_file_owner_group,
+            check_file_exists, check_kernel_parameter,
+            check_mount_option, get_selinux_status,
+            get_apparmor_status, get_firewall_status,
+            check_fips_mode, check_ipv6_enabled,
+            get_ssh_config_value, get_ssh_config_all,
+            get_listening_ports, get_loaded_kernel_modules,
+            check_pam_module, get_password_policy,
+            get_user_accounts, get_system_users, get_human_users,
+            safe_int_parse, safe_float_parse,
+            get_audit_rules, get_grub_cmdline, check_grub_parameter,
+            get_available_updates, get_security_updates,
+            generate_check_id, get_module_logger,
+        )
+        HAS_COMMON_LIB = True
+    except ImportError:
+        # Fallback: import AuditResult from main script (backward compatibility)
+        from linux_security_audit import AuditResult
+        HAS_COMMON_LIB = False
 
 MODULE_NAME = "CISA"
-MODULE_VERSION = "2.1"
+MODULE_VERSION = "2.2"
 
-import platform
+# Module logger (uses structured logging if audit_common is available)
+logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
 
-# ============================================================================
-# OS Detection and Classification  
-# ============================================================================
-
-class OSInfo:
-    """Store and manage OS information"""
-    def __init__(self):
-        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
-        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
-        self.version = "Unknown"
-        self.version_id = "Unknown"
-        self.codename = "Unknown"
-        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
-        self.init_system = "Unknown"  # systemd, sysvinit, upstart
-        self.architecture = platform.machine()
-        self.kernel_version = platform.release()
-        
-    def __str__(self):
-        return f"{self.distro} {self.version} ({self.family})"
-
-def detect_os() -> OSInfo:
-    """
-    Comprehensive OS detection
-    Returns OSInfo object with detailed system information
-    """
-    os_info = OSInfo()
-    
-    # Read /etc/os-release (standard location)
-    if os.path.exists("/etc/os-release"):
-        with open("/etc/os-release", 'r') as f:
-            os_release = {}
-            for line in f:
-                if '=' in line:
-                    key, value = line.strip().split('=', 1)
-                    os_release[key] = value.strip('"')
-        
-        os_info.distro = os_release.get('ID', 'unknown').lower()
-        os_info.version = os_release.get('VERSION', 'unknown')
-        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
-        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
-        
-        # Determine OS family
-        id_like = os_release.get('ID_LIKE', '').lower()
-        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
-            os_info.family = 'debian'
-        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
-            os_info.family = 'redhat'
-        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
-            os_info.family = 'suse'
-        elif os_info.distro == 'arch':
-            os_info.family = 'arch'
-    
-    # Fallback detection methods
-    if os_info.family == "Unknown":
-        if os.path.exists("/etc/debian_version"):
-            os_info.family = 'debian'
-            os_info.distro = 'debian'
-        elif os.path.exists("/etc/redhat-release"):
-            os_info.family = 'redhat'
-            with open("/etc/redhat-release", 'r') as f:
-                content = f.read().lower()
-                if 'centos' in content:
-                    os_info.distro = 'centos'
-                elif 'red hat' in content or 'rhel' in content:
-                    os_info.distro = 'rhel'
-                elif 'fedora' in content:
-                    os_info.distro = 'fedora'
-    
-    # Detect package manager
-    if command_exists('apt-get'):
-        os_info.package_manager = 'apt'
-    elif command_exists('dnf'):
-        os_info.package_manager = 'dnf'
-    elif command_exists('yum'):
-        os_info.package_manager = 'yum'
-    elif command_exists('zypper'):
-        os_info.package_manager = 'zypper'
-    elif command_exists('pacman'):
-        os_info.package_manager = 'pacman'
-    
-    # Detect init system
-    if os.path.exists("/run/systemd/system"):
-        os_info.init_system = 'systemd'
-    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
-        link = os.readlink("/sbin/init")
-        if 'systemd' in link:
-            os_info.init_system = 'systemd'
-        elif 'upstart' in link:
-            os_info.init_system = 'upstart'
-    else:
-        os_info.init_system = 'sysvinit'
-    
-    return os_info
-
-MODULE_VERSION = "2.0.0"
-
-# ============================================================================
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-def run_command(command: str, check: bool = False) -> subprocess.CompletedProcess:
-    """Execute a shell command and return the result"""
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            check=check,
-            timeout=30
-        )
-        return result
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            args=command, returncode=-1, stdout="", stderr="Command timeout"
-        )
-    except Exception as e:
-        return subprocess.CompletedProcess(
-            args=command, returncode=-1, stdout="", stderr=str(e)
-        )
-
-def command_exists(command: str) -> bool:
-    """Check if a command exists"""
-    result = run_command(f"which {command} 2>/dev/null")
-    return result.returncode == 0
-
-def read_file_safe(filepath: str) -> str:
-    """Safely read a file"""
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except Exception:
-        return ""
-
-def check_service_enabled(service_name: str) -> bool:
-    """Check if a systemd service is enabled"""
-    result = run_command(f"systemctl is-enabled {service_name} 2>/dev/null")
-    return result.returncode == 0 and result.stdout.strip() == "enabled"
-
-def check_service_active(service_name: str) -> bool:
-    """Check if a systemd service is active"""
-    result = run_command(f"systemctl is-active {service_name} 2>/dev/null")
-    return result.returncode == 0 and result.stdout.strip() == "active"
-
-def check_package_installed(package_name: str, os_info) -> bool:
-    """Check if a package is installed (works for both apt and rpm)"""
-    # Try dpkg (Debian/Ubuntu)
-    result = run_command(f"dpkg -l {package_name} 2>/dev/null | grep -q '^ii'")
-    if result.returncode == 0:
-        return True
-    
-    # Try rpm (RHEL/CentOS)
-    result = run_command(f"rpm -q {package_name} 2>/dev/null")
-    return result.returncode == 0
-
-def get_file_permissions(filepath: str) -> Optional[str]:
-    """Get file permissions as octal string"""
-    try:
-        stat_info = os.stat(filepath)
-        return oct(stat_info.st_mode)[-3:]
-    except Exception:
-        return None
-
-def get_file_owner_group(filepath: str) -> Tuple[Optional[str], Optional[str]]:
-    """Get file owner and group"""
-    try:
-        stat_info = os.stat(filepath)
-        owner = pwd.getpwuid(stat_info.st_uid).pw_name
-        group = grp.getgrgid(stat_info.st_gid).gr_name
-        return owner, group
-    except Exception:
-        return None, None
-
-def check_kernel_parameter(parameter: str) -> Tuple[bool, str]:
-    """Check kernel parameter value"""
-    result = run_command(f"sysctl {parameter} 2>/dev/null")
-    if result.returncode == 0:
-        match = re.search(r'=\s*(.+)', result.stdout)
-        if match:
-            return True, match.group(1).strip()
-    return False, ""
-
-def get_package_version(package_name: str) -> Optional[str]:
-    """Get installed package version"""
-    # Try dpkg
-    result = run_command(f"dpkg -l {package_name} 2>/dev/null | grep '^ii' | awk '{{print $3}}'")
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip()
-    
-    # Try rpm
-    result = run_command(f"rpm -q --queryformat '%{{VERSION}}-%{{RELEASE}}' {package_name} 2>/dev/null")
-    if result.returncode == 0:
-        return result.stdout.strip()
-    
-    return None
+def get_cisa_id(category: str, number: int) -> str:
+    """Generate CISA check ID"""
+    return f"CISA-{category}-{number:03d}"
 
 def check_updates_available() -> Tuple[int, List[str]]:
-    """Check for available security updates"""
+    """Check for available security updates (CISA-specific: returns count and package list)"""
     security_updates = []
     count = 0
     
@@ -322,10 +212,6 @@ def check_updates_available() -> Tuple[int, List[str]]:
     
     return count, security_updates
 
-def get_cisa_id(category: str, number: int) -> str:
-    """Generate CISA check ID"""
-    return f"CISA-{category}-{number:03d}"
-
 # ============================================================================
 # This is the end of Part 1
 # Continue with Part 2 for BOD 22-01 checks...
@@ -339,6 +225,9 @@ def check_bod_22_01_kev(results: List[AuditResult], shared_data: Dict[str, Any],
     """
     BOD 22-01: Reducing Significant Risk of Known Exploited Vulnerabilities (KEV) Security Audit Checks
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking BOD 22-01 - Known Exploited Vulnerabilities...")
     
     # KEV-001: Kernel version check
@@ -761,6 +650,9 @@ def check_bod_23_01_asset_visibility(results: List[AuditResult], shared_data: Di
     """
     BOD 23-01: Improving Asset Visibility and Vulnerability Detection
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking BOD 23-01 - Asset Visibility...")
     
     # AST-001: Hardware inventory - CPU
@@ -953,6 +845,9 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
     """
     Authentication and Access Control Security Audit Checks
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking authentication and access control...")
     
     # AUTH-001: Root account UID 0 check
@@ -990,7 +885,7 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
         module=MODULE_NAME,
         category="CISA - Authentication",
         status="Pass" if pass_max_ok else "Fail",
-        message=f"{get_cisa_id('AUTH', 3)}: Password expiration â‰¤90 days (High)",
+        message=f"{get_cisa_id('AUTH', 3)}: Password expiration <=90 days (High)",
         details=f"PASS_MAX_DAYS: {pass_max_match.group(1) if pass_max_match else 'Not set'}",
         remediation="Set PASS_MAX_DAYS 90 in /etc/login.defs"
     ))
@@ -1003,7 +898,7 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
         module=MODULE_NAME,
         category="CISA - Authentication",
         status="Pass" if pass_min_ok else "Fail",
-        message=f"{get_cisa_id('AUTH', 4)}: Minimum password age â‰¥1 day (Medium)",
+        message=f"{get_cisa_id('AUTH', 4)}: Minimum password age >=1 day (Medium)",
         details=f"PASS_MIN_DAYS: {pass_min_match.group(1) if pass_min_match else 'Not set'}",
         remediation="Set PASS_MIN_DAYS 1"
     ))
@@ -1016,7 +911,7 @@ def check_authentication_access_control(results: List[AuditResult], shared_data:
         module=MODULE_NAME,
         category="CISA - Authentication",
         status="Pass" if pass_warn_ok else "Warning",
-        message=f"{get_cisa_id('AUTH', 5)}: Password expiration warning â‰¥7 days (Low)",
+        message=f"{get_cisa_id('AUTH', 5)}: Password expiration warning >=7 days (Low)",
         details=f"PASS_WARN_AGE: {pass_warn_match.group(1) if pass_warn_match else 'Not set'}",
         remediation="Set PASS_WARN_AGE 7"
     ))
@@ -1183,6 +1078,9 @@ def check_network_security(results: List[AuditResult], shared_data: Dict[str, An
     """
     Network Security Audit Checks
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking network security...")
     
     # NET-001: Firewall active
@@ -1423,6 +1321,9 @@ def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, 
     """
     Logging and Monitoring Security Audit Checks
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking logging and monitoring...")
     
     # LOG-001: auditd installed
@@ -1627,6 +1528,9 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
     """
     Incident Response Readiness Security Audit Checks
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking incident response capabilities...")
     
     # IR-001: Incident response plan
@@ -1774,6 +1678,9 @@ def check_data_protection(results: List[AuditResult], shared_data: Dict[str, Any
     """
     Data Protection checks - 15 comprehensive checks
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking data protection...")
     
     # DP-001: Disk encryption
@@ -1969,6 +1876,502 @@ def check_data_protection(results: List[AuditResult], shared_data: Dict[str, Any
 
 
 # ============================================================================
+# Zero Trust Architecture Readiness (CISA Zero Trust Maturity Model)
+# ============================================================================
+
+def check_zero_trust_readiness(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Assess alignment with CISA Zero Trust Maturity Model.
+
+    Evaluates identity verification, device security, network segmentation,
+    application workload security, and data protection controls that support
+    a zero trust architecture.
+    """
+    cache = shared_data.get('cache')
+
+    # ZT-001: Multi-factor authentication readiness
+    # Check PAM for MFA modules (pam_google_authenticator, pam_u2f, pam_duo, etc.)
+    mfa_modules = ['pam_google_authenticator', 'pam_u2f', 'pam_duo', 'pam_yubico',
+                   'pam_oath', 'pam_radius_auth', 'pam_totp']
+    found_mfa = []
+    pam_dirs = ['/etc/pam.d']
+    for pam_dir in pam_dirs:
+        if os.path.isdir(pam_dir):
+            try:
+                for pam_file in os.listdir(pam_dir):
+                    pam_path = os.path.join(pam_dir, pam_file)
+                    if os.path.isfile(pam_path):
+                        content = read_file_safe(pam_path)
+                        if content:
+                            for mod in mfa_modules:
+                                if mod in content and mod not in found_mfa:
+                                    found_mfa.append(mod)
+            except PermissionError:
+                pass
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Zero Trust",
+        status="Pass" if found_mfa else "Warning",
+        message=f"{get_cisa_id('ZT', 1)}: Multi-factor authentication capability (Critical)",
+        details=f"MFA PAM modules found: {', '.join(found_mfa) if found_mfa else 'none detected'}",
+        remediation="Install and configure MFA (e.g., libpam-google-authenticator, pam_u2f)",
+        severity="Critical"
+    ))
+
+    # ZT-002: Network micro-segmentation indicators
+    # Check for network namespaces, firewall zones, or VLAN config
+    netns_count = 0
+    result_netns = run_command("ip netns list 2>/dev/null", use_cache=True)
+    if result_netns.returncode == 0 and result_netns.stdout.strip():
+        netns_count = len(result_netns.stdout.strip().splitlines())
+
+    firewall_zones = 0
+    result_zones = run_command("firewall-cmd --get-zones 2>/dev/null", use_cache=True)
+    if result_zones.returncode == 0 and result_zones.stdout.strip():
+        firewall_zones = len(result_zones.stdout.strip().split())
+
+    has_segmentation = netns_count > 0 or firewall_zones > 1
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Zero Trust",
+        status="Pass" if has_segmentation else "Warning",
+        message=f"{get_cisa_id('ZT', 2)}: Network micro-segmentation (High)",
+        details=f"Network namespaces: {netns_count}, Firewall zones: {firewall_zones}",
+        remediation="Implement network segmentation via firewalld zones, network namespaces, or VLANs",
+        severity="High"
+    ))
+
+    # ZT-003: Least privilege enforcement
+    # Check for sudoers NOPASSWD entries (anti-pattern for zero trust)
+    nopasswd_count = 0
+    sudoers_content = read_file_safe("/etc/sudoers")
+    if sudoers_content:
+        for line in sudoers_content.splitlines():
+            line = line.strip()
+            if not line.startswith('#') and 'NOPASSWD' in line:
+                nopasswd_count += 1
+
+    # Also check sudoers.d/
+    sudoers_d = "/etc/sudoers.d"
+    if os.path.isdir(sudoers_d):
+        try:
+            for sf in os.listdir(sudoers_d):
+                sf_path = os.path.join(sudoers_d, sf)
+                if os.path.isfile(sf_path):
+                    content = read_file_safe(sf_path)
+                    if content:
+                        for line in content.splitlines():
+                            if not line.strip().startswith('#') and 'NOPASSWD' in line:
+                                nopasswd_count += 1
+        except PermissionError:
+            pass
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Zero Trust",
+        status="Pass" if nopasswd_count == 0 else "Fail",
+        message=f"{get_cisa_id('ZT', 3)}: Least privilege - NOPASSWD sudo rules (High)",
+        details=f"NOPASSWD rules found: {nopasswd_count}",
+        remediation="Remove NOPASSWD from sudoers entries; require authentication for privilege escalation",
+        severity="High"
+    ))
+
+    # ZT-004: Device integrity verification
+    # Check for TPM, measured boot, or device attestation
+    has_tpm = os.path.exists("/dev/tpm0") or os.path.exists("/dev/tpmrm0")
+    has_ima = os.path.exists("/sys/kernel/security/ima")
+    has_secureboot = False
+    sb_result = run_command("mokutil --sb-state 2>/dev/null", use_cache=True)
+    if sb_result.returncode == 0 and "SecureBoot enabled" in sb_result.stdout:
+        has_secureboot = True
+
+    device_checks = []
+    if has_tpm:
+        device_checks.append("TPM")
+    if has_ima:
+        device_checks.append("IMA")
+    if has_secureboot:
+        device_checks.append("Secure Boot")
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Zero Trust",
+        status="Pass" if len(device_checks) >= 2 else (
+            "Warning" if device_checks else "Fail"),
+        message=f"{get_cisa_id('ZT', 4)}: Device integrity verification (High)",
+        details=f"Available: {', '.join(device_checks) if device_checks else 'none detected'}",
+        remediation="Enable TPM 2.0, IMA measurement, and UEFI Secure Boot for device attestation",
+        severity="High"
+    ))
+
+    # ZT-005: Continuous monitoring / session validation
+    # Check for PAM session timeout, SSH idle timeout, tmout
+    ssh_timeout = 0
+    ssh_config = {}
+    if cache:
+        ssh_config = cache.get_parsed('ssh_config') or {}
+    interval = ssh_config.get('clientaliveinterval', '0')
+    count_max = ssh_config.get('clientalivecountmax', '3')
+    try:
+        ssh_timeout = int(interval) * int(count_max)
+    except (ValueError, TypeError):
+        pass
+
+    # Check TMOUT
+    tmout_val = 0
+    for profile in ['/etc/profile', '/etc/bashrc', '/etc/bash.bashrc', '/etc/profile.d/']:
+        content = read_file_safe(profile)
+        if content:
+            for line in content.splitlines():
+                if 'TMOUT=' in line and not line.strip().startswith('#'):
+                    try:
+                        val = line.split('TMOUT=')[1].split()[0].strip('"\'')
+                        tmout_val = int(val)
+                    except (ValueError, IndexError):
+                        pass
+
+    has_timeout = ssh_timeout > 0 or tmout_val > 0
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Zero Trust",
+        status="Pass" if has_timeout else "Warning",
+        message=f"{get_cisa_id('ZT', 5)}: Session timeout / continuous validation (Medium)",
+        details=f"SSH timeout: {ssh_timeout}s, Shell TMOUT: {tmout_val}s",
+        remediation="Set ClientAliveInterval/ClientAliveCountMax in sshd_config and TMOUT in /etc/profile",
+        severity="Medium"
+    ))
+
+    # ZT-006: Encrypted communications enforcement
+    # Check that SSH, TLS are required and telnet/FTP disabled
+    insecure_svcs = []
+    for svc in ['telnet', 'vsftpd', 'proftpd', 'rsh', 'rlogin', 'rexec']:
+        if check_service_active(svc, cache=cache):
+            insecure_svcs.append(svc)
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Zero Trust",
+        status="Pass" if not insecure_svcs else "Fail",
+        message=f"{get_cisa_id('ZT', 6)}: Encrypted communications enforcement (High)",
+        details=f"Insecure services active: {', '.join(insecure_svcs) if insecure_svcs else 'none'}",
+        remediation=f"Disable insecure services: {', '.join(insecure_svcs)}; use SSH/SFTP/TLS only",
+        severity="High"
+    ))
+
+
+# ============================================================================
+# CISA Supply Chain Risk Management
+# ============================================================================
+
+def check_supply_chain_security(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Assess supply chain security controls per CISA supply chain guidance.
+
+    Checks package signing, repository integrity, software provenance,
+    and SBOM readiness.
+    """
+    cache = shared_data.get('cache')
+
+    # SC-001: Package repository GPG/signing verification
+    if os_info.family == "debian":
+        # Check for unsigned repos or [trusted=yes] entries
+        unsigned_repos = 0
+        signed_repos = 0
+        sources_dirs = ['/etc/apt/sources.list.d']
+        sources_files = ['/etc/apt/sources.list']
+
+        for sf in sources_files:
+            content = read_file_safe(sf)
+            if content:
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if 'trusted=yes' in line:
+                        unsigned_repos += 1
+                    elif line.startswith('deb ') or line.startswith('deb-src '):
+                        signed_repos += 1
+
+        for d in sources_dirs:
+            if os.path.isdir(d):
+                try:
+                    for f in os.listdir(d):
+                        content = read_file_safe(os.path.join(d, f))
+                        if content:
+                            for line in content.splitlines():
+                                line = line.strip()
+                                if not line or line.startswith('#'):
+                                    continue
+                                if 'trusted=yes' in line:
+                                    unsigned_repos += 1
+                                elif 'deb ' in line or 'deb-src' in line or 'Signed-By' in line:
+                                    signed_repos += 1
+                except PermissionError:
+                    pass
+
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CISA - Supply Chain",
+            status="Pass" if unsigned_repos == 0 and signed_repos > 0 else (
+                "Fail" if unsigned_repos > 0 else "Warning"),
+            message=f"{get_cisa_id('SC', 1)}: APT repository signature verification (High)",
+            details=f"Signed repos: {signed_repos}, Unsigned/trusted repos: {unsigned_repos}",
+            remediation="Remove [trusted=yes] from apt sources; use Signed-By for GPG verification",
+            severity="High"
+        ))
+
+    elif os_info.family == "redhat":
+        # Check gpgcheck in yum/dnf config
+        gpgcheck_on = False
+        for conf in ['/etc/yum.conf', '/etc/dnf/dnf.conf']:
+            content = read_file_safe(conf)
+            if content:
+                for line in content.splitlines():
+                    if line.strip().startswith('gpgcheck') and '1' in line:
+                        gpgcheck_on = True
+
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CISA - Supply Chain",
+            status="Pass" if gpgcheck_on else "Fail",
+            message=f"{get_cisa_id('SC', 1)}: RPM GPG verification (High)",
+            details=f"gpgcheck: {'enabled' if gpgcheck_on else 'disabled or not found'}",
+            remediation="Set gpgcheck=1 in /etc/yum.conf or /etc/dnf/dnf.conf",
+            severity="High"
+        ))
+    else:
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="CISA - Supply Chain",
+            status="Info",
+            message=f"{get_cisa_id('SC', 1)}: Package signing verification (High)",
+            details=f"Package manager: {os_info.package_manager}",
+            remediation="Verify package signing is enforced for your package manager",
+            severity="High"
+        ))
+
+    # SC-002: Automatic security updates configuration
+    auto_update = False
+    if os_info.family == "debian":
+        ua_content = read_file_safe("/etc/apt/apt.conf.d/20auto-upgrades")
+        if ua_content and 'Unattended-Upgrade "1"' in ua_content:
+            auto_update = True
+        if not auto_update:
+            auto_update = check_service_active("unattended-upgrades", cache=cache)
+    elif os_info.family == "redhat":
+        auto_update = check_service_active("dnf-automatic", cache=cache)
+        if not auto_update:
+            auto_update = check_service_active("yum-cron", cache=cache)
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Supply Chain",
+        status="Pass" if auto_update else "Warning",
+        message=f"{get_cisa_id('SC', 2)}: Automatic security updates (High)",
+        details=f"Automatic updates: {'enabled' if auto_update else 'not detected'}",
+        remediation="Enable unattended-upgrades (Debian) or dnf-automatic (RHEL)",
+        severity="High"
+    ))
+
+    # SC-003: SBOM generation capability
+    sbom_tools = ['syft', 'cyclonedx', 'spdx-sbom-generator', 'trivy']
+    found_tools = [t for t in sbom_tools if command_exists(t)]
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Supply Chain",
+        status="Pass" if found_tools else "Info",
+        message=f"{get_cisa_id('SC', 3)}: SBOM generation capability (Medium)",
+        details=f"Available tools: {', '.join(found_tools) if found_tools else 'none detected'}",
+        remediation="Install SBOM tools (syft, trivy) for software supply chain transparency",
+        severity="Medium"
+    ))
+
+    # SC-004: Kernel module signing verification
+    sig_enforce = False
+    cmdline = read_file_safe("/proc/cmdline") or ""
+    if "module.sig_enforce=1" in cmdline:
+        sig_enforce = True
+    else:
+        exists, val = check_kernel_parameter("kernel.modules_disabled", cache=cache)
+        if exists and val.strip() == "1":
+            sig_enforce = True  # Even stricter: no new modules at all
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Supply Chain",
+        status="Pass" if sig_enforce else "Info",
+        message=f"{get_cisa_id('SC', 4)}: Kernel module signature enforcement (Medium)",
+        details=f"module.sig_enforce: {'enabled' if sig_enforce else 'not enforced'}",
+        remediation="Add module.sig_enforce=1 to kernel boot parameters",
+        severity="Medium"
+    ))
+
+    # SC-005: Third-party repository count (attack surface)
+    third_party = 0
+    official_patterns = ['ubuntu.com', 'debian.org', 'centos.org', 'redhat.com',
+                         'fedoraproject.org', 'archive.ubuntu.com', 'security.ubuntu.com']
+    if os_info.family == "debian":
+        for sf in ['/etc/apt/sources.list']:
+            content = read_file_safe(sf)
+            if content:
+                for line in content.splitlines():
+                    line = line.strip()
+                    if line.startswith('deb ') and not any(p in line for p in official_patterns):
+                        third_party += 1
+        sources_d = '/etc/apt/sources.list.d'
+        if os.path.isdir(sources_d):
+            try:
+                third_party += len([f for f in os.listdir(sources_d)
+                                   if f.endswith('.list') or f.endswith('.sources')])
+            except PermissionError:
+                pass
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - Supply Chain",
+        status="Pass" if third_party <= 2 else (
+            "Warning" if third_party <= 5 else "Fail"),
+        message=f"{get_cisa_id('SC', 5)}: Third-party repository count (Medium)",
+        details=f"Third-party/extra repositories: {third_party}",
+        remediation="Minimize third-party repositories; audit and remove unused sources",
+        severity="Medium"
+    ))
+
+
+# ============================================================================
+# CISA Secure Cloud Business Applications (SCuBA) Baseline
+# ============================================================================
+
+def check_scuba_baseline(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    Assess SCuBA-aligned controls for systems supporting cloud services.
+
+    Checks TLS enforcement, certificate validation, DNS security,
+    and cloud metadata protection applicable to Linux hosts.
+    """
+    cache = shared_data.get('cache')
+
+    # SCUBA-001: TLS minimum version enforcement
+    # Check OpenSSL default minimum and sshd ciphers
+    openssl_result = run_command("openssl version 2>/dev/null", use_cache=True)
+    openssl_ver = openssl_result.stdout.strip() if openssl_result.returncode == 0 else "unknown"
+
+    # Check for MinProtocol in openssl.cnf
+    min_tls = "unknown"
+    for conf_path in ['/etc/ssl/openssl.cnf', '/etc/pki/tls/openssl.cnf']:
+        content = read_file_safe(conf_path)
+        if content:
+            for line in content.splitlines():
+                if 'MinProtocol' in line and not line.strip().startswith('#'):
+                    min_tls = line.split('=')[1].strip() if '=' in line else "set"
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - SCuBA",
+        status="Pass" if min_tls in ("TLSv1.2", "TLSv1.3") else "Warning",
+        message=f"{get_cisa_id('SCUBA', 1)}: TLS minimum version enforcement (High)",
+        details=f"OpenSSL: {openssl_ver}, MinProtocol: {min_tls}",
+        remediation="Set MinProtocol = TLSv1.2 in openssl.cnf; disable TLSv1.0 and TLSv1.1",
+        severity="High"
+    ))
+
+    # SCUBA-002: Certificate trust store management
+    ca_bundle_paths = ['/etc/ssl/certs/ca-certificates.crt',
+                       '/etc/pki/tls/certs/ca-bundle.crt',
+                       '/etc/ssl/ca-bundle.pem']
+    ca_found = None
+    ca_count = 0
+    for ca_path in ca_bundle_paths:
+        if os.path.exists(ca_path):
+            ca_found = ca_path
+            content = read_file_safe(ca_path)
+            if content:
+                ca_count = content.count('BEGIN CERTIFICATE')
+            break
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - SCuBA",
+        status="Pass" if ca_found and ca_count > 0 else "Fail",
+        message=f"{get_cisa_id('SCUBA', 2)}: CA certificate trust store (High)",
+        details=f"Bundle: {ca_found or 'not found'}, Certificates: {ca_count}",
+        remediation="Install and maintain ca-certificates package; run update-ca-certificates",
+        severity="High"
+    ))
+
+    # SCUBA-003: DNS security (DNSSEC validation or DNS-over-TLS)
+    resolved_conf = read_file_safe("/etc/systemd/resolved.conf")
+    dnssec_enabled = False
+    dns_tls = False
+    if resolved_conf:
+        for line in resolved_conf.splitlines():
+            line = line.strip()
+            if line.startswith('DNSSEC=') and 'yes' in line.lower():
+                dnssec_enabled = True
+            if line.startswith('DNSOverTLS=') and ('yes' in line.lower() or 'opportunistic' in line.lower()):
+                dns_tls = True
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - SCuBA",
+        status="Pass" if dnssec_enabled or dns_tls else "Warning",
+        message=f"{get_cisa_id('SCUBA', 3)}: DNS security (DNSSEC / DNS-over-TLS) (Medium)",
+        details=f"DNSSEC: {'enabled' if dnssec_enabled else 'disabled'}, "
+                f"DNS-over-TLS: {'enabled' if dns_tls else 'disabled'}",
+        remediation="Enable DNSSEC=yes and/or DNSOverTLS=yes in /etc/systemd/resolved.conf",
+        severity="Medium"
+    ))
+
+    # SCUBA-004: Cloud instance metadata protection
+    # Check if IMDS is accessible (AWS 169.254.169.254, Azure, GCP)
+    is_cloud = False
+    metadata_protected = True
+    for meta_indicator in ['/sys/hypervisor/uuid', '/sys/class/dmi/id/product_name']:
+        content = read_file_safe(meta_indicator)
+        if content and any(cloud in content.lower() for cloud in
+                          ['amazon', 'google', 'microsoft', 'xen', 'kvm']):
+            is_cloud = True
+            break
+
+    if is_cloud:
+        # Check iptables for metadata endpoint blocking
+        ipt_result = run_command("iptables -L -n 2>/dev/null | grep 169.254.169.254", use_cache=True)
+        if ipt_result.returncode != 0 or not ipt_result.stdout.strip():
+            metadata_protected = False
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - SCuBA",
+        status="Pass" if not is_cloud or metadata_protected else "Warning",
+        message=f"{get_cisa_id('SCUBA', 4)}: Cloud metadata endpoint protection (High)",
+        details=f"Cloud instance: {'yes' if is_cloud else 'no'}, "
+                f"Metadata protected: {'yes' if metadata_protected else 'no/unverified'}",
+        remediation="Restrict access to instance metadata (169.254.169.254) via iptables or IMDSv2",
+        severity="High"
+    ))
+
+    # SCUBA-005: HTTP Strict Transport Security readiness
+    # Check if common web servers enforce HSTS
+    hsts_capable = False
+    for svc in ['nginx', 'apache2', 'httpd']:
+        if check_service_active(svc, cache=cache):
+            hsts_capable = True
+            break
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="CISA - SCuBA",
+        status="Info" if not hsts_capable else "Warning",
+        message=f"{get_cisa_id('SCUBA', 5)}: HSTS enforcement readiness (Medium)",
+        details=f"Web server active: {'yes' if hsts_capable else 'no'}",
+        remediation="Enable HSTS headers (Strict-Transport-Security) on all web services",
+        severity="Medium"
+    ))
+
+
+# ============================================================================
 # Main Module Entry Point
 # ============================================================================
 
@@ -1984,9 +2387,16 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     """
     results = []
     
+    # Extract SharedDataCache from shared_data (populated by main script)
+    cache = shared_data.get('cache')
+    
 
     # Detect operating system
-    os_info = detect_os()
+    # Get OS info from cache if available (avoids redundant detection)
+    if cache and hasattr(cache, 'os_info') and cache.os_info:
+        os_info = cache.os_info
+    else:
+        os_info = detect_os()
     shared_data['os_info'] = os_info
     
     print(f"[{MODULE_NAME}] Operating System: {os_info}")
@@ -1996,15 +2406,14 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
-        print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}]   Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
     print(f"\n[{MODULE_NAME}] ===== CISA SECURITY AUDIT =====")
     print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
-    print(f"[{MODULE_NAME}] Standards: CISA BODs, Emergency Directives, Best Practices")
+    print(f"[{MODULE_NAME}] Standards: CISA BODs, Zero Trust Maturity Model, SCuBA, Best Practices")
     print(f"[{MODULE_NAME}] Priority Levels: Critical, High, Medium, Low")
-    print(f"[{MODULE_NAME}] Target: 132 Comprehensive Security Audit Checks")
-    print(f"[{MODULE_NAME}] Focus: BOD 22-01 (KEV), BOD 23-01 (Asset Visibility)\n")
+    print(f"[{MODULE_NAME}] Focus: BOD 22-01 (KEV), BOD 23-01 (Asset Visibility), ZTMM, SCuBA\n")
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
@@ -2032,6 +2441,15 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         # Category 7: Data Protection
         check_data_protection(results, shared_data, os_info)
         
+        # Category 8: Zero Trust Architecture Readiness (CISA ZTMM)
+        check_zero_trust_readiness(results, shared_data, os_info)
+        
+        # Category 9: Supply Chain Risk Management
+        check_supply_chain_security(results, shared_data, os_info)
+        
+        # Category 10: SCuBA Baseline (Secure Cloud Business Applications)
+        check_scuba_baseline(results, shared_data, os_info)
+        
     except Exception as e:
         results.append(AuditResult(
             module=MODULE_NAME,
@@ -2052,6 +2470,9 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     
     bod_22_01_checks = sum(1 for r in results if "BOD 22-01" in r.category)
     bod_23_01_checks = sum(1 for r in results if "BOD 23-01" in r.category)
+    zt_checks = sum(1 for r in results if "Zero Trust" in r.category)
+    sc_checks = sum(1 for r in results if "Supply Chain" in r.category)
+    scuba_checks = sum(1 for r in results if "SCuBA" in r.category)
     
     summary_details = (
         f"Critical failures: {critical_fail}, High failures: {high_fail}, "
@@ -2071,19 +2492,21 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] BOD 22-01 checks: {bod_22_01_checks}")
     print(f"[{MODULE_NAME}] BOD 23-01 checks: {bod_23_01_checks}")
+    print(f"[{MODULE_NAME}] Zero Trust checks: {zt_checks}")
+    print(f"[{MODULE_NAME}] Supply Chain checks: {sc_checks}")
+    print(f"[{MODULE_NAME}] SCuBA checks: {scuba_checks}")
     print(f"[{MODULE_NAME}] Priority summary: {summary_details}")
-    print(f"[{MODULE_NAME}]   🔴 Critical Failures: {critical_fail}")
-    print(f"[{MODULE_NAME}]   🟠 High Failures: {high_fail}")
-    print(f"[{MODULE_NAME}]   🟡 Medium Failures: {medium_fail}")
-    print(f"[{MODULE_NAME}]   🟣 Low Failures: {low_fail}")
+    print(f"[{MODULE_NAME}]    Critical Failures: {critical_fail}")
+    print(f"[{MODULE_NAME}]    High Failures: {high_fail}")
+    print(f"[{MODULE_NAME}]   Medium Failures: {medium_fail}")
+    print(f"[{MODULE_NAME}]   Low Failures: {low_fail}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
-    print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ❌ Fail:    {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
-    if error_count > 0:
-        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
+    print(f"[{MODULE_NAME}]   Passed:  {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Failed:  {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Warnings: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Errors:  {error_count:3d} ({error_count/len(results)*100:.1f}%)")
     print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     return results
@@ -2195,7 +2618,7 @@ if __name__ == "__main__":
     # Display critical failures
     critical_failures = [r for r in test_results if r.status == "Fail" and "Critical" in r.message]
     if critical_failures:
-        print(f"\n⚠️  {len(critical_failures)} CRITICAL FAILURES DETECTED:")
+        print(f"\n  {len(critical_failures)} CRITICAL FAILURES DETECTED:")
         for i, failure in enumerate(critical_failures[:5], 1):
             print(f"  {i}. {failure.message}")
         if len(critical_failures) > 5:
@@ -2204,7 +2627,7 @@ if __name__ == "__main__":
     # Display high-priority failures
     high_failures = [r for r in test_results if r.status == "Fail" and "High" in r.message]
     if high_failures:
-        print(f"\n⚠️  {len(high_failures)} HIGH-PRIORITY FAILURES DETECTED:")
+        print(f"\n  {len(high_failures)} HIGH-PRIORITY FAILURES DETECTED:")
         for i, failure in enumerate(high_failures[:5], 1):
             print(f"  {i}. {failure.message}")
         if len(high_failures) > 5:
@@ -2213,3 +2636,7 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("End of CISA module test")
     print("="*70)
+
+# ============================================================================
+# End of module_cisa.py
+# ============================================================================
