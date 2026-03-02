@@ -1,11 +1,11 @@
 # Linux Security Audit Project
 
-[![Version](https://img.shields.io/badge/version-1.1-blue.svg)](https://github.com/Sandler73/Linux-Security-Audit-Project)
+[![Version](https://img.shields.io/badge/version-2.0-blue.svg)](https://github.com/Sandler73/Linux-Security-Audit-Project)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.6+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.kernel.org/)
 
-A comprehensive, modular security audit framework for Linux systems supporting multiple compliance frameworks with automated remediation capabilities.
+A comprehensive, modular security audit framework for Linux systems supporting multiple compliance frameworks with automated remediation capabilities, compliance scoring, and interactive reporting.
 
 ## 🚀 Quick Start
 
@@ -42,22 +42,23 @@ sudo python3 linux_security_audit.py
 
 ### Core Capabilities
 
-- **🔍 Comprehensive Security Assessment**: 1000+ individual security checks across 8 frameworks
-- **📊 Multiple Framework Support**: CIS, NIST, STIG, NSA, CISA, ENISA, ISO27001, and Core baseline
-- **🎨 Interactive HTML Reports**: Rich, filterable reports with dark/light themes
+- **🔍 1,207 Security Checks**: Comprehensive assessment across 8 compliance frameworks
+- **📊 Compliance Scoring**: Weighted, simple, and severity-adjusted scores with pass/fail thresholds
+- **🎨 Interactive HTML Reports**: 18+ features including SVG charts, clickable dashboard, column resizing, multi-format export
+- **⚡ Performance Engine**: Shared caching (~50% hit rate), parallel execution, direct /proc reads
 - **🔧 Automated Remediation**: Fix security issues with single commands or selective batch operations
-- **📁 Multi-Format Output**: HTML, CSV, JSON, XML, and Console formats
+- **📁 Multi-Format Output**: HTML, CSV, JSON, XML, and Console with companion JSON metadata
 - **🔐 Privilege-Aware**: Works with or without root (graceful degradation)
-- **🎯 Selective Remediation**: Export specific issues from HTML and fix only those
-- **📈 Trend Analysis**: Track security posture over time with JSON/CSV exports
+- **📝 Structured Logging**: Dual console/file output, configurable levels, JSON log format for SIEMs
 
 ### Advanced Features
 
-- **Dynamic Module Discovery**: Automatically detects and validates security modules
-- **OS-Aware Checks**: Distribution-specific optimizations (Debian, Ubuntu, RHEL, CentOS, Fedora, etc.)
+- **Dynamic Module Discovery**: Automatically detects and validates modules from `modules/` directory
+- **OS-Aware Checks**: Distribution-specific optimizations (Debian, Red Hat, SUSE, Arch families)
+- **IP Address Identification**: Paired host identification (hostname + OS + IPs) for SIEM attribution
 - **Smart Privilege Detection**: Identifies what can/can't be checked without root
 - **Comprehensive Error Handling**: Graceful failures with detailed error reporting
-- **Zero Dependencies**: Uses only Python standard library (no pip install needed)
+- **Zero Dependencies**: Uses only Python standard library (Python 3.7+, no pip install needed)
 - **Completely Offline**: No internet connection required, no data transmitted
 
 ## 🛡️ Security Frameworks
@@ -66,16 +67,16 @@ The project includes 8 specialized security modules:
 
 | Module | Checks | Description | Best For |
 |--------|--------|-------------|----------|
-| **[Core](../../wiki/Module-Documentation#core-module)** | 150+ | Industry best practices, OS-specific security | Everyone |
-| **[CIS](../../wiki/Module-Documentation#cis-module)** | 200+ | CIS Benchmarks compliance | General hardening, compliance |
-| **[CISA](../../wiki/Module-Documentation#cisa-module)** | 140+ | Critical infrastructure protection | Government, critical sectors |
-| **[ENISA](../../wiki/Module-Documentation#enisa-module)** | 135+ | EU cybersecurity guidelines | European organizations |
-| **[ISO27001](../../wiki/Module-Documentation#iso27001-module)** | 145+ | Information security management | ISMS certification |
-| **[NIST](../../wiki/Module-Documentation#nist-module)** | 160+ | NIST 800-53, CSF 2.0, 800-171 | Federal, contractors |
-| **[NSA](../../wiki/Module-Documentation#nsa-module)** | 155+ | Advanced security hardening | High-security environments |
-| **[STIG](../../wiki/Module-Documentation#stig-module)** | 180+ | DoD security requirements | Defense, contractors |
+| **[Core](../../wiki/Module-Documentation#core-module)** | 153 | Industry best practices, OS-specific security | Everyone |
+| **[CIS](../../wiki/Module-Documentation#cis-module)** | 212 | CIS Benchmarks compliance | General hardening, compliance |
+| **[CISA](../../wiki/Module-Documentation#cisa-module)** | 147 | Critical infrastructure protection | Government, critical sectors |
+| **[ENISA](../../wiki/Module-Documentation#enisa-module)** | 97 | EU cybersecurity guidelines | European organizations |
+| **[ISO27001](../../wiki/Module-Documentation#iso27001-module)** | 115 | Information security management | ISMS certification |
+| **[NIST](../../wiki/Module-Documentation#nist-module)** | 172 | NIST 800-53, CSF 2.0, 800-171 | Federal, contractors |
+| **[NSA](../../wiki/Module-Documentation#nsa-module)** | 144 | Advanced security hardening | High-security environments |
+| **[STIG](../../wiki/Module-Documentation#stig-module)** | 167 | DoD security requirements | Defense, contractors |
 
-**Total**: 1,100+ comprehensive security checks
+**Total**: 1,207 comprehensive security checks (validated)
 
 ### Framework Selection Guidance
 
@@ -92,7 +93,7 @@ The project includes 8 specialized security modules:
 ### Minimum Requirements
 
 - **Operating System**: Linux (any modern distribution)
-- **Python**: Version 3.6 or higher
+- **Python**: Version 3.7 or higher
 - **Disk Space**: 100 MB free
 - **Memory**: 512 MB RAM (1 GB recommended)
 - **Privileges**: Root/sudo recommended for complete results
@@ -119,7 +120,8 @@ The project includes 8 specialized security modules:
 **No installation required!** All dependencies are part of Python's standard library:
 - `os`, `sys`, `json`, `csv`, `argparse`, `subprocess`
 - `platform`, `socket`, `datetime`, `pathlib`, `typing`
-- `xml.etree.ElementTree`, `html`, `dataclasses`
+- `xml.etree.ElementTree`, `html`, `dataclasses` (Python 3.7+)
+- `concurrent.futures`, `ipaddress`, `logging`
 
 ## 📦 Installation
 
@@ -152,9 +154,10 @@ chmod +x linux_security_audit.py
 
 ### Option 3: Direct Download
 
-Download individual files from the repository and place in the same directory:
+Download and preserve the directory structure:
 - `linux_security_audit.py` (main script)
-- `module_*.py` (all 8 module files)
+- `modules/module_*.py` (all 8 module files)
+- `shared_components/audit_common.py` (shared library)
 
 ## 🎯 Basic Usage
 
@@ -211,6 +214,13 @@ sudo python3 linux_security_audit.py -f XML -o siem-feed.xml
 | `-f, --output-format` | Output format | `-f HTML` |
 | `-o, --output-path` | Output file path | `-o report.html` |
 | `--list-modules` | List available modules | |
+| `--parallel` | Execute modules in parallel | |
+| `--workers N` | Number of parallel workers | `--workers 4` |
+| `--profile` | Show performance statistics | |
+| `--log-level LEVEL` | Set log level | `--log-level DEBUG` |
+| `--log-file PATH` | Custom log file path | |
+| `--json-log` | JSON-structured log output | |
+| `--verbose` / `--quiet` | Control console verbosity | |
 | `--remediate` | Interactive remediation | |
 | `--remediate-fail` | Fix only FAIL status | |
 | `--auto-remediate` | Automatic remediation | |
@@ -388,20 +398,26 @@ sudo python3 linux_security_audit.py --auto-remediate
 
 ```
 Linux-Security-Audit-Project/
-├── linux_security_audit.py      # Main orchestrator script
-├── module_core.py                # Core security baseline (150+ checks)
-├── module_cis.py                 # CIS Benchmarks (200+ checks)
-├── module_cisa.py                # CISA guidance (140+ checks)
-├── module_enisa.py               # ENISA guidelines (135+ checks)
-├── module_iso27001.py            # ISO 27001 controls (145+ checks)
-├── module_nist.py                # NIST frameworks (160+ checks)
-├── module_nsa.py                 # NSA hardening (155+ checks)
-├── module_stig.py                # DISA STIGs (180+ checks)
-├── README.md                     # This file
-├── LICENSE                       # MIT License
-├── CHANGELOG.md                  # Version history
-├── SECURITY.md                   # Security policy
-└── .gitignore                    # Git ignore rules
+├── linux_security_audit.py           # Main orchestrator (3,487 lines)
+├── modules/                          # Security framework modules
+│   ├── module_core.py                # Core baseline (153 checks)
+│   ├── module_cis.py                 # CIS Benchmarks (212 checks)
+│   ├── module_cisa.py                # CISA guidance (147 checks)
+│   ├── module_enisa.py               # ENISA guidelines (97 checks)
+│   ├── module_iso27001.py            # ISO 27001 controls (115 checks)
+│   ├── module_nist.py                # NIST frameworks (172 checks)
+│   ├── module_nsa.py                 # NSA hardening (144 checks)
+│   └── module_stig.py                # DISA STIGs (167 checks)
+├── shared_components/                # Shared library
+│   └── audit_common.py              # Caching, parallel, /proc reads (2,174 lines)
+├── logs/                             # Structured log files (auto-created)
+├── reports/                          # Generated reports (auto-created)
+├── README.md                         # This file
+├── LICENSE                           # MIT License
+├── CHANGELOG.md                      # Version history
+├── SECURITY.md                       # Security policy
+├── CONTRIBUTING.md                   # Contribution guidelines
+└── .gitignore                        # Git ignore rules
 ```
 
 ## 🤝 Contributing
@@ -437,9 +453,12 @@ cd Linux-Security-Audit-Project
 # Create development branch
 git checkout -b feature/your-feature
 
+# Verify directory structure
+ls modules/ shared_components/
+
 # Make changes and test
 python3 linux_security_audit.py --list-modules
-sudo python3 linux_security_audit.py -m YourModule
+sudo python3 linux_security_audit.py -m YourModule --profile
 
 # Run tests (if available)
 python3 -m pytest tests/
@@ -534,12 +553,13 @@ Thanks to the open-source security community for:
 
 ## 📊 Project Stats
 
-- **Version**: 1.1
-- **Release Date**: January 2026
-- **Total Checks**: 1,100+
-- **Modules**: 8
-- **Output Formats**: 5
-- **Python Version**: 3.6+
+- **Version**: 2.0
+- **Release Date**: March 2026
+- **Total Checks**: 1,207 (validated)
+- **Modules**: 8 security frameworks
+- **Output Formats**: 5 (HTML, CSV, JSON, XML, Console)
+- **Scoring Methods**: 3 (simple, weighted, severity-adjusted)
+- **Python Version**: 3.7+
 - **License**: MIT
 - **Status**: Active Development
 
