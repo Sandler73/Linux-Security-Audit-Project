@@ -2,7 +2,7 @@
 """
 module_nist.py
 NIST Cybersecurity Framework & 800-53 Controls Module for Linux
-Version: 2.1
+Version: 2.2
 
 SYNOPSIS:
     Comprehensive audit of NIST security controls and Cybersecurity Framework 
@@ -55,6 +55,12 @@ NOTES:
     Standards: NIST 800-53 Rev 5, NIST CSF 2.0, NIST 800-171 Rev 2
     Target: 160+ comprehensive security checks; OS-aware technical control checks
     Module automatically detects OS via module_core integration
+    
+    v2.0 Changes:
+    - Uses audit_common.py shared library (eliminates duplicated helpers)
+    - SharedDataCache integration for cached file/command lookups
+    - Severity levels on all AuditResults
+    - Thread-safe for parallel execution
 """
 
 import os
@@ -64,276 +70,100 @@ import subprocess
 import pwd
 import grp
 import glob
-import datetime
 import socket
+import platform
+import time
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
 
-# Import AuditResult from main script
+# ============================================================================
+# Shared Library Integration
+# ============================================================================
+# Import consolidated utilities from audit_common.py
+# This eliminates duplicated helper functions across all modules
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from linux_security_audit import AuditResult
+sys.path.insert(0, str(Path(__file__).parent))
+
+try:
+    # Try shared_components package first (standard deployment)
+    from shared_components.audit_common import (
+        # Core classes
+        AuditResult, OSInfo, SharedDataCache,
+        # OS detection
+        detect_os,
+        # Command execution (cached)
+        run_command, command_exists, read_file_safe,
+        # Service checks (cache-aware)
+        check_service_enabled, check_service_active,
+        # Package checks (OS-aware)
+        check_package_installed,
+        # File checks
+        get_file_permissions, get_file_permissions_full,
+        get_file_owner_group, check_file_exists,
+        # Kernel parameters (cache-aware)
+        check_kernel_parameter, check_mount_option,
+        # Security subsystems (cache-aware)
+        get_selinux_status, get_apparmor_status, get_firewall_status,
+        check_fips_mode, check_ipv6_enabled,
+        # SSH configuration (cache-aware)
+        get_ssh_config_value, get_ssh_config_all,
+        # Network
+        get_listening_ports, get_loaded_kernel_modules,
+        # PAM & password policy (cache-aware)
+        check_pam_module, get_password_policy,
+        # User accounts (cache-aware)
+        get_user_accounts, get_system_users, get_human_users,
+        # Parsing helpers
+        safe_int_parse, safe_float_parse,
+        # Audit rules & GRUB
+        get_audit_rules, get_grub_cmdline, check_grub_parameter,
+        # Updates (OS-aware)
+        get_available_updates, get_security_updates,
+        # ID generation
+        generate_check_id,
+        # Logging
+        get_module_logger,
+    )
+    HAS_COMMON_LIB = True
+except ImportError:
+    try:
+        # Fallback: flat-file layout (audit_common.py in same directory)
+        from audit_common import (
+            AuditResult, OSInfo, SharedDataCache, detect_os,
+            run_command, command_exists, read_file_safe,
+            check_service_enabled, check_service_active,
+            check_package_installed, get_file_permissions,
+            get_file_permissions_full, get_file_owner_group,
+            check_file_exists, check_kernel_parameter,
+            check_mount_option, get_selinux_status,
+            get_apparmor_status, get_firewall_status,
+            check_fips_mode, check_ipv6_enabled,
+            get_ssh_config_value, get_ssh_config_all,
+            get_listening_ports, get_loaded_kernel_modules,
+            check_pam_module, get_password_policy,
+            get_user_accounts, get_system_users, get_human_users,
+            safe_int_parse, safe_float_parse,
+            get_audit_rules, get_grub_cmdline, check_grub_parameter,
+            get_available_updates, get_security_updates,
+            generate_check_id, get_module_logger,
+        )
+        HAS_COMMON_LIB = True
+    except ImportError:
+        # Fallback: import AuditResult from main script (backward compatibility)
+        from linux_security_audit import AuditResult
+        HAS_COMMON_LIB = False
 
 MODULE_NAME = "NIST"
-MODULE_VERSION = "2.1"
+MODULE_VERSION = "2.2"
 
-import platform
-
-# ============================================================================
-# OS Detection and Classification  
-# ============================================================================
-
-class OSInfo:
-    """Store and manage OS information"""
-    def __init__(self):
-        self.family = "Unknown"  # debian, redhat, suse, arch, unknown
-        self.distro = "Unknown"  # ubuntu, debian, rhel, centos, fedora, etc.
-        self.version = "Unknown"
-        self.version_id = "Unknown"
-        self.codename = "Unknown"
-        self.package_manager = "Unknown"  # apt, yum, dnf, zypper, pacman
-        self.init_system = "Unknown"  # systemd, sysvinit, upstart
-        self.architecture = platform.machine()
-        self.kernel_version = platform.release()
-        
-    def __str__(self):
-        return f"{self.distro} {self.version} ({self.family})"
-
-def detect_os() -> OSInfo:
-    """
-    Comprehensive OS detection
-    Returns OSInfo object with detailed system information
-    """
-    os_info = OSInfo()
-    
-    # Read /etc/os-release (standard location)
-    if os.path.exists("/etc/os-release"):
-        with open("/etc/os-release", 'r') as f:
-            os_release = {}
-            for line in f:
-                if '=' in line:
-                    key, value = line.strip().split('=', 1)
-                    os_release[key] = value.strip('"')
-        
-        os_info.distro = os_release.get('ID', 'unknown').lower()
-        os_info.version = os_release.get('VERSION', 'unknown')
-        os_info.version_id = os_release.get('VERSION_ID', 'unknown')
-        os_info.codename = os_release.get('VERSION_CODENAME', 'unknown')
-        
-        # Determine OS family
-        id_like = os_release.get('ID_LIKE', '').lower()
-        if os_info.distro in ['ubuntu', 'debian', 'linuxmint', 'kali'] or 'debian' in id_like:
-            os_info.family = 'debian'
-        elif os_info.distro in ['rhel', 'centos', 'fedora', 'rocky', 'almalinux'] or 'rhel' in id_like or 'fedora' in id_like:
-            os_info.family = 'redhat'
-        elif os_info.distro in ['sles', 'opensuse'] or 'suse' in id_like:
-            os_info.family = 'suse'
-        elif os_info.distro == 'arch':
-            os_info.family = 'arch'
-    
-    # Fallback detection methods
-    if os_info.family == "Unknown":
-        if os.path.exists("/etc/debian_version"):
-            os_info.family = 'debian'
-            os_info.distro = 'debian'
-        elif os.path.exists("/etc/redhat-release"):
-            os_info.family = 'redhat'
-            with open("/etc/redhat-release", 'r') as f:
-                content = f.read().lower()
-                if 'centos' in content:
-                    os_info.distro = 'centos'
-                elif 'red hat' in content or 'rhel' in content:
-                    os_info.distro = 'rhel'
-                elif 'fedora' in content:
-                    os_info.distro = 'fedora'
-    
-    # Detect package manager
-    if command_exists('apt-get'):
-        os_info.package_manager = 'apt'
-    elif command_exists('dnf'):
-        os_info.package_manager = 'dnf'
-    elif command_exists('yum'):
-        os_info.package_manager = 'yum'
-    elif command_exists('zypper'):
-        os_info.package_manager = 'zypper'
-    elif command_exists('pacman'):
-        os_info.package_manager = 'pacman'
-    
-    # Detect init system
-    if os.path.exists("/run/systemd/system"):
-        os_info.init_system = 'systemd'
-    elif os.path.exists("/sbin/init") and os.path.islink("/sbin/init"):
-        link = os.readlink("/sbin/init")
-        if 'systemd' in link:
-            os_info.init_system = 'systemd'
-        elif 'upstart' in link:
-            os_info.init_system = 'upstart'
-    else:
-        os_info.init_system = 'sysvinit'
-    
-    return os_info
-
-MODULE_VERSION = "2.0.0"
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
-
-def run_command(command: str, check: bool = False) -> subprocess.CompletedProcess:
-    """Execute a shell command and return the result"""
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            check=check,
-            timeout=30
-        )
-        return result
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            args=command, returncode=-1, stdout="", stderr="Command timeout"
-        )
-    except Exception as e:
-        return subprocess.CompletedProcess(
-            args=command, returncode=-1, stdout="", stderr=str(e)
-        )
-
-def command_exists(command: str) -> bool:
-    """Check if a command exists"""
-    result = run_command(f"which {command} 2>/dev/null")
-    return result.returncode == 0
-
-def read_file_safe(filepath: str) -> str:
-    """Safely read a file"""
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read()
-    except Exception:
-        return ""
-
-def check_service_enabled(service_name: str) -> bool:
-    """Check if a systemd service is enabled"""
-    result = run_command(f"systemctl is-enabled {service_name} 2>/dev/null")
-    return result.returncode == 0 and result.stdout.strip() == "enabled"
-
-def check_service_active(service_name: str) -> bool:
-    """Check if a systemd service is active"""
-    result = run_command(f"systemctl is-active {service_name} 2>/dev/null")
-    return result.returncode == 0 and result.stdout.strip() == "active"
-
-def check_package_installed(package_name: str, os_info) -> bool:
-    """Check if a package is installed (works for both apt and rpm)"""
-    # Try dpkg (Debian/Ubuntu)
-    result = run_command(f"dpkg -l {package_name} 2>/dev/null | grep -q '^ii'")
-    if result.returncode == 0:
-        return True
-    
-    # Try rpm (RHEL/CentOS)
-    result = run_command(f"rpm -q {package_name} 2>/dev/null")
-    return result.returncode == 0
-
-def get_file_permissions(filepath: str) -> Optional[str]:
-    """Get file permissions as octal string"""
-    try:
-        stat_info = os.stat(filepath)
-        return oct(stat_info.st_mode)[-3:]
-    except Exception:
-        return None
-
-def get_file_owner_group(filepath: str) -> Tuple[Optional[str], Optional[str]]:
-    """Get file owner and group"""
-    try:
-        stat_info = os.stat(filepath)
-        owner = pwd.getpwuid(stat_info.st_uid).pw_name
-        group = grp.getgrgid(stat_info.st_gid).gr_name
-        return owner, group
-    except Exception:
-        return None, None
-
-def check_kernel_parameter(parameter: str) -> Tuple[bool, str]:
-    """Check kernel parameter value"""
-    result = run_command(f"sysctl {parameter} 2>/dev/null")
-    if result.returncode == 0:
-        match = re.search(r'=\s*(.+)', result.stdout)
-        if match:
-            return True, match.group(1).strip()
-    return False, ""
+# Module logger (uses structured logging if audit_common is available)
+logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
 
 def get_nist_id(family: str, number: int) -> str:
     """Generate NIST control ID"""
     return f"NIST-{family}-{number:03d}"
-
-def check_file_exists(filepath: str) -> bool:
-    """Check if file exists"""
-    return os.path.exists(filepath)
-
-def get_listening_ports() -> List[int]:
-    """Get list of listening TCP ports"""
-    result = run_command("ss -tuln 2>/dev/null | grep LISTEN | awk '{print $5}' | grep -oE '[0-9]+$' | sort -u || netstat -tuln 2>/dev/null | grep LISTEN | awk '{print $4}' | grep -oE '[0-9]+$' | sort -u")
-    if result.returncode == 0:
-        try:
-            return [int(p) for p in result.stdout.strip().split('\n') if p.isdigit()]
-        except:
-            return []
-    return []
-
-def check_pam_module(module_name: str) -> bool:
-    """Check if a PAM module is configured"""
-    pam_files = glob.glob("/etc/pam.d/*")
-    for pam_file in pam_files:
-        content = read_file_safe(pam_file)
-        if module_name in content:
-            return True
-    return False
-
-def get_user_accounts() -> List[str]:
-    """Get list of user accounts with login shells"""
-    passwd_content = read_file_safe("/etc/passwd")
-    users = []
-    for line in passwd_content.split('\n'):
-        if line and not line.startswith('#'):
-            fields = line.split(':')
-            if len(fields) >= 7:
-                shell = fields[6]
-                if shell and not shell.endswith('nologin') and not shell.endswith('/bin/false'):
-                    users.append(fields[0])
-    return users
-
-def get_system_users() -> List[str]:
-    """Get list of system accounts (UID < 1000)"""
-    passwd_content = read_file_safe("/etc/passwd")
-    system_users = []
-    for line in passwd_content.split('\n'):
-        if line and not line.startswith('#'):
-            fields = line.split(':')
-            if len(fields) >= 3:
-                try:
-                    uid = int(fields[2])
-                    if uid < 1000 and uid != 0:
-                        system_users.append(fields[0])
-                except:
-                    pass
-    return system_users
-
-def safe_int_parse(value: str, default: int = 0) -> int:
-    """
-    Safely parse a string to integer, handling edge cases
-    - Strips whitespace
-    - Takes first line if multi-line
-    - Returns default if not a valid integer
-    """
-    try:
-        if not value:
-            return default
-        # Strip and take first line only
-        clean_value = value.strip().split('\n')[0].strip()
-        if clean_value and clean_value.isdigit():
-            return int(clean_value)
-        return default
-    except (ValueError, AttributeError):
-        return default
-
 
 # ============================================================================
 # AC - Access Control
@@ -346,6 +176,9 @@ def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]
     Access Control checks - AC family
     Security audit for access control configurations and variables
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking AC - Access Control...")
     
     # AC-001: UID 0 accounts check (AC-6 Least Privilege)
@@ -802,6 +635,9 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
     Audit and Accountability checks - AU family
     Comprehensive security assessment of auditing and logging variables
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking AU - Audit & Accountability...")
     
     # AU-001: auditd installed (AU-2)
@@ -1162,6 +998,9 @@ def check_configuration_management(results: List[AuditResult], shared_data: Dict
     Configuration Management checks - CM family  
     Audit of configuration management variables
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking CM - Configuration Management...")
     
     # CM-001: Baseline configuration files exist (CM-2)
@@ -1527,6 +1366,9 @@ def check_identification_authentication(results: List[AuditResult], shared_data:
     Identification and Authentication checks - IA family
     IAM relevant security auditing
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking IA - Identification & Authentication Management...")
     
     # IA-001: Password maximum days (IA-5)
@@ -2023,6 +1865,9 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
     """
     Incident Response checks - IR family
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking IR - Incident Response...")
     
     # IR-001: Incident response plan documentation (IR-1)
@@ -2313,6 +2158,9 @@ def check_system_communications_protection(results: List[AuditResult], shared_da
     """
     System and Communications Protection - SC family
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking SC - System & Communications Protection...")
     
     # SC-001: Firewall installed (SC-7)
@@ -2730,6 +2578,9 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
     """
     System and Information Integrity - SI family
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking SI - System & Information Integrity...")
     
     # SI-001: Available security updates (SI-2)
@@ -3086,6 +2937,9 @@ def check_additional_controls(results: List[AuditResult], shared_data: Dict[str,
     Additional NIST control families
     Security audit checks across CP, MA, MP, PE, RA, SA
     """
+    
+    # Extract cache from shared_data for performance
+    cache = shared_data.get('cache')
     print(f"[{MODULE_NAME}] Checking Additional Control Families...")
     
     # CP-001: Backup directories exist (CP-9)
@@ -3289,6 +3143,282 @@ def check_additional_controls(results: List[AuditResult], shared_data: Dict[str,
 
 
 # ============================================================================
+# NIST SA - System and Services Acquisition
+# Phase 1 Gap: Software integrity, supply chain security
+# ============================================================================
+
+def check_system_services_acquisition(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    NIST SP 800-53 SA family: System and Services Acquisition controls.
+    Checks software integrity verification, package provenance, and
+    supply chain security measures.
+    """
+    cache = shared_data.get('cache')
+
+    # --- SA-10: Developer Configuration Management ---
+    # Check if package manager verifies signatures
+    if os_info.package_manager == "apt":
+        # Check APT verification settings
+        apt_conf = read_file_safe("/etc/apt/apt.conf.d/99verify-peer") or ""
+        apt_main = read_file_safe("/etc/apt/apt.conf") or ""
+        # Check that AllowUnauthenticated is not set
+        no_auth = "AllowUnauthenticated" in apt_main and "true" in apt_main.lower()
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="NIST - SA (System & Services Acquisition)",
+            status="Fail" if no_auth else "Pass",
+            message=f"{get_nist_id('SA', 1)}: SA-10 Package signature verification (APT)",
+            details=f"AllowUnauthenticated: {'ENABLED (insecure)' if no_auth else 'not set (secure)'}",
+            remediation="Remove 'AllowUnauthenticated' from /etc/apt/apt.conf",
+            severity="High"
+        ))
+
+        # Check for GPG keys in trusted keyring
+        result = run_command("apt-key list 2>/dev/null | grep -c 'pub' || "
+                            "gpg --list-keys --keyring /etc/apt/trusted.gpg 2>/dev/null | grep -c 'pub'",
+                            check=False)
+        key_count = safe_int_parse(result.stdout.strip(), default=0)
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="NIST - SA (System & Services Acquisition)",
+            status="Pass" if key_count > 0 else "Warning",
+            message=f"{get_nist_id('SA', 2)}: SA-10 APT repository GPG keys",
+            details=f"Trusted GPG keys: {key_count}",
+            remediation="Import repository GPG keys: apt-key adv --keyserver keyserver.ubuntu.com --recv-keys <KEY>",
+            severity="Medium"
+        ))
+
+    elif os_info.package_manager in ("yum", "dnf"):
+        # Check gpgcheck enabled
+        yum_conf = read_file_safe("/etc/yum.conf") or read_file_safe("/etc/dnf/dnf.conf") or ""
+        gpgcheck = True  # Default is enabled
+        for line in yum_conf.splitlines():
+            if line.strip().startswith("gpgcheck") and "0" in line:
+                gpgcheck = False
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="NIST - SA (System & Services Acquisition)",
+            status="Pass" if gpgcheck else "Fail",
+            message=f"{get_nist_id('SA', 1)}: SA-10 Package GPG verification ({os_info.package_manager})",
+            details=f"gpgcheck: {'enabled' if gpgcheck else 'DISABLED'}",
+            remediation=f"Set gpgcheck=1 in /etc/{os_info.package_manager}.conf",
+            severity="High"
+        ))
+
+        # Check repo_gpgcheck
+        repo_gpg = "repo_gpgcheck=1" in yum_conf
+        results.append(AuditResult(
+            module=MODULE_NAME,
+            category="NIST - SA (System & Services Acquisition)",
+            status="Pass" if repo_gpg else "Warning",
+            message=f"{get_nist_id('SA', 2)}: SA-10 Repository metadata GPG verification",
+            details=f"repo_gpgcheck: {'enabled' if repo_gpg else 'not explicitly enabled'}",
+            remediation=f"Add repo_gpgcheck=1 to /etc/{os_info.package_manager}.conf",
+            severity="Medium"
+        ))
+
+    # --- SA-11: Developer Security Testing ---
+    # Check for presence of security testing/scanning tools
+    security_tools = {
+        "lynis": "Security auditing tool",
+        "chkrootkit": "Rootkit detection",
+        "rkhunter": "Rootkit hunter",
+        "clamav": "Antivirus scanning",
+        "aide": "File integrity monitoring",
+        "tripwire": "File integrity monitoring",
+        "oscap": "SCAP compliance scanning",
+    }
+    found_tools = []
+    for tool, desc in security_tools.items():
+        if command_exists(tool):
+            found_tools.append(f"{tool} ({desc})")
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="NIST - SA (System & Services Acquisition)",
+        status="Pass" if len(found_tools) >= 2 else ("Warning" if found_tools else "Fail"),
+        message=f"{get_nist_id('SA', 3)}: SA-11 Security assessment tools availability",
+        details=f"Found {len(found_tools)}/{len(security_tools)}: "
+                f"{', '.join(found_tools) if found_tools else 'none detected'}",
+        remediation="Install security assessment tools: apt install lynis aide rkhunter",
+        severity="Medium"
+    ))
+
+    # --- SA-12: Supply Chain Protection ---
+    # Verify package repositories are using HTTPS
+    repo_files = []
+    repo_dirs = ["/etc/apt/sources.list.d", "/etc/yum.repos.d"]
+    main_sources = ["/etc/apt/sources.list"]
+
+    http_repos = 0
+    https_repos = 0
+    for src in main_sources:
+        content = read_file_safe(src)
+        if content:
+            for line in content.splitlines():
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    if 'http://' in line:
+                        http_repos += 1
+                    elif 'https://' in line:
+                        https_repos += 1
+
+    for rdir in repo_dirs:
+        if os.path.isdir(rdir):
+            try:
+                for rf in os.listdir(rdir):
+                    content = read_file_safe(os.path.join(rdir, rf))
+                    if content:
+                        for line in content.splitlines():
+                            if 'http://' in line and not line.strip().startswith('#'):
+                                http_repos += 1
+                            elif 'https://' in line and not line.strip().startswith('#'):
+                                https_repos += 1
+            except (PermissionError, OSError):
+                pass
+
+    total_repos = http_repos + https_repos
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="NIST - SA (System & Services Acquisition)",
+        status="Pass" if http_repos == 0 and https_repos > 0 else (
+            "Warning" if http_repos > 0 else "Info"),
+        message=f"{get_nist_id('SA', 4)}: SA-12 Repository transport security",
+        details=f"HTTPS repos: {https_repos}, HTTP (insecure) repos: {http_repos}",
+        remediation="Convert all repository URLs from http:// to https://",
+        severity="Medium"
+    ))
+
+    # --- SA-22: Unsupported System Components ---
+    # Check if running an end-of-life OS version
+    result = run_command("cat /etc/os-release 2>/dev/null", check=False)
+    eol_warning = False
+    if result.returncode == 0:
+        os_id = ""
+        os_version = ""
+        for line in result.stdout.splitlines():
+            if line.startswith("ID="):
+                os_id = line.split('=', 1)[1].strip().strip('"')
+            if line.startswith("VERSION_ID="):
+                os_version = line.split('=', 1)[1].strip().strip('"')
+        # Known EOL versions (simplified check)
+        eol_versions = {
+            "ubuntu": ["14.04", "16.04", "18.04", "19.04", "19.10", "21.04", "21.10",
+                        "22.10", "23.04", "23.10"],
+            "debian": ["8", "9", "10"],
+            "centos": ["6", "7", "8"],
+            "rhel": ["6", "7"],
+        }
+        if os_id in eol_versions and os_version in eol_versions.get(os_id, []):
+            eol_warning = True
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="NIST - SA (System & Services Acquisition)",
+        status="Fail" if eol_warning else "Pass",
+        message=f"{get_nist_id('SA', 5)}: SA-22 Unsupported system components",
+        details=f"OS: {os_id} {os_version} - "
+                f"{'END OF LIFE - upgrade required' if eol_warning else 'supported version'}",
+        remediation="Upgrade to a supported OS version to receive security patches",
+        severity="Critical" if eol_warning else "Low"
+    ))
+
+
+# ============================================================================
+# NIST CA - Assessment, Authorization, and Monitoring
+# Phase 1 Gap: Vulnerability scanning, audit readiness
+# ============================================================================
+
+def check_assessment_authorization(results: List[AuditResult], shared_data: Dict[str, Any], os_info: OSInfo):
+    """
+    NIST SP 800-53 CA family: Assessment, Authorization, and Monitoring.
+    Checks for vulnerability scanning capability, security assessment
+    readiness, and continuous monitoring configuration.
+    """
+    cache = shared_data.get('cache')
+
+    # --- CA-2: Security Assessments ---
+    # Check for SCAP/OpenSCAP capability
+    oscap_available = command_exists("oscap")
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="NIST - CA (Assessment & Authorization)",
+        status="Pass" if oscap_available else "Warning",
+        message=f"{get_nist_id('CA', 1)}: CA-2 SCAP compliance scanning capability",
+        details=f"OpenSCAP: {'installed' if oscap_available else 'not installed'}",
+        remediation="Install OpenSCAP: apt install libopenscap8 (or yum install openscap-scanner)",
+        severity="Medium"
+    ))
+
+    # --- CA-7: Continuous Monitoring ---
+    # Check for file integrity monitoring
+    fim_tools = {"aide": "/etc/aide/aide.conf", "tripwire": "/etc/tripwire",
+                 "osquery": "/etc/osquery", "wazuh-agent": "/var/ossec/etc/ossec.conf",
+                 "ossec-agent": "/var/ossec/etc/ossec.conf"}
+    fim_active = []
+    for tool, config_path in fim_tools.items():
+        if command_exists(tool) or os.path.exists(config_path):
+            fim_active.append(tool)
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="NIST - CA (Assessment & Authorization)",
+        status="Pass" if fim_active else "Fail",
+        message=f"{get_nist_id('CA', 2)}: CA-7 File integrity monitoring",
+        details=f"FIM tools: {', '.join(fim_active) if fim_active else 'none detected'}",
+        remediation="Install AIDE: apt install aide && aideinit",
+        severity="High"
+    ))
+
+    # --- CA-7: Continuous Monitoring - Log forwarding ---
+    log_forwarders = {"rsyslog": "/etc/rsyslog.conf", "syslog-ng": "/etc/syslog-ng/syslog-ng.conf",
+                      "fluentd": "/etc/td-agent", "filebeat": "/etc/filebeat",
+                      "journald-upload": "/etc/systemd/journal-upload.conf"}
+    active_forwarders = []
+    for fwd, config in log_forwarders.items():
+        if command_exists(fwd) or os.path.exists(config):
+            active_forwarders.append(fwd)
+
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="NIST - CA (Assessment & Authorization)",
+        status="Pass" if active_forwarders else "Warning",
+        message=f"{get_nist_id('CA', 3)}: CA-7 Log forwarding/aggregation",
+        details=f"Log forwarders: {', '.join(active_forwarders) if active_forwarders else 'none detected'}",
+        remediation="Configure centralized log forwarding via rsyslog, filebeat, or fluentd",
+        severity="Medium"
+    ))
+
+    # --- CA-8: Penetration Testing readiness ---
+    # Check for common pentest/assessment tools
+    pentest_tools = ["nmap", "nikto", "lynis", "testssl.sh", "testssl"]
+    found_pentest = [t for t in pentest_tools if command_exists(t)]
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="NIST - CA (Assessment & Authorization)",
+        status="Info",
+        message=f"{get_nist_id('CA', 4)}: CA-8 Security assessment tool availability",
+        details=f"Available: {', '.join(found_pentest) if found_pentest else 'none detected'}",
+        remediation="Install assessment tools as needed for periodic security testing",
+        severity="Low"
+    ))
+
+    # --- CA-9: Internal System Connections ---
+    # Check for unexpected listening services
+    result = run_command("ss -tuln 2>/dev/null | grep LISTEN | wc -l", check=False)
+    listen_count = safe_int_parse(result.stdout.strip(), default=0)
+    results.append(AuditResult(
+        module=MODULE_NAME,
+        category="NIST - CA (Assessment & Authorization)",
+        status="Pass" if listen_count <= 15 else ("Warning" if listen_count <= 30 else "Fail"),
+        message=f"{get_nist_id('CA', 5)}: CA-9 Internal system connections audit",
+        details=f"Listening services: {listen_count} (review for unauthorized services)",
+        remediation="Audit listening services with 'ss -tuln' and disable unnecessary ones",
+        severity="Medium"
+    ))
+
+
+# ============================================================================
 # Main Orchestration Function
 # ============================================================================
 
@@ -3299,9 +3429,16 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     """
     results = []
     
+    # Extract SharedDataCache from shared_data (populated by main script)
+    cache = shared_data.get('cache')
+    
 
     # Detect operating system
-    os_info = detect_os()
+    # Get OS info from cache if available (avoids redundant detection)
+    if cache and hasattr(cache, 'os_info') and cache.os_info:
+        os_info = cache.os_info
+    else:
+        os_info = detect_os()
     shared_data['os_info'] = os_info
     
     print(f"[{MODULE_NAME}] Operating System: {os_info}")
@@ -3311,7 +3448,7 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
-        print(f"[{MODULE_NAME}] ⚠️  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}]   Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
     print(f"\n[{MODULE_NAME}] " + "="*70)
@@ -3319,13 +3456,13 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}] " + "="*70)
     print(f"[{MODULE_NAME}] Version: {MODULE_VERSION}")
     print(f"[{MODULE_NAME}] Standards: NIST 800-53 Rev 5, CSF 2.0, 800-171 Rev 2")
-    print(f"[{MODULE_NAME}] Control Families: AC, AU, CM, IA, IR, SC, SI, CP, MA, MP, PE, RA, SA")
+    print(f"[{MODULE_NAME}] Control Families: AC, AU, CM, IA, IR, SC, SI, CP, MA, MP, PE, RA, SA, CA")
     print(f"[{MODULE_NAME}] Target: 160+ Comprehensive Security Audit Checks")
     print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     is_root = shared_data.get("is_root", os.geteuid() == 0)
     if not is_root:
-        print(f"[{MODULE_NAME}] âš ï¸  Note: Running without root privileges")
+        print(f"[{MODULE_NAME}]   Note: Running without root privileges")
         print(f"[{MODULE_NAME}] Some checks require elevated privileges for full coverage\n")
     
     try:
@@ -3338,9 +3475,12 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
         check_system_communications_protection(results, shared_data, os_info)
         check_system_information_integrity(results, shared_data, os_info)
         check_additional_controls(results, shared_data, os_info)
+        # Phase 1 new control families
+        check_system_services_acquisition(results, shared_data, os_info)
+        check_assessment_authorization(results, shared_data, os_info)
         
     except Exception as e:
-        print(f"[{MODULE_NAME}] âŒ Error during audit execution: {str(e)}")
+        print(f"[{MODULE_NAME}]  Error during audit execution: {str(e)}")
         results.append(AuditResult(
             module=MODULE_NAME,
             category="NIST - Error",
@@ -3365,12 +3505,11 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
     print(f"[{MODULE_NAME}] Total Security Audit Checks Executed: {len(results)}")
     print(f"[{MODULE_NAME}] ")
     print(f"[{MODULE_NAME}] Results Summary:")
-    print(f"[{MODULE_NAME}]   ✅ Pass:    {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ❌ Fail:    {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ⚠️  Warning: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
-    print(f"[{MODULE_NAME}]   ℹ️  Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
-    if error_count > 0:
-        print(f"[{MODULE_NAME}]   🚫 Error:   {error_count:3d}")
+    print(f"[{MODULE_NAME}]   Passed:  {pass_count:3d} ({pass_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Failed:  {fail_count:3d} ({fail_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Warnings: {warn_count:3d} ({warn_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Info:    {info_count:3d} ({info_count/len(results)*100:.1f}%)")
+    print(f"[{MODULE_NAME}]   Errors:  {error_count:3d} ({error_count/len(results)*100:.1f}%)")
     print(f"[{MODULE_NAME}] " + "="*70 + "\n")
     
     return results
@@ -3392,13 +3531,22 @@ if __name__ == "__main__":
     print("Comprehensive NIST 800-53 Rev 5 Security Controls")
     print("="*80)
     
+    # Initialize cache if shared library is available
+    cache = None
+    if HAS_COMMON_LIB:
+        os_info_init = detect_os()
+        cache = SharedDataCache(os_info_init)
+        cache.warm_up()
+        print(f"  Cache: Enabled")
+    
     # Prepare test environment data
     test_data = {
         "hostname": socket.gethostname(),
         "os_version": f"{platform.system()} {platform.release()}",
         "scan_date": datetime.datetime.now(),
         "is_root": os.geteuid() == 0,
-        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd()
+        "script_path": Path(__file__).parent.parent if hasattr(Path(__file__), 'parent') else Path.cwd(),
+        "cache": cache,
     }
     
     print(f"\nTest Environment:")
@@ -3426,7 +3574,7 @@ if __name__ == "__main__":
         count = status_counts.get(status, 0)
         if count > 0:
             pct = (count / len(test_results)) * 100
-            bar = '█' * int(pct / 2)
+            bar = '#' * int(pct / 2)
             print(f"  {status:8s}: {count:3d} ({pct:5.1f}%) {bar}")
     
     # Category breakdown
@@ -3439,9 +3587,9 @@ if __name__ == "__main__":
     # Critical findings
     critical_failures = [r for r in test_results if r.status == "Fail"]
     if critical_failures:
-        print(f"\n⚠️  Critical Failures ({len(critical_failures)}):")
+        print(f"\n  Critical Failures ({len(critical_failures)}):")
         for failure in critical_failures[:10]:
-            print(f"  • {failure.message}")
+            print(f"   {failure.message}")
         if len(critical_failures) > 10:
             print(f"  ... and {len(critical_failures) - 10} more")
     
@@ -3449,3 +3597,7 @@ if __name__ == "__main__":
     print(f"NIST module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
+
+# ============================================================================
+# End of module_nist.py
+# ============================================================================
