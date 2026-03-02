@@ -19,3 +19,71 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+## Supplementary Terms
+
+The following sections provide additional clarity regarding the rights,
+obligations, and limitations set forth in the MIT License above. These
+sections are provided for informational purposes and do not modify, extend,
+or restrict the terms of the MIT License.
+
+### License and Copyright Notice
+
+Any person or organization that obtains, uses, modifies, or distributes this
+Software — in whole or in part — must include the above copyright notice and
+permission notice in all copies or substantial portions of the Software. This
+requirement applies to, but is not limited to:
+
+- Source code distributions and forks
+- Compiled or packaged distributions that include source files
+- Documentation derived from or incorporating this Software
+- Derivative works based on or extending this Software
+
+The copyright notice and permission notice must be preserved in their original
+form and must not be altered, obscured, or removed.
+
+### Warranty Disclaimer
+
+This Software is provided strictly on an "AS IS" basis, without warranty of
+any kind, whether express, implied, statutory, or otherwise. The authors and
+copyright holders make no representations or warranties regarding:
+
+- The accuracy, completeness, or reliability of security audit results
+- The suitability of the Software for any particular compliance framework,
+  regulatory requirement, or certification standard
+- The correctness or safety of any remediation commands or automated
+  remediation actions generated or executed by the Software
+- The ability of the Software to detect all security vulnerabilities,
+  misconfigurations, or compliance gaps on any given system
+- Uninterrupted or error-free operation of the Software in any environment
+
+Security audit results produced by this Software are informational in nature
+and do not constitute a certification, guarantee of compliance, or
+professional security assessment. Users are solely responsible for evaluating
+and validating all results, recommendations, and remediation actions before
+applying them to any system.
+
+### Limitation of Liability
+
+In no event shall the authors, copyright holders, contributors, or
+distributors of this Software be liable for any direct, indirect, incidental,
+special, exemplary, consequential, or punitive damages — including but not
+limited to loss of data, loss of revenue, system downtime, service
+disruption, or security breaches — arising out of or in connection with:
+
+- The use or inability to use this Software
+- Any reliance on security audit results, compliance scores, or
+  recommendations produced by this Software
+- The execution of remediation commands, whether initiated manually,
+  interactively, or through automated remediation features
+- System modifications, configuration changes, or service disruptions
+  resulting from actions taken based on the output of this Software
+- Any failure of the Software to detect, report, or remediate a security
+  vulnerability, misconfiguration, or compliance gap
+
+This limitation applies regardless of the theory of liability, whether in
+contract, tort (including negligence), strict liability, or otherwise, even if
+the authors or copyright holders have been advised of the possibility of such
+damages.
