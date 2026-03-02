@@ -90,7 +90,7 @@ What you expected to happen.
 **Environment**
 - OS: [e.g., Ubuntu 22.04]
 - Python Version: [e.g., 3.10.12]
-- Script Version: [e.g., 1.1]
+- Script Version: [e.g., 2.0]
 - Module: [e.g., CIS]
 - Running as: [root/non-root]
 
@@ -200,14 +200,14 @@ Help others in the community:
 ### Prerequisites
 
 1. **Required Knowledge**:
-   - Python 3.6+ programming
+   - Python 3.7+ programming
    - Linux system administration
    - Security concepts
    - Git version control
 
 2. **Development Tools**:
    ```bash
-   # Python 3.6+
+   # Python 3.7+
    python3 --version
    
    # Git
@@ -248,6 +248,7 @@ Help others in the community:
 
 2. **Verify setup**:
    ```bash
+   ls modules/ shared_components/
    python3 linux_security_audit.py --list-modules
    ```
 
@@ -294,7 +295,7 @@ git checkout -b docs/description-of-changes
 
 ```bash
 # Test standalone module
-python3 module_name.py
+python3 modules/module_name.py
 
 # Test integration
 python3 linux_security_audit.py --list-modules
@@ -560,12 +561,14 @@ def check_function(shared_data: Dict[str, Any]) -> List[AuditResult]:
 
 Before submitting, test your changes:
 
-- [ ] Module runs standalone: `python3 module_name.py`
+- [ ] Module runs standalone: `python3 modules/module_name.py`
 - [ ] Module discovered: `python3 linux_security_audit.py --list-modules`
 - [ ] Module integrates: `python3 linux_security_audit.py -m NAME`
+- [ ] Module works with caching: `python3 linux_security_audit.py -m NAME --profile`
 - [ ] Works without root (graceful degradation)
 - [ ] Works with root (full functionality)
 - [ ] All output formats work (HTML, CSV, JSON, XML, Console)
+- [ ] Compliance scores compute correctly
 - [ ] Remediation commands are valid
 - [ ] No hardcoded paths
 - [ ] No security vulnerabilities
@@ -789,5 +792,6 @@ Your contributions make this project better for everyone. Whether you're fixing 
 
 ---
 
-**Last Updated**: January 7, 2026  
+**Last Updated**: March 2, 2026  
 **Maintained By**: Sandler73
+**Version**: 2.0
