@@ -1,5 +1,7 @@
 # Linux Security Audit Project
 
+<div align="center">
+  
 [![Version](https://img.shields.io/badge/version-2.0-blue.svg)](https://github.com/Sandler73/Linux-Security-Audit-Project)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/)
@@ -9,6 +11,8 @@
 [![Sponsor](https://img.shields.io/badge/Sponsor-Support%20the%20Project-pink.svg)](https://github.com/sponsors/Sandler73)
 
 A comprehensive, modular security audit framework for Linux systems supporting multiple compliance frameworks with automated remediation capabilities, compliance scoring, and interactive reporting.
+
+</div>
 
 ## 🚀 Quick Start
 
