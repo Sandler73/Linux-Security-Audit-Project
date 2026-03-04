@@ -5,6 +5,9 @@
 [![Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.kernel.org/)
 
+[![Security Focus](https://img.shields.io/badge/Focus-CIS%20%7C%20NIST%20%7C%20STIG%20%7C%20CISA%20%7C%20NSA-red.svg)]()
+[![Sponsor](https://img.shields.io/badge/Sponsor-Support%20the%20Project-pink.svg)](https://github.com/sponsors/Sandler73)
+
 A comprehensive, modular security audit framework for Linux systems supporting multiple compliance frameworks with automated remediation capabilities, compliance scoring, and interactive reporting.
 
 ## 🚀 Quick Start
@@ -588,6 +591,8 @@ Thanks to the open-source security community for:
 ---
 
 <div align="center">
+
+**⭐ If this project helps you secure Linux systems, please consider giving it a star! ⭐**
 
 **[⬆ Back to Top](#linux-security-audit-project)**
 
