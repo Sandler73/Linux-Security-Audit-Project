@@ -217,6 +217,12 @@ reports/
 modules/__pycache__/
 shared_components/__pycache__/
 
+# Generated Directories (v2.0)
+logs/
+reports/
+modules/__pycache__/
+shared_components/__pycache__/
+
 # Audit Reports (Generated Output)
 Security-Audit-Report-*.html
 Security-Audit-Report-*.csv
