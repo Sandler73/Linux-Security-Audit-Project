@@ -2,7 +2,7 @@
 """
 module_nist.py
 NIST Cybersecurity Framework & 800-53 Controls Module for Linux
-Version: 2.2
+Version: 2.1
 
 SYNOPSIS:
     Comprehensive audit of NIST security controls and Cybersecurity Framework 
@@ -156,7 +156,61 @@ except ImportError:
         HAS_COMMON_LIB = False
 
 MODULE_NAME = "NIST"
-MODULE_VERSION = "2.2"
+
+# v3.4 Remediation library wiring
+try:
+    from shared_components.remediation_library import get_remediation as _v34_get_remediation
+    from shared_components.remediation_library import get_removal_remediation as _v34_get_removal
+    from shared_components.remediation_library import get_patch_remediation as _v34_get_patch
+    from shared_components.os_detection import detect_os as _v34_detect_os
+    _v34_OSINFO_CACHE = None
+    def remediation_for(tool_id):
+        """Return distro-aware remediation text for a registered tool.
+
+        Falls back to a short "Install <tool>" string if the library
+        does not have an entry for the tool_id.
+        """
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        text = _v34_get_remediation(tool_id, _v34_OSINFO_CACHE)
+        return text if text else f"Install {tool_id} via your distribution\'s package manager"
+
+    def _v34_resolve_os():
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        return _v34_OSINFO_CACHE
+
+    def removal_for(canonical_token, extra_context=""):
+        """Return OS-aware package-removal remediation text."""
+        try:
+            return _v34_get_removal(canonical_token, _v34_resolve_os(),
+                                    extra_context=extra_context)
+        except Exception:
+            return f"Remove {canonical_token} via your distribution\'s package manager"
+
+    def patch_for(extra_context=""):
+        """Return OS-aware security-patch remediation text."""
+        try:
+            return _v34_get_patch(_v34_resolve_os(), extra_context=extra_context)
+        except Exception:
+            return "Apply available security updates via your distribution\'s package manager"
+except ImportError:  # pragma: no cover
+    def remediation_for(tool_id):
+        return f"Install {tool_id} via your distribution\'s package manager"
+    def removal_for(canonical_token, extra_context=""):
+        return f"Remove {canonical_token} via your distribution\'s package manager"
+    def patch_for(extra_context=""):
+        return "Apply available security updates via your distribution\'s package manager"
+
+MODULE_VERSION = "3.9"
 
 # Module logger (uses structured logging if audit_common is available)
 logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
@@ -311,7 +365,7 @@ def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]
         status="Pass" if sudo_installed and sudoers_exists else "Fail",
         message=f"{get_nist_id('AC', 9)}: sudo package installed and configured (AC-5)",
         details="sudo properly configured" if sudo_installed and sudoers_exists else "Missing",
-        remediation="Install: apt-get install sudo || yum install sudo"
+        remediation=remediation_for("sudo")
     ))
     
     # AC-010: sudoers file permissions (AC-5, AC-6)
@@ -649,7 +703,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         status="Pass" if auditd_installed else "Fail",
         message=f"{get_nist_id('AU', 1)}: Linux Audit daemon installed (AU-2)",
         details="auditd package installed" if auditd_installed else "Not installed",
-        remediation="Install: apt-get install auditd || yum install audit"
+        remediation=remediation_for("auditd")
     ))
     
     # AU-002: auditd service enabled (AU-2)
@@ -661,7 +715,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         status="Pass" if auditd_enabled else "Fail",
         message=f"{get_nist_id('AU', 2)}: auditd service enabled at boot (AU-2)",
         details="Service enabled" if auditd_enabled else "Not enabled",
-        remediation="systemctl enable auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # AU-003: auditd service active (AU-2, AU-12)
@@ -865,7 +919,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         status="Pass" if time_sync_enabled else "Fail",
         message=f"{get_nist_id('AU', 17)}: Time synchronization enabled at boot (AU-8)",
         details="Service enabled" if time_sync_enabled else "Not enabled",
-        remediation="systemctl enable chronyd"
+        remediation=remediation_for("chrony")
     ))
     
     # AU-018: NTP/Chrony configured with servers (AU-8)
@@ -943,7 +997,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         status="Pass" if logrotate_installed else "Fail",
         message=f"{get_nist_id('AU', 22)}: Log rotation utility installed (AU-11)",
         details="logrotate installed" if logrotate_installed else "Not installed",
-        remediation="apt-get install logrotate || yum install logrotate"
+        remediation=remediation_for("logrotate")
     ))
     
     # AU-023: Audit log rotation configured (AU-11)
@@ -1173,7 +1227,7 @@ def check_configuration_management(results: List[AuditResult], shared_data: Dict
         status="Pass" if gpg_installed else "Warning",
         message=f"{get_nist_id('CM', 12)}: GPG utility installed (CM-14)",
         details="GPG available" if gpg_installed else "Not installed",
-        remediation="apt-get install gnupg || yum install gnupg2"
+        remediation=remediation_for("gnupg")
     ))
     
     # CM-013: System file integrity monitoring (CM-3, SI-7)
@@ -1185,7 +1239,7 @@ def check_configuration_management(results: List[AuditResult], shared_data: Dict
         status="Pass" if aide_installed else "Fail",
         message=f"{get_nist_id('CM', 13)}: File integrity monitoring installed (CM-3)",
         details="AIDE installed" if aide_installed else "Not installed",
-        remediation="apt-get install aide || yum install aide"
+        remediation=remediation_for("aide")
     ))
     
     # CM-014: AIDE database initialized (CM-3)
@@ -1203,7 +1257,7 @@ def check_configuration_management(results: List[AuditResult], shared_data: Dict
             status="Pass" if aide_db_exists else "Warning",
             message=f"{get_nist_id('CM', 14)}: AIDE database initialized (CM-3)",
             details="Database exists" if aide_db_exists else "Not initialized",
-            remediation="Initialize AIDE: aideinit || aide --init"
+            remediation=remediation_for("aide")
         ))
     
     # CM-015: AIDE scheduled checks (CM-3)
@@ -2075,7 +2129,7 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if installed_rootkit else "Warning",
         message=f"{get_nist_id('IR', 15)}: Rootkit detection tools (IR-4)",
         details=f"Installed: {', '.join(installed_rootkit)}" if installed_rootkit else "Not installed",
-        remediation="Install rkhunter: apt-get install rkhunter"
+        remediation=remediation_for("rkhunter")
     ))
     
     # IR-016: Malware scanning capability (IR-4, SI-3)
@@ -2088,7 +2142,7 @@ def check_incident_response(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if installed_malware else "Warning",
         message=f"{get_nist_id('IR', 16)}: Malware scanning capability (SI-3)",
         details=f"Installed: {', '.join(installed_malware)}" if installed_malware else "Not installed",
-        remediation="Install ClamAV: apt-get install clamav"
+        remediation=remediation_for("clamav")
     ))
     
     # IR-017: IDS/IPS capability (IR-4, SI-4)
@@ -2173,7 +2227,7 @@ def check_system_communications_protection(results: List[AuditResult], shared_da
         status="Pass" if firewall_installed else "Fail",
         message=f"{get_nist_id('SC', 1)}: Firewall software installed (SC-7)",
         details="Firewall package present" if firewall_installed else "No firewall",
-        remediation="Install firewall: apt-get install ufw"
+        remediation=remediation_for("ufw")
     ))
     
     # SC-002: Firewall enabled (SC-7)
@@ -2606,7 +2660,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Fail" if has_updates else "Pass",
         message=f"{get_nist_id('SI', 1)}: Security updates applied (SI-2)",
         details=f"{update_count} security updates available" if has_updates else "System up to date",
-        remediation="Apply updates: apt-get upgrade || yum update"
+        remediation=patch_for()
     ))
     
     # SI-002: Automatic updates configured (SI-2)
@@ -2619,7 +2673,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if auto_updates else "Warning",
         message=f"{get_nist_id('SI', 2)}: Automatic updates configured (SI-2)",
         details="Auto-updates enabled" if auto_updates else "Not configured",
-        remediation="Install: apt-get install unattended-upgrades"
+        remediation=remediation_for("unattended-upgrades")
     ))
     
     # SI-003: Package repository validation (SI-7)
@@ -2650,7 +2704,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if aide_installed else "Fail",
         message=f"{get_nist_id('SI', 4)}: File integrity monitoring installed (SI-7)",
         details="AIDE installed" if aide_installed else "Not installed",
-        remediation="Install AIDE: apt-get install aide"
+        remediation=remediation_for("aide")
     ))
     
     # SI-005: AIDE database exists (SI-7)
@@ -2668,7 +2722,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
             status="Pass" if aide_db_exists else "Warning",
             message=f"{get_nist_id('SI', 5)}: AIDE database initialized (SI-7)",
             details="Database exists" if aide_db_exists else "Not initialized",
-            remediation="Initialize AIDE: aideinit"
+            remediation=remediation_for("aide")
         ))
     
     # SI-006: AIDE scheduled (SI-7)
@@ -2694,7 +2748,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if antivirus_installed else "Warning",
         message=f"{get_nist_id('SI', 7)}: Malware protection installed (SI-3)",
         details="ClamAV installed" if antivirus_installed else "No antivirus",
-        remediation="Install ClamAV: apt-get install clamav clamav-daemon"
+        remediation=remediation_for("clamav")
     ))
     
     # SI-008: Malware definitions updated (SI-3)
@@ -2710,7 +2764,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
             status="Pass" if freshclam_recent else "Warning",
             message=f"{get_nist_id('SI', 8)}: Malware definitions updated (SI-3)",
             details="Updated within 7 days" if freshclam_recent else "Check updates",
-            remediation="Update definitions: freshclam"
+            remediation=remediation_for("clamav")
         ))
     
     # SI-009: Rootkit detection installed (SI-3)
@@ -2723,7 +2777,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if rootkit_installed else "Warning",
         message=f"{get_nist_id('SI', 9)}: Rootkit detection installed (SI-3)",
         details="Rootkit scanner present" if rootkit_installed else "Not installed",
-        remediation="Install: apt-get install rkhunter"
+        remediation=remediation_for("rkhunter")
     ))
     
     # SI-010: AppArmor/SELinux status (SI-6)
@@ -2778,17 +2832,16 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         remediation="Fix permissions: chmod 644 /etc/passwd; chmod 640 /etc/shadow"
     ))
     
-    # SI-013: World-writable files (SI-7)
-    world_writable = run_command("find / -xdev -type f -perm -0002 2>/dev/null | head -20 | wc -l").stdout.strip()
-    ww_count = safe_int_parse(world_writable)
-    
+    # SI-013: World-writable files (SI-7) (canonical assessment)
+    from shared_components.shared_assessments import get_world_writable_assessment as _ww_assess
+    _ww = _ww_assess("fail")
     results.append(AuditResult(
         module=MODULE_NAME,
         category="NIST - SI (System & Info Integrity)",
-        status="Warning" if ww_count > 10 else "Pass",
+        status=_ww.status,
         message=f"{get_nist_id('SI', 13)}: World-writable files (SI-7)",
-        details=f"{ww_count} world-writable files found",
-        remediation="Review and restrict world-writable files"
+        details=_ww.details,
+        remediation=_ww.remediation
     ))
     
     # SI-014: Unowned files (SI-7)
@@ -2865,7 +2918,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if not prelink_installed else "Warning",
         message=f"{get_nist_id('SI', 19)}: Prelink disabled (SI-7)",
         details="Prelink not installed" if not prelink_installed else "Prelink present",
-        remediation="Remove prelink: apt-get purge prelink"
+        remediation=removal_for("prelink")
     ))
     
     # SI-020: System information disclosure (SI-11)
@@ -3128,7 +3181,7 @@ def check_additional_controls(results: List[AuditResult], shared_data: Dict[str,
         status="Pass" if vuln_tools else "Warning",
         message=f"{get_nist_id('RA', 1)}: Vulnerability scanning tools (RA-5)",
         details=f"Installed: {', '.join(vuln_tools)}" if vuln_tools else "No scanners",
-        remediation="Install vulnerability scanner: apt-get install lynis"
+        remediation=remediation_for("lynis")
     ))
     
     # RA-002: Risk assessment documentation (RA-3)
@@ -3346,7 +3399,7 @@ def check_assessment_authorization(results: List[AuditResult], shared_data: Dict
         status="Pass" if oscap_available else "Warning",
         message=f"{get_nist_id('CA', 1)}: CA-2 SCAP compliance scanning capability",
         details=f"OpenSCAP: {'installed' if oscap_available else 'not installed'}",
-        remediation="Install OpenSCAP: apt install libopenscap8 (or yum install openscap-scanner)",
+        remediation=remediation_for("openscap"),
         severity="Medium"
     ))
 
@@ -3366,7 +3419,7 @@ def check_assessment_authorization(results: List[AuditResult], shared_data: Dict
         status="Pass" if fim_active else "Fail",
         message=f"{get_nist_id('CA', 2)}: CA-7 File integrity monitoring",
         details=f"FIM tools: {', '.join(fim_active) if fim_active else 'none detected'}",
-        remediation="Install AIDE: apt install aide && aideinit",
+        remediation=remediation_for("aide"),
         severity="High"
     ))
 
@@ -3519,6 +3572,1786 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
 # Module Testing
 # ============================================================================
 
+
+
+# ============================================================================
+# v3.3 EXPANSION - NIST Deep Coverage
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across:
+#   - NIST SP 800-207 Zero Trust Architecture (ZTA) indicators
+#   - NIST SP 800-161 Supply Chain Risk Management (SCRM)
+#   - NIST CSF 2.0 Govern function indicators
+#   - NIST SP 800-53 R5 additional control families:
+#     * PE (Physical and Environmental Protection) - technical indicators
+#     * PM (Program Management) - technical indicators
+#     * SR (Supply Chain Risk Management)
+#   - NIST SP 800-171 Rev 3 advanced practices
+#
+# Notes:
+#   - Uses module_helpers + AuditResult directly
+#   - Cross-references include NIST 800-53, CSF 2.0, 800-171, 800-207
+#   - Standalone module verification proven; integration via run_checks chaining
+# ============================================================================
+
+from shared_components.module_helpers import (
+    read_file_safe as _v33_read_file_safe,
+    file_exists as _v33_file_exists,
+    directory_exists as _v33_directory_exists,
+    command_available as _v33_command_available,
+    run_command as _v33_run_command,
+    read_sysctl as _v33_read_sysctl,
+    systemd_active as _v33_systemd_active,
+    file_mode as _v33_file_mode,
+    list_directory as _v33_list_directory,
+)
+
+
+def _v33_nist_result(category, status, message, severity="Medium",
+                     details="", remediation="", cross_references=None):
+    """Build AuditResult for NIST v3.3 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_nist_v33_zero_trust(results, shared_data, os_info):
+    """NIST SP 800-207 - Zero Trust Architecture indicators."""
+
+    # ZTA tenet 1 - All data sources and computing services are resources
+    # Detect resource enumeration tooling
+    enumeration = {
+        "auditd": _v33_systemd_active("auditd.service") == "active",
+        "osquery": (
+            _v33_command_available("osqueryi") or
+            _v33_systemd_active("osqueryd.service") == "active"
+        ),
+        "wazuh": _v33_file_exists("/var/ossec/etc/ossec.conf"),
+    }
+    detected = [k for k, v in enumeration.items() if v]
+    results.append(_v33_nist_result(
+        "NIST 800-207 v3.3 - Tenet 1",
+        "Pass" if detected else "Warning",
+        "ZTA Tenet 1: Resource enumeration capability",
+        severity="Medium",
+        details=f"Detected: {detected or 'none'}",
+        remediation=(
+            "Deploy resource enumeration: osquery for endpoint inventory, "
+            "auditd for resource access logging"
+        ),
+        cross_references={
+            "NIST-800-207": "Tenet 1", "NIST": "CM-8", "CSF": "ID.AM",
+        },
+    ))
+
+    # ZTA tenet 2 - All communication is secured regardless of location
+    # TLS minimum, OpenSSL system-wide config
+    openssl_cnf = (
+        _v33_read_file_safe("/etc/ssl/openssl.cnf") or
+        _v33_read_file_safe("/etc/pki/tls/openssl.cnf")
+    )
+    has_tls12 = "TLSv1.2" in openssl_cnf or "MinProtocol" in openssl_cnf
+    has_seclevel = "SECLEVEL=" in openssl_cnf
+    results.append(_v33_nist_result(
+        "NIST 800-207 v3.3 - Tenet 2",
+        "Pass" if (has_tls12 and has_seclevel) else "Warning",
+        "ZTA Tenet 2: All communication secured (TLS 1.2+, SECLEVEL set)",
+        severity="High",
+        details=f"TLS 1.2+ minimum: {has_tls12}, SECLEVEL set: {has_seclevel}",
+        remediation=(
+            "In /etc/ssl/openssl.cnf [system_default_sect]: "
+            "MinProtocol = TLSv1.2; CipherString = DEFAULT@SECLEVEL=2"
+        ),
+        cross_references={
+            "NIST-800-207": "Tenet 2", "NIST": "SC-8(1)", "CSF": "PR.DS-2",
+        },
+    ))
+
+    # ZTA tenet 3 - Access to individual resources granted on per-session basis
+    # SSH MaxSessions/UseConnectionMultiplexing/persistent connections
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+    cai_match = re.search(r"^\s*ClientAliveInterval\s+(\d+)", sshd, re.MULTILINE)
+    cai = int(cai_match.group(1)) if cai_match else 0
+    cam_match = re.search(r"^\s*ClientAliveCountMax\s+(\d+)", sshd, re.MULTILINE)
+    cam = int(cam_match.group(1)) if cam_match else 3
+    session_bounded = 0 < cai <= 600
+    results.append(_v33_nist_result(
+        "NIST 800-207 v3.3 - Tenet 3",
+        "Pass" if session_bounded else "Warning",
+        "ZTA Tenet 3: Per-session resource access (SSH idle timeout)",
+        severity="Medium",
+        details=f"ClientAliveInterval={cai}, ClientAliveCountMax={cam}",
+        remediation=(
+            "In /etc/ssh/sshd_config: ClientAliveInterval 300; "
+            "ClientAliveCountMax 0"
+        ),
+        cross_references={
+            "NIST-800-207": "Tenet 3", "NIST": "AC-12", "CSF": "PR.AC-12",
+        },
+    ))
+
+    # ZTA tenet 4 - Access determined by dynamic policy
+    # PAM faillock with dynamic backoff, fail2ban, advanced PAM
+    f2b_active = _v33_systemd_active("fail2ban.service") == "active"
+    pam_faillock = False
+    for pf in ["/etc/pam.d/system-auth", "/etc/pam.d/common-auth",
+               "/etc/pam.d/password-auth"]:
+        if "pam_faillock" in _v33_read_file_safe(pf):
+            pam_faillock = True
+            break
+    dynamic_indicators = sum([f2b_active, pam_faillock])
+    results.append(_v33_nist_result(
+        "NIST 800-207 v3.3 - Tenet 4",
+        "Pass" if dynamic_indicators >= 1 else "Warning",
+        f"ZTA Tenet 4: Dynamic policy enforcement ({dynamic_indicators})",
+        severity="Medium",
+        details=f"fail2ban: {f2b_active}, pam_faillock: {pam_faillock}",
+        remediation=(
+            "Enable dynamic backoff: apt-get install -y fail2ban; "
+            "configure pam_faillock.so in PAM stack"
+        ),
+        cross_references={
+            "NIST-800-207": "Tenet 4", "NIST": "AC-7", "CSF": "PR.AC-7",
+        },
+    ))
+
+    # ZTA tenet 5 - Monitor and measure integrity
+    fim = (
+        _v33_file_exists("/var/lib/aide/aide.db") or
+        _v33_file_exists("/var/lib/aide/aide.db.gz") or
+        _v33_file_exists("/etc/tripwire/tw.cfg") or
+        _v33_file_exists("/var/ossec/etc/ossec.conf")
+    )
+    results.append(_v33_nist_result(
+        "NIST 800-207 v3.3 - Tenet 5",
+        "Pass" if fim else "Fail",
+        "ZTA Tenet 5: Integrity monitoring active (FIM database present)",
+        severity="High",
+        details=f"AIDE/Tripwire/Wazuh database present: {fim}",
+        remediation=remediation_for("aide"),
+        cross_references={
+            "NIST-800-207": "Tenet 5", "NIST": "SI-7", "CSF": "DE.CM-4",
+        },
+    ))
+
+    # ZTA tenet 6 - All resource authentication and authorization is dynamic
+    pam_files_to_check = ["/etc/pam.d/sshd", "/etc/pam.d/system-auth",
+                           "/etc/pam.d/common-auth"]
+    mfa_modules = ["pam_google_authenticator", "pam_yubico", "pam_oath",
+                   "pam_duo", "pam_u2f", "pam_pkcs11", "pam_radius_auth"]
+    detected_mfa = set()
+    for pf in pam_files_to_check:
+        c = _v33_read_file_safe(pf)
+        for mod in mfa_modules:
+            if mod + ".so" in c:
+                detected_mfa.add(mod.replace("pam_", ""))
+    results.append(_v33_nist_result(
+        "NIST 800-207 v3.3 - Tenet 6",
+        "Pass" if detected_mfa else "Warning",
+        f"ZTA Tenet 6: Dynamic auth ({len(detected_mfa)} MFA modules)",
+        severity="High",
+        details=f"Detected: {sorted(detected_mfa) or 'none'}",
+        remediation=(
+            "apt-get install -y libpam-google-authenticator. "
+            "Configure pam_google_authenticator.so in /etc/pam.d/sshd"
+        ),
+        cross_references={
+            "NIST-800-207": "Tenet 6", "NIST": "IA-2(1)", "CSF": "PR.AC-7",
+        },
+    ))
+
+    # ZTA tenet 7 - Collect data on current state of assets
+    audit_log = _v33_file_exists("/var/log/audit/audit.log")
+    rsyslog = _v33_systemd_active("rsyslog.service") == "active"
+    journald = _v33_systemd_active("systemd-journald.service") == "active"
+    layers = sum([audit_log, rsyslog, journald])
+    results.append(_v33_nist_result(
+        "NIST 800-207 v3.3 - Tenet 7",
+        "Pass" if layers >= 2 else "Warning",
+        f"ZTA Tenet 7: Continuous monitoring layers ({layers}/3)",
+        severity="High",
+        details=f"audit.log: {audit_log}, rsyslog: {rsyslog}, journald: {journald}",
+        remediation=(
+            "Enable all 3 logging layers for resilient continuous monitoring"
+        ),
+        cross_references={
+            "NIST-800-207": "Tenet 7", "NIST": "AU-2", "CSF": "DE.CM",
+        },
+    ))
+
+
+def _check_nist_v33_scrm(results, shared_data, os_info):
+    """NIST SP 800-161 - Supply Chain Risk Management."""
+
+    # SR-3 - Supply chain controls and processes (package signing)
+    apt_keyring = (
+        _v33_directory_exists("/etc/apt/trusted.gpg.d") or
+        _v33_directory_exists("/etc/apt/keyrings")
+    )
+    rpm_gpgcheck = False
+    yum_conf = (
+        _v33_read_file_safe("/etc/yum.conf") or
+        _v33_read_file_safe("/etc/dnf/dnf.conf")
+    )
+    if "gpgcheck=1" in yum_conf:
+        rpm_gpgcheck = True
+    pacman_keyring = _v33_directory_exists("/etc/pacman.d/gnupg")
+    sig_indicators = sum([apt_keyring, rpm_gpgcheck, pacman_keyring])
+    results.append(_v33_nist_result(
+        "NIST SR-3 v3.3 - Supply Chain Controls",
+        "Pass" if sig_indicators >= 1 else "Fail",
+        f"SR-3 Package signature verification configured ({sig_indicators})",
+        severity="High",
+        details=(
+            f"apt keyring: {apt_keyring}, rpm gpgcheck: {rpm_gpgcheck}, "
+            f"pacman keyring: {pacman_keyring}"
+        ),
+        remediation=(
+            "Verify gpgcheck=1 in /etc/yum.conf or /etc/dnf/dnf.conf; "
+            "ensure /etc/apt/trusted.gpg.d is populated; "
+            "pacman-key --init"
+        ),
+        cross_references={
+            "NIST-800-161": "SR-3", "NIST": "SR-3", "CSF": "ID.SC-3",
+        },
+    ))
+
+    # SR-4 - Provenance (software bill of materials capability)
+    sbom_tools = {
+        "syft": _v33_command_available("syft"),
+        "trivy": _v33_command_available("trivy"),
+        "grype": _v33_command_available("grype"),
+        "cyclonedx-py": _v33_command_available("cyclonedx-py"),
+    }
+    detected_sbom = [k for k, v in sbom_tools.items() if v]
+    results.append(_v33_nist_result(
+        "NIST SR-4 v3.3 - Provenance",
+        "Pass" if detected_sbom else "Info",
+        f"SR-4 SBOM/provenance tools ({len(detected_sbom)})",
+        severity="Medium",
+        details=f"Detected: {detected_sbom or 'none'}",
+        remediation=(
+            "Install Syft for SBOM generation: "
+            "curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin"
+        ),
+        cross_references={
+            "NIST-800-161": "SR-4", "NIST": "SR-4", "CSF": "ID.SC-4",
+        },
+    ))
+
+    # SR-9 - Tamper resistance and detection (FIM)
+    fim_present = (
+        _v33_file_exists("/var/lib/aide/aide.db") or
+        _v33_file_exists("/var/lib/aide/aide.db.gz") or
+        _v33_file_exists("/etc/tripwire/tw.cfg") or
+        _v33_file_exists("/var/ossec/etc/ossec.conf")
+    )
+    results.append(_v33_nist_result(
+        "NIST SR-9 v3.3 - Tamper Resistance",
+        "Pass" if fim_present else "Warning",
+        "SR-9 File integrity monitoring (tamper detection)",
+        severity="High",
+        details=f"FIM database present: {fim_present}",
+        remediation=remediation_for("aide"),
+        cross_references={
+            "NIST-800-161": "SR-9", "NIST": "SR-9", "CSF": "DE.CM-7",
+        },
+    ))
+
+    # SR-11 - Component authenticity (package transaction logs)
+    pkg_logs = []
+    for log in ["/var/log/dpkg.log", "/var/log/yum.log",
+                "/var/log/dnf.log", "/var/log/zypp/history"]:
+        if _v33_file_exists(log):
+            pkg_logs.append(log)
+    results.append(_v33_nist_result(
+        "NIST SR-11 v3.3 - Component Authenticity",
+        "Pass" if pkg_logs else "Warning",
+        f"SR-11 Package transaction logs ({len(pkg_logs)})",
+        severity="Medium",
+        details=f"Logs: {pkg_logs}",
+        remediation=(
+            "Package install/remove logging is automatic. Forward to SIEM "
+            "for tamper-evidence."
+        ),
+        cross_references={
+            "NIST-800-161": "SR-11", "NIST": "SR-11", "CSF": "PR.IP-3",
+        },
+    ))
+
+
+def _check_nist_v33_csf2_govern(results, shared_data, os_info):
+    """NIST CSF 2.0 - Govern function (technical indicators)."""
+
+    # GV.OC - Organizational Context: documented baseline (auditd)
+    auditd_active = _v33_systemd_active("auditd.service") == "active"
+    audit_rules_count = 0
+    rules_d = "/etc/audit/rules.d"
+    if _v33_directory_exists(rules_d):
+        for f in _v33_list_directory(rules_d):
+            if f.endswith(".rules"):
+                c = _v33_read_file_safe(os.path.join(rules_d, f))
+                audit_rules_count += sum(
+                    1 for ln in c.splitlines()
+                    if ln.strip() and not ln.strip().startswith("#")
+                )
+    results.append(_v33_nist_result(
+        "NIST CSF 2.0 v3.3 - GV.OC",
+        "Pass" if (auditd_active and audit_rules_count >= 25) else "Warning",
+        f"GV.OC Documented baseline (auditd active, {audit_rules_count} rules)",
+        severity="Medium",
+        details=(
+            f"auditd active: {auditd_active}, rules: {audit_rules_count}"
+        ),
+        remediation=(
+            "Deploy CIS-recommended ruleset (~75 rules) and document baseline"
+        ),
+        cross_references={
+            "NIST-CSF-2.0": "GV.OC", "NIST": "CA-2",
+        },
+    ))
+
+    # GV.RM - Risk Management: vulnerability scanners
+    scanners = ["lynis", "oscap", "trivy", "nuclei", "openvas-scanner"]
+    detected = [s for s in scanners if _v33_command_available(s)]
+    results.append(_v33_nist_result(
+        "NIST CSF 2.0 v3.3 - GV.RM",
+        "Pass" if detected else "Warning",
+        f"GV.RM Risk management scanners ({len(detected)})",
+        severity="Medium",
+        details=f"Detected: {detected}",
+        remediation=remediation_for("lynis"),
+        cross_references={
+            "NIST-CSF-2.0": "GV.RM", "NIST": "RA-3, RA-5",
+        },
+    ))
+
+    # GV.SC - Supply Chain Risk Management: signature verification (cross-ref)
+    apt_keyring = (
+        _v33_directory_exists("/etc/apt/trusted.gpg.d") or
+        _v33_directory_exists("/etc/apt/keyrings")
+    )
+    rpm_gpgcheck = False
+    yum_conf = (
+        _v33_read_file_safe("/etc/yum.conf") or
+        _v33_read_file_safe("/etc/dnf/dnf.conf")
+    )
+    if "gpgcheck=1" in yum_conf:
+        rpm_gpgcheck = True
+    sig_ok = apt_keyring or rpm_gpgcheck
+    results.append(_v33_nist_result(
+        "NIST CSF 2.0 v3.3 - GV.SC",
+        "Pass" if sig_ok else "Fail",
+        f"GV.SC Supply chain signature verification: {sig_ok}",
+        severity="High",
+        details=f"apt keyring: {apt_keyring}, rpm gpgcheck: {rpm_gpgcheck}",
+        cross_references={
+            "NIST-CSF-2.0": "GV.SC", "NIST": "SR-3", "CSF": "ID.SC-3",
+        },
+    ))
+
+    # GV.PO - Policy: PAM stack (organizational policy enforcement)
+    pam_dir = "/etc/pam.d"
+    pam_files = (
+        _v33_list_directory(pam_dir) if _v33_directory_exists(pam_dir) else []
+    )
+    results.append(_v33_nist_result(
+        "NIST CSF 2.0 v3.3 - GV.PO",
+        "Pass" if len(pam_files) >= 10 else "Warning",
+        f"GV.PO Policy enforcement modules ({len(pam_files)})",
+        severity="Medium",
+        details=f"PAM files: {len(pam_files)}",
+        cross_references={
+            "NIST-CSF-2.0": "GV.PO", "NIST": "PL-1",
+        },
+    ))
+
+
+def _check_nist_v33_pe_environmental(results, shared_data, os_info):
+    """NIST 800-53 R5 - PE (Physical and Environmental) technical indicators."""
+
+    # PE-3 - Physical Access Control: USB device control
+    usbguard_active = _v33_systemd_active("usbguard.service") == "active"
+    usb_storage_blocked = False
+    if _v33_directory_exists("/etc/modprobe.d"):
+        for f in _v33_list_directory("/etc/modprobe.d"):
+            c = _v33_read_file_safe(os.path.join("/etc/modprobe.d", f))
+            if re.search(r"^\s*(blacklist|install)\s+usb-storage", c, re.MULTILINE):
+                usb_storage_blocked = True
+                break
+    pe3_ok = usbguard_active or usb_storage_blocked
+    results.append(_v33_nist_result(
+        "NIST PE-3 v3.3 - Physical Access",
+        "Pass" if pe3_ok else "Info",
+        f"PE-3 USB/removable media control",
+        severity="Medium",
+        details=(
+            f"USBGuard: {usbguard_active}, "
+            f"usb-storage blocked: {usb_storage_blocked}"
+        ),
+        remediation=remediation_for("usbguard"),
+        cross_references={
+            "NIST": "PE-3", "STIG": "V-230501", "CSF": "PR.PT-2",
+        },
+    ))
+
+    # PE-6 - Monitoring Physical Access: auditd mount tracking
+    audit_rules = ""
+    if _v33_directory_exists(rules_d := "/etc/audit/rules.d"):
+        for f in _v33_list_directory(rules_d):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v33_read_file_safe(
+                    os.path.join(rules_d, f)
+                )
+    has_mount_audit = "mount" in audit_rules
+    results.append(_v33_nist_result(
+        "NIST PE-6 v3.3 - Physical Monitoring",
+        "Pass" if has_mount_audit else "Info",
+        f"PE-6 Mount/removable-media audit",
+        severity="Low",
+        details=f"mount audit rule: {has_mount_audit}",
+        remediation=(
+            "-a always,exit -F arch=b64 -S mount -F auid>=1000 "
+            "-F auid!=4294967295 -k mounts"
+        ),
+        cross_references={
+            "NIST": "PE-6", "CSF": "DE.CM-2",
+        },
+    ))
+
+
+def _check_nist_v33_pm_program(results, shared_data, os_info):
+    """NIST 800-53 R5 - PM (Program Management) technical indicators."""
+
+    # PM-5 - System Inventory: package manager presence
+    pkg_managers = {
+        "dpkg": _v33_command_available("dpkg"),
+        "rpm": _v33_command_available("rpm"),
+        "pacman": _v33_command_available("pacman"),
+        "apk": _v33_command_available("apk"),
+        "zypper": _v33_command_available("zypper"),
+    }
+    detected = [k for k, v in pkg_managers.items() if v]
+    results.append(_v33_nist_result(
+        "NIST PM-5 v3.3 - System Inventory",
+        "Pass" if detected else "Fail",
+        f"PM-5 Package manager(s) for inventory ({len(detected)})",
+        severity="Medium",
+        details=f"Detected: {detected}",
+        cross_references={
+            "NIST": "PM-5", "CSF": "ID.AM-1",
+        },
+    ))
+
+    # PM-12 - Insider Threat Program: comprehensive auditd
+    audit_rules_d = "/etc/audit/rules.d"
+    insider_threat_keys = ["privileged", "perm_mod", "execve", "session"]
+    keys_present = 0
+    if _v33_directory_exists(audit_rules_d):
+        all_rules = ""
+        for f in _v33_list_directory(audit_rules_d):
+            if f.endswith(".rules"):
+                all_rules += _v33_read_file_safe(
+                    os.path.join(audit_rules_d, f)
+                )
+        keys_present = sum(1 for k in insider_threat_keys if k in all_rules)
+    results.append(_v33_nist_result(
+        "NIST PM-12 v3.3 - Insider Threat",
+        "Pass" if keys_present >= 3 else "Warning",
+        f"PM-12 Insider threat audit keys ({keys_present}/{len(insider_threat_keys)})",
+        severity="High",
+        details=f"Keys present: {keys_present}",
+        remediation=(
+            "Add CIS audit ruleset for privileged/perm_mod/execve/session"
+        ),
+        cross_references={
+            "NIST": "PM-12", "CSF": "DE.CM-3",
+        },
+    ))
+
+
+def _check_nist_v33_advanced_171(results, shared_data, os_info):
+    """NIST SP 800-171 Rev 3 - Advanced practices (CUI protection)."""
+
+    # 3.13.8 - Encrypted communications session keys (TLS PFS)
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+    kex_match = re.search(r"^\s*KexAlgorithms\s+(\S+)", sshd, re.MULTILINE)
+    kex = kex_match.group(1) if kex_match else ""
+    pfs_kex = ["curve25519", "diffie-hellman-group16",
+                "diffie-hellman-group18"]
+    pfs_ok = any(p in kex for p in pfs_kex) if kex else False
+    results.append(_v33_nist_result(
+        "NIST 800-171 3.13.8 v3.3 - PFS",
+        "Pass" if pfs_ok else "Warning",
+        f"3.13.8 SSH Perfect Forward Secrecy KexAlgorithms",
+        severity="High",
+        details=f"KexAlgorithms: {kex or 'default'}, PFS-capable: {pfs_ok}",
+        remediation=(
+            "In /etc/ssh/sshd_config: KexAlgorithms curve25519-sha256,"
+            "curve25519-sha256@libssh.org,diffie-hellman-group16-sha512"
+        ),
+        cross_references={
+            "NIST-800-171": "3.13.8", "NIST": "SC-12", "CSF": "PR.DS-2",
+        },
+    ))
+
+    # 3.13.11 - FIPS-validated cryptography
+    fips_kernel = False
+    if _v33_file_exists("/proc/sys/crypto/fips_enabled"):
+        fips_kernel = _v33_read_file_safe("/proc/sys/crypto/fips_enabled").strip() == "1"
+    fips_provider = False
+    if _v33_command_available("openssl"):
+        rc, out, _ = _v33_run_command(
+            ["openssl", "list", "-providers"], timeout=5.0
+        )
+        if rc == 0 and "fips" in out.lower():
+            fips_provider = True
+    fips_active = fips_kernel or fips_provider
+    results.append(_v33_nist_result(
+        "NIST 800-171 3.13.11 v3.3 - FIPS",
+        "Pass" if fips_active else "Info",
+        f"3.13.11 FIPS-validated crypto active",
+        severity="High",
+        details=(
+            f"Kernel FIPS: {fips_kernel}, OpenSSL FIPS provider: {fips_provider}"
+        ),
+        remediation=(
+            "Enable FIPS mode (RHEL/Ubuntu Pro): "
+            "fips-mode-setup --enable; reboot"
+        ),
+        cross_references={
+            "NIST-800-171": "3.13.11", "NIST": "SC-13", "FIPS": "140-3",
+        },
+    ))
+
+    # 3.14.1 - Identify, report, correct system flaws (vulnerability mgmt)
+    update_active = (
+        _v33_systemd_active("unattended-upgrades.service") == "active" or
+        _v33_systemd_active("dnf-automatic-install.timer") == "active" or
+        _v33_systemd_active("yum-cron.service") == "active"
+    )
+    results.append(_v33_nist_result(
+        "NIST 800-171 3.14.1 v3.3 - Flaw Remediation",
+        "Pass" if update_active else "Warning",
+        f"3.14.1 Automated patch management: {update_active}",
+        severity="High",
+        details=f"Automation active: {update_active}",
+        remediation=(
+            "apt-get install -y unattended-upgrades; "
+            "dpkg-reconfigure unattended-upgrades"
+        ),
+        cross_references={
+            "NIST-800-171": "3.14.1", "NIST": "SI-2", "CSF": "PR.IP-12",
+        },
+    ))
+
+    # 3.14.6 - Monitor org systems including inbound/outbound communications
+    nfw_active = (
+        _v33_systemd_active("ufw.service") == "active" or
+        _v33_systemd_active("firewalld.service") == "active" or
+        _v33_systemd_active("nftables.service") == "active"
+    )
+    results.append(_v33_nist_result(
+        "NIST 800-171 3.14.6 v3.3 - Monitoring",
+        "Pass" if nfw_active else "Fail",
+        f"3.14.6 Firewall active for ingress/egress",
+        severity="Critical",
+        details=f"Firewall service active: {nfw_active}",
+        cross_references={
+            "NIST-800-171": "3.14.6", "NIST": "SC-7", "CSF": "DE.CM-1",
+        },
+    ))
+
+    # 3.14.7 - Identify unauthorized use (auditd)
+    audit_active = _v33_systemd_active("auditd.service") == "active"
+    results.append(_v33_nist_result(
+        "NIST 800-171 3.14.7 v3.3 - Unauthorized Use",
+        "Pass" if audit_active else "Fail",
+        f"3.14.7 auditd active for unauthorized-use detection",
+        severity="High",
+        details=f"auditd active: {audit_active}",
+        remediation=remediation_for("auditd"),
+        cross_references={
+            "NIST-800-171": "3.14.7", "NIST": "AU-2", "CSF": "DE.AE",
+        },
+    ))
+
+
+def _check_nist_v33_au_extended(results, shared_data, os_info):
+    """NIST 800-53 R5 - AU (Audit and Accountability) extended."""
+
+    # AU-3(1) - Additional audit information
+    audit_rules = ""
+    if _v33_directory_exists(rules_d := "/etc/audit/rules.d"):
+        for f in _v33_list_directory(rules_d):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v33_read_file_safe(
+                    os.path.join(rules_d, f)
+                )
+    has_arch = "arch=b64" in audit_rules or "arch=b32" in audit_rules
+    results.append(_v33_nist_result(
+        "NIST AU-3(1) v3.3 - Audit Content",
+        "Pass" if has_arch else "Info",
+        "AU-3(1) Audit rules with architecture context",
+        severity="Medium",
+        details=f"arch= filters in rules: {has_arch}",
+        cross_references={
+            "NIST": "AU-3(1)", "CSF": "PR.PT-1",
+        },
+    ))
+
+    # AU-7 - Audit Reduction and Report Generation (ausearch/aureport)
+    aud_tools = {
+        "ausearch": _v33_command_available("ausearch"),
+        "aureport": _v33_command_available("aureport"),
+        "auditctl": _v33_command_available("auditctl"),
+    }
+    detected = [k for k, v in aud_tools.items() if v]
+    results.append(_v33_nist_result(
+        "NIST AU-7 v3.3 - Audit Reduction",
+        "Pass" if len(detected) >= 2 else "Warning",
+        f"AU-7 Audit reduction tools ({len(detected)})",
+        severity="Medium",
+        details=f"Detected: {detected}",
+        remediation=remediation_for("auditd"),
+        cross_references={
+            "NIST": "AU-7",
+        },
+    ))
+
+    # AU-9(2) - Store on separate physical system / send remote
+    rsy_remote = False
+    rsy_conf = _v33_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy_conf or "omfwd" in rsy_conf:
+        rsy_remote = True
+    if not rsy_remote and _v33_directory_exists("/etc/rsyslog.d"):
+        for f in _v33_list_directory("/etc/rsyslog.d"):
+            if not f.endswith(".conf"):
+                continue
+            c = _v33_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+            if "@@" in c or "omfwd" in c:
+                rsy_remote = True
+                break
+    audisp_remote = (
+        _v33_read_file_safe("/etc/audit/audisp-remote.conf") or
+        _v33_read_file_safe("/etc/audisp/audisp-remote.conf")
+    )
+    # bool() coercion is required: `audisp_remote and "x" in audisp_remote`
+    # short-circuits to the empty string when audisp_remote is "", and
+    # sum([bool, str]) raises TypeError("unsupported operand type(s) for +").
+    audisp_set = bool(audisp_remote) and "remote_server" in audisp_remote
+    remote_layers = sum([bool(rsy_remote), bool(audisp_set)])
+    results.append(_v33_nist_result(
+        "NIST AU-9(2) v3.3 - Remote Audit Storage",
+        "Pass" if remote_layers >= 1 else "Fail",
+        f"AU-9(2) Remote audit storage ({remote_layers})",
+        severity="High",
+        details=f"rsyslog remote: {rsy_remote}, audisp-remote: {audisp_set}",
+        remediation=(
+            "Configure /etc/rsyslog.d/50-remote.conf: "
+            "*.* @@logserver.example.com:6514"
+        ),
+        cross_references={
+            "NIST": "AU-9(2)", "PCI-DSS": "10.5.3",
+        },
+    ))
+
+    # AU-12 - Audit Record Generation: comprehensive coverage
+    cis_keys = ["identity", "privileged", "perm_mod", "modules",
+                "time-change", "system-locale", "MAC-policy",
+                "logins", "session", "delete", "scope", "actions"]
+    keys_present = sum(1 for k in cis_keys if k in audit_rules)
+    results.append(_v33_nist_result(
+        "NIST AU-12 v3.3 - Audit Record Generation",
+        "Pass" if keys_present >= 8 else "Warning",
+        f"AU-12 Audit record coverage ({keys_present}/{len(cis_keys)})",
+        severity="High",
+        details=f"Keys present: {keys_present}",
+        remediation=(
+            "Apply CIS-recommended audit ruleset for comprehensive coverage"
+        ),
+        cross_references={
+            "NIST": "AU-12", "CSF": "PR.PT-1",
+        },
+    ))
+
+
+def _check_nist_v33_cm_extended(results, shared_data, os_info):
+    """NIST 800-53 R5 - CM (Configuration Management) extended."""
+
+    # CM-2(2) - Automation Support for Accuracy/Currency
+    cm_tools = {
+        "ansible": _v33_command_available("ansible"),
+        "puppet": _v33_command_available("puppet"),
+        "salt": _v33_command_available("salt-minion") or _v33_command_available("salt-call"),
+        "chef": _v33_command_available("chef-client"),
+        "cfengine": _v33_command_available("cf-agent"),
+    }
+    detected = [k for k, v in cm_tools.items() if v]
+    results.append(_v33_nist_result(
+        "NIST CM-2(2) v3.3 - CM Automation",
+        "Info",
+        f"CM-2(2) Configuration management agents ({len(detected)})",
+        severity="Informational",
+        details=f"Detected: {detected or 'none'}",
+        remediation=(
+            "Use IaC for reproducible configuration: Ansible/Puppet/Salt"
+        ),
+        cross_references={
+            "NIST": "CM-2(2)", "CSF": "ID.AM",
+        },
+    ))
+
+    # CM-5 - Access Restrictions for Change
+    sudoers_mode = _v33_file_mode("/etc/sudoers")
+    sudoers_ok = sudoers_mode is not None and (sudoers_mode & 0o022) == 0
+    results.append(_v33_nist_result(
+        "NIST CM-5 v3.3 - Change Access Restrictions",
+        "Pass" if sudoers_ok else "Warning",
+        f"CM-5 sudoers permissions appropriate",
+        severity="High",
+        details=f"Mode: {oct(sudoers_mode) if sudoers_mode else 'N/A'}",
+        remediation="chmod 440 /etc/sudoers; chown root:root /etc/sudoers",
+        cross_references={
+            "NIST": "CM-5", "CSF": "PR.AC-4",
+        },
+    ))
+
+    # CM-7(2) - Prevent Program Execution (allowlisting)
+    allowlist_tools = {
+        "fapolicyd": _v33_systemd_active("fapolicyd.service") == "active",
+        "AppArmor": _v33_systemd_active("apparmor.service") == "active",
+        "SELinux": False,
+    }
+    if _v33_file_exists("/sys/fs/selinux/enforce"):
+        try:
+            with open("/sys/fs/selinux/enforce") as f:
+                allowlist_tools["SELinux"] = f.read().strip() == "1"
+        except OSError:
+            pass
+    detected = [k for k, v in allowlist_tools.items() if v]
+    results.append(_v33_nist_result(
+        "NIST CM-7(2) v3.3 - Execution Prevention",
+        "Pass" if detected else "Warning",
+        f"CM-7(2) Application allowlisting/MAC ({len(detected)})",
+        severity="High",
+        details=f"Detected: {detected}",
+        remediation=(
+            "Enable AppArmor/SELinux enforcing mode, or install fapolicyd"
+        ),
+        cross_references={
+            "NIST": "CM-7(2)", "ACSC": "E8.1", "CSF": "PR.PT-3",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_nist_v33 = run_checks
+
+
+def run_checks(shared_data):
+    """Execute the v3.3 expanded NIST module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_nist_v33(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_nist_v33_zero_trust(results, shared_data, os_info)
+        _check_nist_v33_scrm(results, shared_data, os_info)
+        _check_nist_v33_csf2_govern(results, shared_data, os_info)
+        _check_nist_v33_pe_environmental(results, shared_data, os_info)
+        _check_nist_v33_pm_program(results, shared_data, os_info)
+        _check_nist_v33_advanced_171(results, shared_data, os_info)
+        _check_nist_v33_au_extended(results, shared_data, os_info)
+        _check_nist_v33_cm_extended(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="NIST - Error",
+            status="Error",
+            message=f"NIST v3.3 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
+
+
+# ============================================================================
+# v3.5 EXPANSION - NIST 800-53 Rev 5 Underrepresented Control Families
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across NIST control families that are underrepresented in
+#   the existing module: CA, CP, MA, MP, RA, SA, PT plus CSF 2.0 DETECT/
+#   RESPOND/RECOVER subcategories and NIST 800-218 SSDF practices.
+#
+#   Coverage areas:
+#     - CA: Assessment, Authorization, Continuous Monitoring
+#     - CP: Contingency Planning, backup, alternate processing
+#     - MA: Maintenance (controlled, personnel, tools)
+#     - MP: Media Protection (access, sanitization, transport)
+#     - RA: Risk Assessment (vuln scanning, threat hunting)
+#     - SA: System Acquisition (SDLC, supply chain)
+#     - PT: PII Processing and Transparency
+#     - CSF 2.0: DETECT (DE.AE, DE.CM), RESPOND (RS.RP, RS.CO), RECOVER (RC.RP, RC.CO)
+#     - 800-218 SSDF: PO, PS, PW, RV practices
+# ============================================================================
+
+# v3.5 helpers
+from shared_components.module_helpers import (
+    read_file_safe as _v35_read_file_safe,
+    file_exists as _v35_file_exists,
+    directory_exists as _v35_directory_exists,
+    command_available as _v35_command_available,
+    run_command as _v35_run_command,
+    read_sysctl as _v35_read_sysctl,
+    systemd_active as _v35_systemd_active,
+    list_directory as _v35_list_directory,
+)
+
+
+def _v35_nist_result(category, status, message, severity="Medium",
+                    details="", remediation="", cross_references=None):
+    """Build AuditResult for NIST v3.5 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_nist_v35_ca_continuous_monitoring(results, shared_data, os_info):
+    """CA-7 Continuous monitoring + CA-2 Control assessments + CA-5 POA&M."""
+    cat = "NIST v3.5 - CA"
+
+    # CA-7 - Continuous monitoring tools (recurring scans)
+    monitoring_tools = {
+        "auditd": _v35_systemd_active("auditd.service") == "active",
+        "fail2ban": _v35_systemd_active("fail2ban.service") == "active",
+        "logwatch": _v35_command_available("logwatch"),
+        "OSSEC/Wazuh": _v35_file_exists("/var/ossec/etc/ossec.conf"),
+        "lynis": _v35_command_available("lynis"),
+        "AIDE": (
+            _v35_file_exists("/var/lib/aide/aide.db") or
+            _v35_file_exists("/var/lib/aide/aide.db.gz")
+        ),
+    }
+    active_monitors = [k for k, v in monitoring_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - CA-7 Continuous Monitoring",
+        "Pass" if len(active_monitors) >= 3 else "Warning",
+        f"NIST CA-7 Continuous monitoring tools: {len(active_monitors)}/6",
+        severity="High",
+        details=f"Active: {active_monitors}",
+        remediation=(
+            "Deploy at minimum: auditd + AIDE + logwatch + fail2ban\n"
+            "  apt-get install -y auditd aide aide-common logwatch fail2ban\n"
+            "CA-7 requires ongoing observation of security state, not "
+            "point-in-time snapshots."
+        ),
+        cross_references={
+            "NIST": "CA-7, CA-7(1), CA-7(3)",
+            "CSF": "DE.CM-1, DE.CM-7",
+            "ISO27001": "A.5.36, A.8.16",
+        },
+    ))
+
+    # CA-2 - Control assessment tooling (vulnerability scanners)
+    assessment_tools = {
+        "OpenSCAP": _v35_command_available("oscap"),
+        "Lynis": _v35_command_available("lynis"),
+        "Trivy": _v35_command_available("trivy"),
+        "Nuclei": _v35_command_available("nuclei"),
+    }
+    available_assessment = [k for k, v in assessment_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - CA-2 Control Assessment Tools",
+        "Pass" if available_assessment else "Warning",
+        f"NIST CA-2 Control assessment tools: {len(available_assessment)}",
+        severity="High",
+        details=f"Available: {available_assessment}",
+        remediation=(
+            "Install: apt-get install -y libopenscap8 lynis\n"
+            "Use OpenSCAP for SCAP-content-driven assessments:\n"
+            "  oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_cis "
+            "/usr/share/xml/scap/ssg/content/ssg-ubuntu2404-ds.xml"
+        ),
+        cross_references={
+            "NIST": "CA-2, CA-2(1), CA-2(2)",
+            "CSF": "ID.RA-1",
+        },
+    ))
+
+    # CA-5 - POA&M (Plan of Action and Milestones) tracking
+    # Technical surrogate: issue tracker presence (git, pkg-installed reports)
+    poam_indicators = []
+    if _v35_command_available("git"):
+        poam_indicators.append("git")
+    if _v35_directory_exists("/var/cache/apt/archives"):
+        poam_indicators.append("apt-cache")
+    if _v35_directory_exists("/var/cache/dnf"):
+        poam_indicators.append("dnf-cache")
+    results.append(_v35_nist_result(
+        f"{cat} - CA-5 POA&M Tooling Indicator",
+        "Info",
+        f"NIST CA-5 Tracking infrastructure: {poam_indicators}",
+        severity="Informational",
+        details=f"Indicators present: {poam_indicators}",
+        remediation=(
+            "POA&M is largely organizational. Use git for tracked finding "
+            "remediation history; integrate scanner reports (lynis, openscap) "
+            "into your issue tracker."
+        ),
+        cross_references={"NIST": "CA-5"},
+    ))
+
+    # CA-9 - Internal system connections (services + their access controls)
+    rc, out, _ = _v35_run_command(
+        ["ss", "-tlnp"], timeout=5.0,
+    )
+    listening_services = 0
+    if rc == 0 and out:
+        listening_services = max(0, len(out.splitlines()) - 1)
+    results.append(_v35_nist_result(
+        f"{cat} - CA-9 Internal System Connections",
+        "Info",
+        f"NIST CA-9 Local listening services: {listening_services}",
+        severity="Informational",
+        details=f"Total LISTEN sockets: {listening_services}",
+        cross_references={"NIST": "CA-9"},
+    ))
+
+
+def _check_nist_v35_cp_contingency(results, shared_data, os_info):
+    """CP-2 Contingency plan + CP-9 Backup + CP-10 Recovery."""
+    cat = "NIST v3.5 - CP"
+
+    # CP-9 - Backup tooling presence
+    backup_tools = {
+        "rsync": _v35_command_available("rsync"),
+        "borgbackup": _v35_command_available("borg"),
+        "restic": _v35_command_available("restic"),
+        "duplicity": _v35_command_available("duplicity"),
+        "rdiff-backup": _v35_command_available("rdiff-backup"),
+        "tar": _v35_command_available("tar"),
+        "bacula": (
+            _v35_systemd_active("bacula-fd.service") == "active" or
+            _v35_command_available("bconsole")
+        ),
+        "amanda": _v35_command_available("amanda"),
+    }
+    available_backup = [k for k, v in backup_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - CP-9 Backup Tooling",
+        "Pass" if len(available_backup) >= 2 else "Warning",
+        f"NIST CP-9 Backup tools available: {len(available_backup)}",
+        severity="High",
+        details=f"Available: {available_backup}",
+        remediation=remediation_for("borg") if "borgbackup" not in available_backup else "",
+        cross_references={
+            "NIST": "CP-9, CP-9(1), CP-9(8)",
+            "CSF": "PR.IP-4, RC.RP-1",
+            "ISO27001": "A.8.13",
+            "PCI-DSS": "12.10.1",
+        },
+    ))
+
+    # CP-9(8) - Backup encryption capability
+    encryption_capable = (
+        _v35_command_available("borg") or
+        _v35_command_available("restic") or
+        _v35_command_available("duplicity") or
+        _v35_command_available("age") or
+        _v35_command_available("gpg")
+    )
+    results.append(_v35_nist_result(
+        f"{cat} - CP-9(8) Encrypted Backup",
+        "Pass" if encryption_capable else "Warning",
+        f"NIST CP-9(8) Encrypted backup capability: {encryption_capable}",
+        severity="Critical",
+        details=f"Encryption-capable backup: {encryption_capable}",
+        remediation=(
+            f"{remediation_for('borg')}\n"
+            "Or for cross-platform: restic init --repo /path/to/repo "
+            "(prompts for password)\n"
+            "Encryption of backups is mandatory under CP-9(8)."
+        ),
+        cross_references={
+            "NIST": "CP-9(8), SC-28",
+            "CSF": "PR.DS-1, PR.DS-2",
+            "PCI-DSS": "9.5.1.1",
+        },
+    ))
+
+    # CP-9 - Backup automation (scheduled backups)
+    backup_scheduled = False
+    cron_dirs = ["/etc/cron.daily", "/etc/cron.hourly", "/etc/cron.d"]
+    for d in cron_dirs:
+        if not _v35_directory_exists(d):
+            continue
+        for f in _v35_list_directory(d):
+            f_lower = f.lower()
+            if any(k in f_lower for k in [
+                "backup", "borg", "restic", "duplicity", "rsync", "snapshot",
+            ]):
+                backup_scheduled = True
+                break
+        if backup_scheduled:
+            break
+    if not backup_scheduled:
+        # Check systemd timers
+        rc, out, _ = _v35_run_command(
+            ["systemctl", "list-timers", "--all", "--no-legend"],
+            timeout=5.0,
+        )
+        if rc == 0 and out:
+            for line in out.splitlines():
+                line_lower = line.lower()
+                if any(k in line_lower for k in [
+                    "backup", "borg", "restic", "snapshot",
+                ]):
+                    backup_scheduled = True
+                    break
+    results.append(_v35_nist_result(
+        f"{cat} - CP-9 Backup Scheduled",
+        "Pass" if backup_scheduled else "Info",
+        f"NIST CP-9 Backup scheduled (cron/timer): {backup_scheduled}",
+        severity="High",
+        details=f"Scheduled backup detected: {backup_scheduled}",
+        remediation=(
+            "Schedule via cron or systemd timer. Example /etc/cron.daily/backup:\n"
+            "  #!/bin/sh\n"
+            "  borg create --stats /path/to/repo::backup-{now} /etc /home /var/log\n"
+            "Or for systemd:\n"
+            "  systemctl enable --now borgmatic.timer"
+        ),
+        cross_references={
+            "NIST": "CP-9, CP-9(1)",
+            "CSF": "PR.IP-4",
+        },
+    ))
+
+    # CP-10 - System recovery and reconstitution (kexec-tools, dracut)
+    recovery_tools = {
+        "kexec-tools": _v35_command_available("kexec"),
+        "dracut": _v35_command_available("dracut"),
+        "mkinitcpio": _v35_command_available("mkinitcpio"),
+        "debootstrap": _v35_command_available("debootstrap"),
+    }
+    recovery_available = [k for k, v in recovery_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - CP-10 Recovery Tools",
+        "Pass" if recovery_available else "Info",
+        f"NIST CP-10 Recovery/reconstitution tools: {recovery_available}",
+        severity="Medium",
+        details=f"Available: {recovery_available}",
+        cross_references={
+            "NIST": "CP-10, CP-10(2)",
+            "CSF": "RC.RP-1",
+        },
+    ))
+
+    # CP-10(4) - Restoration of system from saved state (snapshots)
+    snapshot_capable = (
+        _v35_command_available("zfs") or  # ZFS snapshots
+        _v35_command_available("btrfs") or  # btrfs snapshots
+        _v35_command_available("lvm") or _v35_command_available("lvcreate") or
+        _v35_command_available("snapper")
+    )
+    results.append(_v35_nist_result(
+        f"{cat} - CP-10(4) Snapshot Capability",
+        "Pass" if snapshot_capable else "Info",
+        f"NIST CP-10(4) Filesystem snapshot tooling: {snapshot_capable}",
+        severity="Low",
+        details=f"Snapshot tools (zfs/btrfs/lvm/snapper): {snapshot_capable}",
+        cross_references={
+            "NIST": "CP-10(4)",
+            "CSF": "RC.RP-1",
+        },
+    ))
+
+
+def _check_nist_v35_ma_maintenance(results, shared_data, os_info):
+    """MA-2 Controlled maintenance + MA-3 Tools + MA-4 Nonlocal."""
+    cat = "NIST v3.5 - MA"
+
+    # MA-2 - Audit trail of system changes (auditctl + dpkg/rpm logs)
+    pkg_log_present = (
+        _v35_file_exists("/var/log/dpkg.log") or  # Debian
+        _v35_file_exists("/var/log/dnf.log") or  # RHEL family
+        _v35_file_exists("/var/log/yum.log") or  # Older RHEL
+        _v35_file_exists("/var/log/zypper.log") or  # SUSE
+        _v35_file_exists("/var/log/pacman.log")  # Arch
+    )
+    results.append(_v35_nist_result(
+        f"{cat} - MA-2 Maintenance Trail",
+        "Pass" if pkg_log_present else "Warning",
+        f"NIST MA-2 Package management trail: {pkg_log_present}",
+        severity="Medium",
+        details=f"Package log file present: {pkg_log_present}",
+        remediation=(
+            "Package management logs (/var/log/dpkg.log, /var/log/dnf.log) "
+            "provide MA-2 maintenance audit trail by default. Forward to "
+            "SIEM via rsyslog for centralized retention."
+        ),
+        cross_references={
+            "NIST": "MA-2, MA-2(2)",
+            "CSF": "PR.MA-1",
+            "ISO27001": "A.8.32",
+        },
+    ))
+
+    # MA-3 - Maintenance tools (controlled and inventoried)
+    maintenance_tools = {
+        "rsync": _v35_command_available("rsync"),
+        "scp": _v35_command_available("scp"),
+        "ansible": _v35_command_available("ansible"),
+        "ssh": _v35_command_available("ssh"),
+        "vim": _v35_command_available("vim") or _v35_command_available("vi"),
+    }
+    available_tools = [k for k, v in maintenance_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - MA-3 Tools Inventory",
+        "Info",
+        f"NIST MA-3 Maintenance tools available: {len(available_tools)}",
+        severity="Informational",
+        details=f"Tools: {available_tools}",
+        cross_references={"NIST": "MA-3, MA-3(1), MA-3(2)"},
+    ))
+
+    # MA-4 - Nonlocal maintenance (SSH controls)
+    sshd = _v35_read_file_safe("/etc/ssh/sshd_config")
+    sshd_d = ""
+    if _v35_directory_exists("/etc/ssh/sshd_config.d"):
+        for f in _v35_list_directory("/etc/ssh/sshd_config.d"):
+            if f.endswith(".conf"):
+                sshd_d += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/ssh/sshd_config.d", f)
+                )
+    full_sshd = sshd + "\n" + sshd_d
+    nonlocal_secure = (
+        "Protocol 2" in full_sshd or "Protocol 1" not in full_sshd
+    ) and (
+        re.search(r"^\s*PermitRootLogin\s+no", full_sshd, re.MULTILINE) or
+        re.search(r"^\s*PermitRootLogin\s+prohibit-password", full_sshd, re.MULTILINE)
+    )
+    results.append(_v35_nist_result(
+        f"{cat} - MA-4 Nonlocal Maintenance",
+        "Pass" if nonlocal_secure else "Warning",
+        f"NIST MA-4 Nonlocal SSH maintenance hardening: {nonlocal_secure}",
+        severity="High",
+        details=f"SSH PermitRootLogin restricted: {nonlocal_secure}",
+        remediation=(
+            "In /etc/ssh/sshd_config.d/50-nonlocal-maint.conf:\n"
+            "  PermitRootLogin no\n"
+            "  PasswordAuthentication no\n"
+            "Then: systemctl reload sshd"
+        ),
+        cross_references={
+            "NIST": "MA-4, MA-4(1), MA-4(3)",
+            "CIS": "5.2.10",
+        },
+    ))
+
+
+def _check_nist_v35_mp_media(results, shared_data, os_info):
+    """MP-2 Media access + MP-6 Sanitization + MP-7 Use."""
+    cat = "NIST v3.5 - MP"
+
+    # MP-2 - Media access (USB device control)
+    usb_control = (
+        _v35_systemd_active("usbguard.service") == "active" or
+        _v35_command_available("usbguard")
+    )
+    results.append(_v35_nist_result(
+        f"{cat} - MP-2 Media Access Control",
+        "Pass" if usb_control else "Info",
+        f"NIST MP-2 USB device authorization: {usb_control}",
+        severity="Medium",
+        details=f"usbguard active/available: {usb_control}",
+        remediation=remediation_for("usbguard"),
+        cross_references={
+            "NIST": "MP-2, MP-7",
+            "CIS": "1.1.10",
+            "STIG": "V-230503",
+        },
+    ))
+
+    # MP-6 - Media sanitization (secure delete tooling)
+    sanitization_tools = {
+        "shred": _v35_command_available("shred"),
+        "scrub": _v35_command_available("scrub"),
+        "wipe": _v35_command_available("wipe"),
+        "srm (secure-delete)": _v35_command_available("srm"),
+        "hdparm (security-erase)": _v35_command_available("hdparm"),
+        "cryptsetup": _v35_command_available("cryptsetup"),
+    }
+    available_sanit = [k for k, v in sanitization_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - MP-6 Media Sanitization",
+        "Pass" if len(available_sanit) >= 2 else "Warning",
+        f"NIST MP-6 Sanitization tools: {len(available_sanit)}",
+        severity="Medium",
+        details=f"Available: {available_sanit}",
+        remediation=(
+            "apt-get install -y secure-delete coreutils scrub hdparm cryptsetup\n"
+            "MP-6(2) requires media sanitization upon disposal/release; "
+            "use:\n"
+            "  hdparm --security-erase (for SSD/HDD)\n"
+            "  cryptsetup luksFormat + destroy keys (for LUKS volumes)\n"
+            "  shred -uvz (for individual files)"
+        ),
+        cross_references={
+            "NIST": "MP-6, MP-6(2), MP-6(3)",
+            "ISO27001": "A.8.10",
+            "PCI-DSS": "9.5",
+            "GDPR": "Art 17",
+        },
+    ))
+
+    # MP-7 - Media use restrictions (mount option indicators)
+    fstab = _v35_read_file_safe("/etc/fstab")
+    nodev_mounts = bool(re.search(r"\bnodev\b", fstab))
+    nosuid_mounts = bool(re.search(r"\bnosuid\b", fstab))
+    noexec_mounts = bool(re.search(r"\bnoexec\b", fstab))
+    mount_count = sum([nodev_mounts, nosuid_mounts, noexec_mounts])
+    results.append(_v35_nist_result(
+        f"{cat} - MP-7 Mount Restrictions",
+        "Pass" if mount_count >= 2 else "Warning",
+        f"NIST MP-7 Mount option restrictions: {mount_count}/3",
+        severity="Medium",
+        details=(
+            f"nodev: {nodev_mounts}, nosuid: {nosuid_mounts}, "
+            f"noexec: {noexec_mounts}"
+        ),
+        remediation=(
+            "In /etc/fstab, add restrictive mount options for /tmp, /var, "
+            "/dev/shm, removable media:\n"
+            "  /dev/sdaN  /tmp  ext4  defaults,nodev,nosuid,noexec  0 2"
+        ),
+        cross_references={
+            "NIST": "MP-7, AC-3",
+            "CIS": "1.1",
+        },
+    ))
+
+
+def _check_nist_v35_ra_risk_assessment(results, shared_data, os_info):
+    """RA-3 Risk assessment + RA-5 Vuln scanning + RA-10 Threat hunting."""
+    cat = "NIST v3.5 - RA"
+
+    # RA-5 - Vulnerability monitoring tooling
+    vuln_tools = {
+        "lynis": _v35_command_available("lynis"),
+        "openscap (oscap)": _v35_command_available("oscap"),
+        "trivy": _v35_command_available("trivy"),
+        "grype": _v35_command_available("grype"),
+        "nuclei": _v35_command_available("nuclei"),
+        "rkhunter": _v35_command_available("rkhunter"),
+        "chkrootkit": _v35_command_available("chkrootkit"),
+        "debsecan": _v35_command_available("debsecan"),
+    }
+    available_vuln = [k for k, v in vuln_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - RA-5 Vulnerability Tools",
+        "Pass" if len(available_vuln) >= 2 else "Warning",
+        f"NIST RA-5 Vulnerability tools: {len(available_vuln)}/8",
+        severity="High",
+        details=f"Available: {available_vuln}",
+        remediation=(
+            "Deploy multiple complementary scanners:\n"
+            "  apt-get install -y lynis libopenscap8 rkhunter chkrootkit debsecan\n"
+            "lynis: host configuration audit\n"
+            "openscap: SCAP-content compliance scanning\n"
+            "rkhunter/chkrootkit: rootkit detection\n"
+            "debsecan: Debian security advisory tracking"
+        ),
+        cross_references={
+            "NIST": "RA-5, RA-5(2), RA-5(11)",
+            "CSF": "ID.RA-1, DE.CM-8",
+            "PCI-DSS": "11.4.1",
+        },
+    ))
+
+    # RA-5 scheduled execution (recurring, not just on-demand)
+    rasched = False
+    cron_dirs = ["/etc/cron.daily", "/etc/cron.weekly"]
+    for d in cron_dirs:
+        if not _v35_directory_exists(d):
+            continue
+        for f in _v35_list_directory(d):
+            f_lower = f.lower()
+            if any(k in f_lower for k in [
+                "lynis", "rkhunter", "chkrootkit", "debsecan",
+                "aide", "openscap", "trivy",
+            ]):
+                rasched = True
+                break
+        if rasched:
+            break
+    results.append(_v35_nist_result(
+        f"{cat} - RA-5 Scheduled Scans",
+        "Pass" if rasched else "Warning",
+        f"NIST RA-5 Vulnerability scans scheduled: {rasched}",
+        severity="High",
+        details=f"Scheduled scan job present: {rasched}",
+        remediation=(
+            "Add to /etc/cron.daily/lynis-audit:\n"
+            "  #!/bin/sh\n"
+            "  lynis audit system --quick --auditor 'auto'\n"
+            "Continuous monitoring requires recurring scans, not "
+            "point-in-time."
+        ),
+        cross_references={
+            "NIST": "RA-5(2)",
+            "CSF": "DE.CM-8",
+            "PCI-DSS": "11.4.1",
+        },
+    ))
+
+    # RA-10 - Threat hunting indicators
+    hunt_tools = {
+        "osquery": (
+            _v35_command_available("osqueryi") or
+            _v35_systemd_active("osqueryd.service") == "active"
+        ),
+        "Falco": _v35_systemd_active("falco.service") == "active",
+        "Sysmon": _v35_directory_exists("/var/log/sysmon"),
+        "auditd": _v35_systemd_active("auditd.service") == "active",
+        "Wazuh": _v35_file_exists("/var/ossec/etc/ossec.conf"),
+    }
+    hunt_capable = [k for k, v in hunt_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - RA-10 Threat Hunting",
+        "Pass" if len(hunt_capable) >= 2 else "Info",
+        f"NIST RA-10 Threat-hunting tools: {len(hunt_capable)}/5",
+        severity="Medium",
+        details=f"Capable: {hunt_capable}",
+        remediation=(
+            f"{remediation_for('osquery')}\n"
+            "osquery enables SQL-based threat hunting; deploy + connect to "
+            "Fleet for centralized hunting."
+        ),
+        cross_references={
+            "NIST": "RA-10",
+            "CSF": "DE.CM-1, DE.CM-7",
+        },
+    ))
+
+
+def _check_nist_v35_sa_acquisition(results, shared_data, os_info):
+    """SA-3 SDLC + SA-11 Developer testing + SA-15 Development process."""
+    cat = "NIST v3.5 - SA"
+
+    # SA-3 - SDLC tooling indicators (version control, CI)
+    sdlc_tools = {
+        "git": _v35_command_available("git"),
+        "gh (GitHub CLI)": _v35_command_available("gh"),
+        "make": _v35_command_available("make"),
+        "docker": _v35_command_available("docker"),
+        "podman": _v35_command_available("podman"),
+    }
+    sdlc_available = [k for k, v in sdlc_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - SA-3 SDLC Tooling",
+        "Info",
+        f"NIST SA-3 SDLC tools: {len(sdlc_available)}/5",
+        severity="Informational",
+        details=f"Available: {sdlc_available}",
+        cross_references={"NIST": "SA-3, SA-15"},
+    ))
+
+    # SA-11 - Developer security testing tooling (SAST/DAST surrogates)
+    sast_tools = {
+        "shellcheck": _v35_command_available("shellcheck"),
+        "bandit (Python SAST)": _v35_command_available("bandit"),
+        "semgrep": _v35_command_available("semgrep"),
+        "flake8": _v35_command_available("flake8"),
+        "pylint": _v35_command_available("pylint"),
+        "yamllint": _v35_command_available("yamllint"),
+    }
+    sast_available = [k for k, v in sast_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - SA-11 Developer Testing",
+        "Pass" if len(sast_available) >= 2 else "Info",
+        f"NIST SA-11 SAST tooling: {len(sast_available)}/6",
+        severity="Medium",
+        details=f"Available: {sast_available}",
+        remediation=(
+            "apt-get install -y shellcheck python3-bandit\n"
+            "pip install --user semgrep\n"
+            "Integrate into CI pipeline for SA-11 developer security testing."
+        ),
+        cross_references={
+            "NIST": "SA-11, SA-11(1), SA-11(8)",
+            "CSF": "PR.IP-2",
+            "ISO27001": "A.8.28, A.8.29",
+        },
+    ))
+
+    # SA-15 - Development process / configuration management
+    container_runtime = (
+        _v35_command_available("docker") or
+        _v35_command_available("podman") or
+        _v35_command_available("buildah")
+    )
+    image_signing_capable = (
+        _v35_command_available("cosign") or
+        _v35_command_available("notary")
+    )
+    sbom_capable = (
+        _v35_command_available("syft") or
+        _v35_command_available("trivy")
+    )
+    devsecops_layers = sum([
+        bool(container_runtime), bool(image_signing_capable), bool(sbom_capable),
+    ])
+    results.append(_v35_nist_result(
+        f"{cat} - SA-15/SA-22 Supply Chain Security",
+        "Pass" if devsecops_layers >= 2 else "Info",
+        f"NIST SA-15/SA-22 DevSecOps layers ({devsecops_layers}/3)",
+        severity="Medium",
+        details=(
+            f"Container: {container_runtime}, "
+            f"image-signing (cosign/notary): {image_signing_capable}, "
+            f"SBOM (syft/trivy): {sbom_capable}"
+        ),
+        remediation=(
+            f"{remediation_for('syft')}\n"
+            f"{remediation_for('trivy')}\n"
+            "For image signing: install cosign:\n"
+            "  curl -O -L "
+            "https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64"
+        ),
+        cross_references={
+            "NIST": "SA-15, SA-22",
+            "CSF": "ID.SC-1, ID.SC-2, ID.SC-4",
+            "CISA-SbD": "1.0",
+        },
+    ))
+
+
+def _check_nist_v35_pt_pii(results, shared_data, os_info):
+    """PT-1 PII control + PT-2 Authority for processing + PT-5 Privacy notice."""
+    cat = "NIST v3.5 - PT"
+
+    # PT-3 - Personally identifiable information (PII) processing
+    # Technical surrogate: encryption-at-rest indicators
+    pii_indicators = {
+        "LUKS-encrypted volumes": False,
+        "fscrypt": _v35_command_available("fscrypt"),
+        "ecryptfs": _v35_command_available("ecryptfs-mount-private") or
+                     _v35_directory_exists("/usr/lib/ecryptfs"),
+    }
+    rc, out, _ = _v35_run_command(["lsblk", "-o", "TYPE", "-n"], timeout=5.0)
+    if rc == 0 and out and "crypt" in out.lower():
+        pii_indicators["LUKS-encrypted volumes"] = True
+    pii_protect_layers = sum(1 for v in pii_indicators.values() if v)
+    results.append(_v35_nist_result(
+        f"{cat} - PT-3 PII Encryption",
+        "Pass" if pii_protect_layers >= 1 else "Info",
+        f"NIST PT-3 PII protection layers: {pii_protect_layers}",
+        severity="High",
+        details=(
+            f"Layers: { {k:v for k,v in pii_indicators.items() if v} }"
+        ),
+        remediation=(
+            f"{remediation_for('cryptsetup')}\n"
+            "PT-3 requires PII processing be authorized; technical "
+            "implementation: encrypt-at-rest volumes containing PII."
+        ),
+        cross_references={
+            "NIST": "PT-3, PT-3(1), PT-3(2)",
+            "GDPR": "Art 32(1)(a)",
+            "ISO27001": "A.8.24",
+        },
+    ))
+
+
+def _check_nist_v35_csf2_detect_respond_recover(
+    results, shared_data, os_info
+):
+    """CSF 2.0 DETECT, RESPOND, RECOVER subcategories."""
+    cat = "NIST v3.5 - CSF 2.0"
+
+    # DE.CM-1 - Networks monitored
+    netmon_tools = {
+        "tcpdump": _v35_command_available("tcpdump"),
+        "Suricata": _v35_systemd_active("suricata.service") == "active",
+        "Snort": _v35_command_available("snort"),
+        "Zeek": _v35_command_available("zeek"),
+    }
+    netmon_available = [k for k, v in netmon_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - DE.CM-1 Network Monitoring",
+        "Pass" if netmon_available else "Warning",
+        f"CSF 2.0 DE.CM-1 Network monitoring: {netmon_available}",
+        severity="High",
+        details=f"Available: {netmon_available}",
+        remediation=(
+            f"{remediation_for('suricata')}\n"
+            "Provides DE.CM-1 network anomaly + intrusion detection."
+        ),
+        cross_references={
+            "NIST": "SI-4",
+            "CSF": "DE.CM-1, DE.CM-7",
+        },
+    ))
+
+    # DE.CM-3 - Personnel activity monitored
+    auditd_active = _v35_systemd_active("auditd.service") == "active"
+    user_access_logged = False
+    audit_rules = ""
+    if _v35_directory_exists("/etc/audit/rules.d"):
+        for f in _v35_list_directory("/etc/audit/rules.d"):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/audit/rules.d", f)
+                )
+    if "auid>=1000" in audit_rules and auditd_active:
+        user_access_logged = True
+    results.append(_v35_nist_result(
+        f"{cat} - DE.CM-3 Personnel Monitoring",
+        "Pass" if user_access_logged else "Warning",
+        f"CSF 2.0 DE.CM-3 User activity logging: {user_access_logged}",
+        severity="High",
+        details=(
+            f"auditd active: {auditd_active}, auid filter: {'auid>=1000' in audit_rules}"
+        ),
+        remediation=(
+            "Add to /etc/audit/rules.d/41-csf-personnel.rules:\n"
+            "  -a always,exit -F arch=b64 -S execve -F auid>=1000 "
+            "-F auid!=4294967295 -k personnel-activity"
+        ),
+        cross_references={
+            "NIST": "AU-2, AU-12",
+            "CSF": "DE.CM-3",
+        },
+    ))
+
+    # RS.RP-1 - Response plan executed during/after incident
+    # Surrogate: incident response tooling readiness
+    ir_tools = {
+        "tcpdump": _v35_command_available("tcpdump"),
+        "lsof": _v35_command_available("lsof"),
+        "strace": _v35_command_available("strace"),
+        "ausearch": _v35_command_available("ausearch"),
+        "journalctl": _v35_command_available("journalctl"),
+    }
+    ir_ready = sum(1 for v in ir_tools.values() if v)
+    results.append(_v35_nist_result(
+        f"{cat} - RS.RP-1 IR Tooling",
+        "Pass" if ir_ready >= 4 else "Warning",
+        f"CSF 2.0 RS.RP-1 IR tooling readiness: {ir_ready}/5",
+        severity="High",
+        details=f"Available: {[k for k,v in ir_tools.items() if v]}",
+        remediation=(
+            "apt-get install -y tcpdump lsof strace iproute2 audit\n"
+            "These tools are essential for incident response triage and "
+            "containment per CSF 2.0 RESPOND function."
+        ),
+        cross_references={
+            "NIST": "IR-4, IR-5",
+            "CSF": "RS.RP-1, RS.AN-1",
+        },
+    ))
+
+    # RS.CO - Communications during response (mail capability)
+    mail_capable = (
+        _v35_command_available("mail") or
+        _v35_command_available("mailx") or
+        _v35_systemd_active("postfix.service") == "active"
+    )
+    results.append(_v35_nist_result(
+        f"{cat} - RS.CO-2 IR Notification",
+        "Pass" if mail_capable else "Warning",
+        f"CSF 2.0 RS.CO-2 Notification capability: {mail_capable}",
+        severity="Medium",
+        details=f"Mail tools: {mail_capable}",
+        cross_references={
+            "NIST": "IR-6",
+            "CSF": "RS.CO-2, RS.CO-3",
+        },
+    ))
+
+    # RC.RP-1 - Recovery plan executed (backup tools + scheduled)
+    backup_layers = 0
+    if _v35_command_available("borg") or _v35_command_available("restic"):
+        backup_layers += 1
+    if _v35_command_available("rsync"):
+        backup_layers += 1
+    # Snapshot capability
+    if (_v35_command_available("zfs") or _v35_command_available("btrfs") or
+        _v35_command_available("snapper")):
+        backup_layers += 1
+    results.append(_v35_nist_result(
+        f"{cat} - RC.RP-1 Recovery Layers",
+        "Pass" if backup_layers >= 2 else "Warning",
+        f"CSF 2.0 RC.RP-1 Recovery capability layers: {backup_layers}/3",
+        severity="High",
+        details=f"Backup/snapshot tooling layers: {backup_layers}",
+        remediation=remediation_for("borg"),
+        cross_references={
+            "NIST": "CP-9, CP-10",
+            "CSF": "RC.RP-1",
+        },
+    ))
+
+
+def _check_nist_v35_ssdf_800_218(results, shared_data, os_info):
+    """NIST 800-218 Secure Software Development Framework (SSDF)."""
+    cat = "NIST v3.5 - SSDF (800-218)"
+
+    # PO.1 - Roles defined; PO.5 - Trusted environment
+    # Surrogate: container runtime + SBOM tooling
+    po_indicators = {
+        "container_runtime": (
+            _v35_command_available("docker") or
+            _v35_command_available("podman") or
+            _v35_command_available("buildah")
+        ),
+        "SBOM_tooling": (
+            _v35_command_available("syft") or
+            _v35_command_available("trivy")
+        ),
+    }
+    po_layers = sum(1 for v in po_indicators.values() if v)
+    results.append(_v35_nist_result(
+        f"{cat} - PO Trusted Build Environment",
+        "Pass" if po_layers >= 1 else "Info",
+        f"SSDF PO.5 Trusted build environment: {po_layers}/2 indicators",
+        severity="Medium",
+        details=f"Indicators: {po_indicators}",
+        cross_references={
+            "NIST": "SA-3, SA-15",
+            "SSDF": "PO.5, PO.5.1",
+        },
+    ))
+
+    # PS.1 - Code provenance (git + signed commits)
+    git_present = _v35_command_available("git")
+    gpg_present = (
+        _v35_command_available("gpg") or _v35_command_available("gpg2")
+    )
+    provenance_capable = git_present and gpg_present
+    results.append(_v35_nist_result(
+        f"{cat} - PS.1 Code Provenance",
+        "Pass" if provenance_capable else "Info",
+        f"SSDF PS.1 Code provenance tooling: {provenance_capable}",
+        severity="Medium",
+        details=f"git: {git_present}, gpg: {gpg_present}",
+        remediation=(
+            "apt-get install -y git gnupg2\n"
+            "Configure signed commits:\n"
+            "  git config --global user.signingkey <key-id>\n"
+            "  git config --global commit.gpgsign true"
+        ),
+        cross_references={
+            "NIST": "SA-12",
+            "SSDF": "PS.1, PS.2",
+        },
+    ))
+
+    # PW.7 - Code review (linters + analyzers)
+    review_tools = {
+        "shellcheck": _v35_command_available("shellcheck"),
+        "yamllint": _v35_command_available("yamllint"),
+        "flake8 / pylint": (
+            _v35_command_available("flake8") or _v35_command_available("pylint")
+        ),
+        "bandit": _v35_command_available("bandit"),
+    }
+    review_available = [k for k, v in review_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - PW.7/PW.8 Code Review Tools",
+        "Pass" if len(review_available) >= 2 else "Info",
+        f"SSDF PW.7/PW.8 Static analysis tools: {len(review_available)}/4",
+        severity="Medium",
+        details=f"Available: {review_available}",
+        remediation=(
+            "apt-get install -y shellcheck yamllint python3-bandit pylint flake8"
+        ),
+        cross_references={
+            "SSDF": "PW.7, PW.8",
+            "NIST": "SA-11",
+        },
+    ))
+
+    # RV.1 - Vulnerability identification (vuln scanning + dep scanning)
+    rv_tools = {
+        "trivy": _v35_command_available("trivy"),
+        "grype": _v35_command_available("grype"),
+        "lynis": _v35_command_available("lynis"),
+        "openscap": _v35_command_available("oscap"),
+    }
+    rv_available = [k for k, v in rv_tools.items() if v]
+    results.append(_v35_nist_result(
+        f"{cat} - RV.1 Vulnerability Identification",
+        "Pass" if rv_available else "Warning",
+        f"SSDF RV.1 Vulnerability tooling: {len(rv_available)}/4",
+        severity="High",
+        details=f"Available: {rv_available}",
+        remediation=remediation_for("trivy"),
+        cross_references={
+            "SSDF": "RV.1, RV.2",
+            "NIST": "RA-5, SR-3",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_nist_v35 = run_checks
+
+
+def run_checks(shared_data: Optional[Dict[str, Any]] = None) -> List[AuditResult]:
+    """Execute the v3.5 expanded NIST module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_nist_v35(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_nist_v35_ca_continuous_monitoring(results, shared_data, os_info)
+        _check_nist_v35_cp_contingency(results, shared_data, os_info)
+        _check_nist_v35_ma_maintenance(results, shared_data, os_info)
+        _check_nist_v35_mp_media(results, shared_data, os_info)
+        _check_nist_v35_ra_risk_assessment(results, shared_data, os_info)
+        _check_nist_v35_sa_acquisition(results, shared_data, os_info)
+        _check_nist_v35_pt_pii(results, shared_data, os_info)
+        _check_nist_v35_csf2_detect_respond_recover(results, shared_data, os_info)
+        _check_nist_v35_ssdf_800_218(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="NIST - Error",
+            status="Error",
+            message=f"NIST v3.5 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
 if __name__ == "__main__":
     """
     Standalone testing capability for the NIST module
@@ -3597,7 +5430,3 @@ if __name__ == "__main__":
     print(f"NIST module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
-
-# ============================================================================
-# End of module_nist.py
-# ============================================================================
