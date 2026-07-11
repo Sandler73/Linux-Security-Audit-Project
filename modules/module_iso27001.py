@@ -2,7 +2,7 @@
 """
 module_iso27001.py
 ISO/IEC 27001:2022 Technical Controls Module for Linux
-Version: 2.2
+Version: 2.0
 
 SYNOPSIS:
     Comprehensive ISO/IEC 27001:2022 compliance assessment focusing on
@@ -160,7 +160,61 @@ except ImportError:
         HAS_COMMON_LIB = False
 
 MODULE_NAME = "ISO27001"
-MODULE_VERSION = "2.2"
+
+# v3.4 Remediation library wiring
+try:
+    from shared_components.remediation_library import get_remediation as _v34_get_remediation
+    from shared_components.remediation_library import get_removal_remediation as _v34_get_removal
+    from shared_components.remediation_library import get_patch_remediation as _v34_get_patch
+    from shared_components.os_detection import detect_os as _v34_detect_os
+    _v34_OSINFO_CACHE = None
+    def remediation_for(tool_id):
+        """Return distro-aware remediation text for a registered tool.
+
+        Falls back to a short "Install <tool>" string if the library
+        does not have an entry for the tool_id.
+        """
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        text = _v34_get_remediation(tool_id, _v34_OSINFO_CACHE)
+        return text if text else f"Install {tool_id} via your distribution\'s package manager"
+
+    def _v34_resolve_os():
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        return _v34_OSINFO_CACHE
+
+    def removal_for(canonical_token, extra_context=""):
+        """Return OS-aware package-removal remediation text."""
+        try:
+            return _v34_get_removal(canonical_token, _v34_resolve_os(),
+                                    extra_context=extra_context)
+        except Exception:
+            return f"Remove {canonical_token} via your distribution\'s package manager"
+
+    def patch_for(extra_context=""):
+        """Return OS-aware security-patch remediation text."""
+        try:
+            return _v34_get_patch(_v34_resolve_os(), extra_context=extra_context)
+        except Exception:
+            return "Apply available security updates via your distribution\'s package manager"
+except ImportError:  # pragma: no cover
+    def remediation_for(tool_id):
+        return f"Install {tool_id} via your distribution\'s package manager"
+    def removal_for(canonical_token, extra_context=""):
+        return f"Remove {canonical_token} via your distribution\'s package manager"
+    def patch_for(extra_context=""):
+        return "Apply available security updates via your distribution\'s package manager"
+
+MODULE_VERSION = "3.9"
 
 # Module logger (uses structured logging if audit_common is available)
 logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
@@ -411,7 +465,7 @@ def check_user_endpoint_devices(results: List[AuditResult], shared_data: Dict[st
         status="Pass" if av_installed else "Warning",
         message=f"{get_iso_id('1', 9)}: Anti-malware software",
         details="ClamAV installed" if av_installed else "Not installed",
-        remediation="Install: apt-get install clamav || yum install clamav"
+        remediation=remediation_for("clamav")
     ))
     
     # A.8.1-010: Home directory encryption
@@ -462,7 +516,7 @@ def check_user_endpoint_devices(results: List[AuditResult], shared_data: Dict[st
         status="Pass" if installed_tools else "Warning",
         message=f"{get_iso_id('1', 13)}: File integrity monitoring",
         details=f"Installed: {', '.join(installed_tools)}" if installed_tools else "Not installed",
-        remediation="Install AIDE: apt-get install aide || yum install aide"
+        remediation=remediation_for("aide")
     ))
     
     # A.8.1-014: Display manager security
@@ -681,17 +735,16 @@ def check_privileged_access_authentication(results: List[AuditResult], shared_da
             remediation="chmod 000 /etc/gshadow"
         ))
     
-    # A.8.3-005: World-writable files
-    result = run_command("find / -xdev -type f -perm -0002 2>/dev/null | head -20 | wc -l")
-    ww_files = safe_int_parse(result.stdout.strip())
-    
+    # A.8.3-005: World-writable files (canonical assessment)
+    from shared_components.shared_assessments import get_world_writable_assessment as _ww_assess
+    _ww = _ww_assess("fail")
     results.append(AuditResult(
         module=MODULE_NAME,
         category="ISO27001 - A.8.3 Information Access Restriction",
-        status="Pass" if ww_files == 0 else "Fail",
+        status=_ww.status,
         message=f"{get_iso_id('3', 5)}: No world-writable files",
-        details=f"{ww_files} world-writable files",
-        remediation="Remove world-write: chmod o-w <file>"
+        details=_ww.details,
+        remediation=_ww.remediation
     ))
     
     # A.8.3-006: Unowned files
@@ -1019,7 +1072,7 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
         status="Pass" if installed_mon else "Warning",
         message=f"{get_iso_id('6', 4)}: System monitoring tools",
         details=f"Installed: {', '.join(installed_mon)}" if installed_mon else "None",
-        remediation="Install sysstat: apt-get install sysstat"
+        remediation=remediation_for("sysstat")
     ))
     
     # A.8.6-005: Log rotation configured
@@ -1045,7 +1098,7 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
         status="Pass" if av_installed else "Warning",
         message=f"{get_iso_id('7', 1)}: Anti-malware software installed",
         details="ClamAV installed" if av_installed else "Not installed",
-        remediation="Install: apt-get install clamav"
+        remediation=remediation_for("clamav")
     ))
     
     # A.8.7-002: Anti-malware daemon active
@@ -1079,7 +1132,7 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
             status="Pass" if defs_current else "Warning",
             message=f"{get_iso_id('7', 3)}: Anti-malware definitions current",
             details=f"Last update: {db_age} days ago" if db_age is not None else "No definitions",
-            remediation="Update: freshclam"
+            remediation=remediation_for("clamav")
         ))
     
     # A.8.7-004: Automatic updates for malware definitions
@@ -1091,7 +1144,7 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
         status="Pass" if freshclam_enabled else "Warning",
         message=f"{get_iso_id('7', 4)}: Automatic malware definition updates",
         details="Enabled" if freshclam_enabled else "Not enabled",
-        remediation="Enable: systemctl enable clamav-freshclam"
+        remediation=remediation_for("clamav")
     ))
     
     # A.8.7-005: Rootkit detection tools
@@ -1104,7 +1157,7 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
         status="Pass" if installed_rk else "Warning",
         message=f"{get_iso_id('7', 5)}: Rootkit detection tools",
         details=f"Installed: {', '.join(installed_rk)}" if installed_rk else "Not installed",
-        remediation="Install: apt-get install rkhunter chkrootkit"
+        remediation=remediation_for("rkhunter")
     ))
     
     # A.8.8: Management of Technical Vulnerabilities
@@ -1223,7 +1276,7 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
         status="Pass" if installed_fim else "Warning",
         message=f"{get_iso_id('9', 3)}: File integrity monitoring",
         details=f"Installed: {', '.join(installed_fim)}" if installed_fim else "Not installed",
-        remediation="Install AIDE: apt-get install aide"
+        remediation=remediation_for("aide")
     ))
     
     # A.8.9-004: AIDE database initialized
@@ -1236,7 +1289,7 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
             status="Pass" if aide_db else "Warning",
             message=f"{get_iso_id('9', 4)}: AIDE database initialized",
             details="Database exists" if aide_db else "Not initialized",
-            remediation="Initialize: aideinit"
+            remediation=remediation_for("aide")
         ))
     
     # A.8.9-005: System changes audited
@@ -1248,7 +1301,7 @@ def check_system_protection_management(results: List[AuditResult], shared_data: 
         status="Pass" if auditd_active else "Warning",
         message=f"{get_iso_id('9', 5)}: System changes audited",
         details="auditd active" if auditd_active else "Not active",
-        remediation="Enable: systemctl enable auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # A.8.9-006: Boot loader password
@@ -1431,7 +1484,7 @@ def check_backup_monitoring_network(results: List[AuditResult], shared_data: Dic
         status="Pass" if auditd_active else "Warning",
         message=f"{get_iso_id('15', 3)}: Audit daemon (auditd) active",
         details="Active" if auditd_active else "Not active",
-        remediation="Enable: systemctl enable auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # A.8.15-004: Audit rules configured
@@ -1539,7 +1592,7 @@ def check_backup_monitoring_network(results: List[AuditResult], shared_data: Dic
         status="Pass" if time_active else "Fail",
         message=f"{get_iso_id('17', 1)}: Time synchronization service",
         details="Active" if time_active else "Not active",
-        remediation="Enable chronyd: systemctl enable chronyd"
+        remediation=remediation_for("chrony")
     ))
     
     # A.8.17-002: NTP servers configured
@@ -2448,6 +2501,1123 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
 # Module Testing
 # ============================================================================
 
+
+
+# ============================================================================
+# v3.3 EXPANSION - ISO/IEC 27001:2022 + 27017/27018/27701 Deep Coverage
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across:
+#   - ISO 27001:2022 Annex A.8.27-A.8.34 (additional technical controls)
+#   - ISO/IEC 27017:2015 Cloud-specific controls
+#   - ISO/IEC 27018:2019 PII processor controls
+#   - ISO/IEC 27701:2019 Privacy Information Management
+# ============================================================================
+
+from shared_components.module_helpers import (
+    read_file_safe as _v33_read_file_safe,
+    file_exists as _v33_file_exists,
+    directory_exists as _v33_directory_exists,
+    command_available as _v33_command_available,
+    run_command as _v33_run_command,
+    read_sysctl as _v33_read_sysctl,
+    systemd_active as _v33_systemd_active,
+    file_mode as _v33_file_mode,
+    list_directory as _v33_list_directory,
+)
+
+
+def _v33_iso_result(category, status, message, severity="Medium",
+                    details="", remediation="", cross_references=None):
+    """Build AuditResult for ISO27001 v3.3 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_iso27001_v33_annex_a8_extended(results, shared_data, os_info):
+    """ISO 27001:2022 Annex A.8.27-A.8.34 - additional technical controls."""
+
+    # A.8.27 - Secure system architecture and engineering principles
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+    permit_root_match = re.search(r"^\s*PermitRootLogin\s+(\S+)", sshd, re.MULTILINE)
+    permit_root = permit_root_match.group(1) if permit_root_match else "yes"
+    secure_arch = permit_root.lower() in ("no", "prohibit-password",
+                                            "without-password")
+    results.append(_v33_iso_result(
+        "ISO A.8.27 v3.3 - Secure Architecture",
+        "Pass" if secure_arch else "Fail",
+        f"A.8.27 Secure SSH config (PermitRootLogin: {permit_root})",
+        severity="High",
+        details=f"PermitRootLogin = {permit_root}",
+        remediation="In /etc/ssh/sshd_config: PermitRootLogin no",
+        cross_references={
+            "ISO27001": "A.8.27", "NIST": "SA-8",
+        },
+    ))
+
+    # A.8.28 - Secure coding (SAST tools)
+    sast_tools = ["bandit", "semgrep", "shellcheck", "pylint", "eslint"]
+    detected = [t for t in sast_tools if _v33_command_available(t)]
+    results.append(_v33_iso_result(
+        "ISO A.8.28 v3.3 - Secure Coding",
+        "Pass" if detected else "Info",
+        f"A.8.28 SAST tooling installed ({len(detected)})",
+        severity="Medium",
+        details=f"Detected: {detected}",
+        remediation="apt-get install -y shellcheck; pip install bandit semgrep",
+        cross_references={
+            "ISO27001": "A.8.28", "NIST": "SA-11",
+        },
+    ))
+
+    # A.8.29 - Security testing in development and acceptance
+    scanners = ["lynis", "oscap", "trivy", "nuclei"]
+    detected_s = [s for s in scanners if _v33_command_available(s)]
+    results.append(_v33_iso_result(
+        "ISO A.8.29 v3.3 - Security Testing",
+        "Pass" if detected_s else "Warning",
+        f"A.8.29 Security testing tools ({len(detected_s)})",
+        severity="Medium",
+        details=f"Detected: {detected_s}",
+        remediation=remediation_for("lynis"),
+        cross_references={
+            "ISO27001": "A.8.29", "NIST": "CA-2",
+        },
+    ))
+
+    # A.8.30 - Outsourced development (n/a at host level)
+    # A.8.31 - Separation of development, test and production environments
+    # Indicator: distinct user accounts (not all dev users on prod)
+    passwd = _v33_read_file_safe("/etc/passwd")
+    interactive_users = 0
+    if passwd:
+        for line in passwd.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 7:
+                try:
+                    uid = int(parts[2])
+                    if uid >= 1000 and parts[6] not in (
+                        "/sbin/nologin", "/usr/sbin/nologin", "/bin/false"
+                    ):
+                        interactive_users += 1
+                except ValueError:
+                    pass
+    results.append(_v33_iso_result(
+        "ISO A.8.31 v3.3 - Environment Separation",
+        "Info",
+        f"A.8.31 Interactive users: {interactive_users}",
+        severity="Informational",
+        details=f"User accounts with shell: {interactive_users}",
+        cross_references={
+            "ISO27001": "A.8.31", "NIST": "SC-2",
+        },
+    ))
+
+    # A.8.32 - Change management (package transaction logs + auditd)
+    pkg_logs = []
+    for log in ["/var/log/dpkg.log", "/var/log/yum.log",
+                "/var/log/dnf.log", "/var/log/zypp/history"]:
+        if _v33_file_exists(log):
+            pkg_logs.append(log)
+    audit_active = _v33_systemd_active("auditd.service") == "active"
+    cm_score = bool(pkg_logs) + audit_active
+    results.append(_v33_iso_result(
+        "ISO A.8.32 v3.3 - Change Management",
+        "Pass" if cm_score >= 2 else "Warning",
+        f"A.8.32 Change management capability ({cm_score}/2)",
+        severity="High",
+        details=f"Package logs: {len(pkg_logs)}, auditd: {audit_active}",
+        cross_references={
+            "ISO27001": "A.8.32", "NIST": "CM-3",
+        },
+    ))
+
+    # A.8.33 - Test information (no production data in non-prod indicators)
+    # Cannot reliably detect at host level - skip with informational
+
+    # A.8.34 - Protection of information systems during audit testing
+    auditd_active = _v33_systemd_active("auditd.service") == "active"
+    audit_rules = ""
+    if _v33_directory_exists(rules_d := "/etc/audit/rules.d"):
+        for f in _v33_list_directory(rules_d):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v33_read_file_safe(
+                    os.path.join(rules_d, f)
+                )
+    immutable = "-e 2" in audit_rules
+    results.append(_v33_iso_result(
+        "ISO A.8.34 v3.3 - Audit Protection",
+        "Pass" if (auditd_active and immutable) else "Warning",
+        f"A.8.34 Audit logs immutable (auditd -e 2)",
+        severity="High",
+        details=f"auditd: {auditd_active}, immutable: {immutable}",
+        remediation=(
+            "Add to /etc/audit/rules.d/99-finalize.rules: -e 2"
+        ),
+        cross_references={
+            "ISO27001": "A.8.34", "NIST": "AU-9",
+        },
+    ))
+
+
+def _check_iso27001_v33_27017_cloud(results, shared_data, os_info):
+    """ISO/IEC 27017:2015 - Cloud security controls."""
+
+    # CLD.6.3.1 - Shared roles and responsibilities (cloud agent indicators)
+    cloud_agents = {
+        "aws-ssm-agent": (
+            _v33_systemd_active("amazon-ssm-agent.service") == "active" or
+            _v33_command_available("amazon-ssm-agent")
+        ),
+        "azure-vm-agent": (
+            _v33_systemd_active("walinuxagent.service") == "active" or
+            _v33_directory_exists("/var/lib/waagent")
+        ),
+        "google-cloud-agent": (
+            _v33_systemd_active("google-osconfig-agent.service") == "active" or
+            _v33_directory_exists("/etc/google_instance_id")
+        ),
+        "qemu-guest-agent": (
+            _v33_systemd_active("qemu-guest-agent.service") == "active"
+        ),
+    }
+    cloud_detected = [k for k, v in cloud_agents.items() if v]
+    results.append(_v33_iso_result(
+        "ISO 27017 CLD.6.3.1 v3.3",
+        "Info",
+        f"Cloud platform agents detected ({len(cloud_detected)})",
+        severity="Informational",
+        details=f"Detected: {cloud_detected or 'none (likely on-prem)'}",
+        cross_references={
+            "ISO27017": "CLD.6.3.1", "NIST": "AC-20",
+        },
+    ))
+
+    # CLD.8.1.5 - Removal of cloud service customer assets (secure deletion)
+    erasure_tools = {
+        "shred": _v33_command_available("shred"),
+        "wipe": _v33_command_available("wipe"),
+        "blkdiscard": _v33_command_available("blkdiscard"),
+    }
+    detected = [k for k, v in erasure_tools.items() if v]
+    results.append(_v33_iso_result(
+        "ISO 27017 CLD.8.1.5 v3.3",
+        "Pass" if detected else "Warning",
+        f"CLD.8.1.5 Secure deletion tools ({len(detected)})",
+        severity="High",
+        details=f"Detected: {detected}",
+        cross_references={
+            "ISO27017": "CLD.8.1.5", "NIST": "MP-6",
+        },
+    ))
+
+    # CLD.9.5.1 - Segregation in virtual computing environments (containers)
+    container_runtimes = {
+        "docker": _v33_command_available("docker"),
+        "podman": _v33_command_available("podman"),
+        "containerd": (
+            _v33_command_available("containerd") or
+            _v33_systemd_active("containerd.service") == "active"
+        ),
+        "kubelet": _v33_command_available("kubelet"),
+    }
+    detected_rt = [k for k, v in container_runtimes.items() if v]
+    if detected_rt:
+        results.append(_v33_iso_result(
+            "ISO 27017 CLD.9.5.1 v3.3",
+            "Info",
+            f"CLD.9.5.1 Container runtime: {detected_rt}",
+            severity="Informational",
+            details=f"Runtimes: {detected_rt}",
+            remediation=(
+                "Apply Docker/Podman/Kubernetes hardening (CIS Benchmarks)"
+            ),
+            cross_references={
+                "ISO27017": "CLD.9.5.1", "NIST": "SC-7(13)",
+            },
+        ))
+
+    # CLD.12.1.5 - Administrator's operational security
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+    sshd_permit_root_match = re.search(r"^\s*PermitRootLogin\s+(\S+)", sshd, re.MULTILINE)
+    pr = sshd_permit_root_match.group(1) if sshd_permit_root_match else "yes"
+    admin_secure = pr.lower() in ("no", "prohibit-password", "without-password")
+    results.append(_v33_iso_result(
+        "ISO 27017 CLD.12.1.5 v3.3",
+        "Pass" if admin_secure else "Fail",
+        f"CLD.12.1.5 Cloud admin SSH security",
+        severity="High",
+        details=f"PermitRootLogin = {pr}",
+        cross_references={
+            "ISO27017": "CLD.12.1.5", "NIST": "AC-6",
+        },
+    ))
+
+    # CLD.12.4.5 - Monitoring of cloud services
+    auditd_active = _v33_systemd_active("auditd.service") == "active"
+    rsy_remote = False
+    rsy_conf = _v33_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy_conf or "omfwd" in rsy_conf:
+        rsy_remote = True
+    if not rsy_remote and _v33_directory_exists("/etc/rsyslog.d"):
+        for f in _v33_list_directory("/etc/rsyslog.d"):
+            c = _v33_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+            if "@@" in c or "omfwd" in c:
+                rsy_remote = True
+                break
+    monitoring_layers = sum([auditd_active, rsy_remote])
+    results.append(_v33_iso_result(
+        "ISO 27017 CLD.12.4.5 v3.3",
+        "Pass" if monitoring_layers >= 2 else "Warning",
+        f"CLD.12.4.5 Cloud monitoring ({monitoring_layers}/2)",
+        severity="High",
+        details=f"auditd: {auditd_active}, log forwarding: {rsy_remote}",
+        cross_references={
+            "ISO27017": "CLD.12.4.5", "NIST": "AU-6",
+        },
+    ))
+
+    # CLD.13.1.4 - Alignment of security mgmt for virtual networks
+    fw_active = (
+        _v33_systemd_active("ufw.service") == "active" or
+        _v33_systemd_active("firewalld.service") == "active" or
+        _v33_systemd_active("nftables.service") == "active"
+    )
+    results.append(_v33_iso_result(
+        "ISO 27017 CLD.13.1.4 v3.3",
+        "Pass" if fw_active else "Fail",
+        f"CLD.13.1.4 Network security mgmt: {fw_active}",
+        severity="Critical",
+        details=f"Firewall service active: {fw_active}",
+        cross_references={
+            "ISO27017": "CLD.13.1.4", "NIST": "SC-7",
+        },
+    ))
+
+
+def _check_iso27001_v33_27018_pii_processor(results, shared_data, os_info):
+    """ISO/IEC 27018:2019 - PII Processor controls."""
+
+    # A.4.1 - Geographical location of PII
+    # Best technical indicator: timezone configuration
+    rc, out, _ = _v33_run_command(
+        ["timedatectl", "show", "--property=Timezone"], timeout=3.0
+    )
+    has_timezone = rc == 0 and "Timezone=" in out
+    results.append(_v33_iso_result(
+        "ISO 27018 A.4.1 v3.3",
+        "Pass" if has_timezone else "Info",
+        f"A.4.1 Timezone (geo) configured: {has_timezone}",
+        severity="Low",
+        details=f"timedatectl rc={rc}",
+        cross_references={
+            "ISO27018": "A.4.1", "NIST": "AU-8",
+        },
+    ))
+
+    # A.10.1 - Notification of a data breach (incident response capability)
+    rsy_remote = False
+    rsy_conf = _v33_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy_conf or "omfwd" in rsy_conf:
+        rsy_remote = True
+    if not rsy_remote and _v33_directory_exists("/etc/rsyslog.d"):
+        for f in _v33_list_directory("/etc/rsyslog.d"):
+            c = _v33_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+            if "@@" in c or "omfwd" in c:
+                rsy_remote = True
+                break
+    results.append(_v33_iso_result(
+        "ISO 27018 A.10.1 v3.3",
+        "Pass" if rsy_remote else "Fail",
+        f"A.10.1 Breach detection (log forwarding): {rsy_remote}",
+        severity="Critical",
+        details=f"rsyslog forwarding: {rsy_remote}",
+        cross_references={
+            "ISO27018": "A.10.1", "NIST": "IR-6",
+        },
+    ))
+
+    # A.11.2 - Restoration of personal data (backup tools)
+    backup_tools = ["rsync", "borg", "restic", "duplicity"]
+    detected = [t for t in backup_tools if _v33_command_available(t)]
+    results.append(_v33_iso_result(
+        "ISO 27018 A.11.2 v3.3",
+        "Pass" if detected else "Warning",
+        f"A.11.2 Backup/restoration tools ({len(detected)})",
+        severity="High",
+        details=f"Detected: {detected}",
+        cross_references={
+            "ISO27018": "A.11.2", "NIST": "CP-9",
+        },
+    ))
+
+
+def _check_iso27001_v33_27701_pims(results, shared_data, os_info):
+    """ISO/IEC 27701:2019 - Privacy Information Management System."""
+
+    # 7.4 - Privacy by design and by default
+    sensitive_dirs = [
+        "/var/lib/mysql", "/var/lib/postgresql", "/var/lib/mongodb",
+        "/var/lib/redis", "/etc/ssl/private",
+    ]
+    issues = []
+    for d in sensitive_dirs:
+        if not _v33_directory_exists(d):
+            continue
+        try:
+            st = os.stat(d)
+            if (st.st_mode & 0o7777) & 0o077:
+                issues.append(d)
+        except OSError:
+            pass
+    results.append(_v33_iso_result(
+        "ISO 27701 7.4 v3.3",
+        "Pass" if not issues else "Warning",
+        f"7.4 Privacy by default (sensitive dir perms, {len(issues)} issues)",
+        severity="High",
+        details=f"Issues: {issues}",
+        remediation="chmod 700 /var/lib/mysql /var/lib/postgresql",
+        cross_references={
+            "ISO27701": "7.4", "NIST": "AC-3",
+        },
+    ))
+
+    # 7.5 - Pseudonymization
+    crypto_libs = {
+        "openssl": _v33_command_available("openssl"),
+        "gpg": _v33_command_available("gpg"),
+        "libsodium": _v33_file_exists(
+            "/usr/lib/x86_64-linux-gnu/libsodium.so"
+        ),
+    }
+    detected = [k for k, v in crypto_libs.items() if v]
+    results.append(_v33_iso_result(
+        "ISO 27701 7.5 v3.3",
+        "Pass" if detected else "Fail",
+        f"7.5 Pseudonymization libraries ({len(detected)})",
+        severity="High",
+        details=f"Detected: {detected}",
+        cross_references={
+            "ISO27701": "7.5", "NIST": "SC-13",
+        },
+    ))
+
+    # 8.4 - Erasure of personal data
+    erasure_tools = {
+        "shred": _v33_command_available("shred"),
+        "wipe": _v33_command_available("wipe"),
+        "blkdiscard": _v33_command_available("blkdiscard"),
+    }
+    detected = [k for k, v in erasure_tools.items() if v]
+    results.append(_v33_iso_result(
+        "ISO 27701 8.4 v3.3",
+        "Pass" if detected else "Fail",
+        f"8.4 Erasure capability ({len(detected)})",
+        severity="High",
+        details=f"Detected: {detected}",
+        cross_references={
+            "ISO27701": "8.4", "NIST": "MP-6",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_iso_v33 = run_checks
+
+
+def run_checks(shared_data):
+    """Execute the v3.3 expanded ISO27001 module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_iso_v33(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_iso27001_v33_annex_a8_extended(results, shared_data, os_info)
+        _check_iso27001_v33_27017_cloud(results, shared_data, os_info)
+        _check_iso27001_v33_27018_pii_processor(results, shared_data, os_info)
+        _check_iso27001_v33_27701_pims(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="ISO27001 - Error",
+            status="Error",
+            message=f"ISO27001 v3.3 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
+
+
+# ============================================================================
+# v3.5 EXPANSION - ISO/IEC 27001:2022 Annex A New Controls + Depth
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across ISO/IEC 27001:2022 Annex A controls not yet covered:
+#     - A.5.7 Threat intelligence (new in 2022)
+#     - A.5.23 Information security for use of cloud services (new)
+#     - A.5.30 ICT readiness for business continuity (new)
+#     - A.7.4 Physical security monitoring
+#     - A.8.7 Protection against malware (depth)
+#     - A.8.8 Management of technical vulnerabilities (depth)
+#     - A.8.10 Information deletion (new in 2022)
+#     - A.8.11 Data masking (new in 2022)
+#     - A.8.12 Data leakage prevention (new in 2022)
+#     - A.8.16 Monitoring activities (new in 2022)
+#     - A.8.20/A.8.22 Network security and segregation
+#     - A.8.23 Web filtering (new in 2022)
+#     - A.8.25/A.8.28 Secure development life cycle and coding
+#     - A.8.31 Separation of development/test/production environments
+#     - A.8.32 Change management
+# ============================================================================
+
+# v3.5 helpers
+from shared_components.module_helpers import (
+    read_file_safe as _v35_read_file_safe,
+    file_exists as _v35_file_exists,
+    directory_exists as _v35_directory_exists,
+    command_available as _v35_command_available,
+    run_command as _v35_run_command,
+    read_sysctl as _v35_read_sysctl,
+    systemd_active as _v35_systemd_active,
+    list_directory as _v35_list_directory,
+)
+
+
+def _v35_iso_result(category, status, message, severity="Medium",
+                   details="", remediation="", cross_references=None):
+    """Build AuditResult for ISO27001 v3.5 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_iso_v35_threat_intel_a57(results, shared_data, os_info):
+    """A.5.7 Threat intelligence (new in 2022)."""
+    cat = "ISO27001 v3.5 - A.5.7"
+
+    # Threat intelligence integration tools
+    ti_tools = {
+        "MISP (Malware Info Sharing)": (
+            _v35_systemd_active("misp.service") == "active" or
+            _v35_directory_exists("/var/www/MISP")
+        ),
+        "TheHive": _v35_directory_exists("/opt/thehive"),
+        "OpenCTI": _v35_directory_exists("/opt/opencti"),
+        "yara-rules-pull": _v35_command_available("yara"),
+        "Sigma rule pull": _v35_directory_exists("/opt/sigma"),
+        "OSSEC ruleset (with TI feeds)": _v35_directory_exists(
+            "/var/ossec/ruleset"
+        ),
+        "Wazuh threatintel": _v35_directory_exists(
+            "/var/ossec/etc/lists"
+        ),
+    }
+    available = [k for k, v in ti_tools.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - Threat Intelligence Integration",
+        "Pass" if available else "Info",
+        f"ISO 27001:2022 A.5.7 threat intelligence tooling: "
+        f"{len(available)}/7",
+        severity="Medium",
+        details=f"Available: {available}",
+        remediation=(
+            "Subscribe to threat intelligence feeds and integrate with "
+            "monitoring stack:\n"
+            "  - MISP: https://www.misp-project.org\n"
+            "  - Pull YARA/Sigma rules from community repositories\n"
+            "  - Configure Wazuh with CDB lists for IoC matching"
+        ),
+        cross_references={
+            "ISO27001": "A.5.7 (2022)",
+            "NIST": "RA-3, SI-5",
+        },
+    ))
+
+
+def _check_iso_v35_cloud_a523(results, shared_data, os_info):
+    """A.5.23 Information security for use of cloud services (new in 2022)."""
+    cat = "ISO27001 v3.5 - A.5.23"
+
+    # Cloud-aware tooling for cloud environments
+    cloud_tooling = {
+        "AWS CLI": _v35_command_available("aws"),
+        "Azure CLI": _v35_command_available("az"),
+        "GCP CLI": _v35_command_available("gcloud"),
+        "AWS SSM Agent": _v35_systemd_active(
+            "amazon-ssm-agent.service"
+        ) == "active",
+        "Azure Monitor Agent": _v35_systemd_active(
+            "azuremonitoragent.service"
+        ) == "active",
+        "GCP Ops Agent": _v35_systemd_active(
+            "google-cloud-ops-agent.service"
+        ) == "active",
+    }
+    detected = [k for k, v in cloud_tooling.items() if v]
+    cloud_environment = bool(detected)
+    results.append(_v35_iso_result(
+        f"{cat} - Cloud Service Tooling",
+        "Info",
+        f"ISO 27001:2022 A.5.23 cloud tooling detected: {detected}",
+        severity="Informational",
+        details=f"Cloud presence: {cloud_environment}, tools: {detected}",
+        cross_references={
+            "ISO27001": "A.5.23 (2022)",
+            "ISO27017": "Cloud Services",
+        },
+    ))
+
+
+def _check_iso_v35_business_continuity_a530(results, shared_data, os_info):
+    """A.5.30 ICT readiness for business continuity (new in 2022)."""
+    cat = "ISO27001 v3.5 - A.5.30"
+
+    # Recovery readiness layers
+    recovery_layers = {
+        "Backup tooling": (
+            _v35_command_available("borg") or
+            _v35_command_available("restic") or
+            _v35_command_available("duplicity")
+        ),
+        "Snapshot capability": (
+            _v35_command_available("zfs") or
+            _v35_command_available("btrfs") or
+            _v35_command_available("snapper")
+        ),
+        "Recovery boot tools": (
+            _v35_command_available("kexec") or
+            _v35_command_available("dracut") or
+            _v35_command_available("mkinitcpio")
+        ),
+        "Configuration mgmt": (
+            _v35_command_available("ansible") or
+            _v35_command_available("puppet") or
+            _v35_command_available("salt") or
+            _v35_command_available("chef-client")
+        ),
+        "Container orchestration": (
+            _v35_command_available("kubectl") or
+            _v35_systemd_active("kubelet.service") == "active" or
+            _v35_command_available("docker-compose")
+        ),
+    }
+    layers = [k for k, v in recovery_layers.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - ICT Recovery Layers",
+        "Pass" if len(layers) >= 3 else "Warning",
+        f"ISO 27001:2022 A.5.30 ICT recovery layers: {len(layers)}/5",
+        severity="High",
+        details=f"Available: {layers}",
+        remediation=(
+            "Establish multiple recovery layers:\n"
+            "  - Backup: borg / restic / duplicity\n"
+            "  - Snapshot: btrfs / ZFS / LVM snapshots\n"
+            "  - Configuration mgmt: ansible playbooks for rebuild\n"
+            "  - Documented runbooks for each scenario"
+        ),
+        cross_references={
+            "ISO27001": "A.5.30 (2022)",
+            "NIST": "CP-2, CP-9, CP-10",
+        },
+    ))
+
+
+def _check_iso_v35_anti_malware_a87(results, shared_data, os_info):
+    """A.8.7 Protection against malware - depth."""
+    cat = "ISO27001 v3.5 - A.8.7"
+
+    # Multi-layer anti-malware
+    av_layers = {
+        "ClamAV": _v35_systemd_active(
+            "clamav-daemon.service"
+        ) == "active" or _v35_systemd_active("clamd.service") == "active",
+        "ClamAV freshclam": _v35_systemd_active(
+            "clamav-freshclam.service"
+        ) == "active",
+        "rkhunter": _v35_command_available("rkhunter"),
+        "chkrootkit": _v35_command_available("chkrootkit"),
+        "fail2ban": _v35_systemd_active("fail2ban.service") == "active",
+        "EDR (Wazuh/OSSEC)": _v35_file_exists(
+            "/var/ossec/etc/ossec.conf"
+        ),
+    }
+    active = [k for k, v in av_layers.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - Anti-Malware Layers",
+        "Pass" if len(active) >= 2 else "Warning",
+        f"ISO 27001:2022 A.8.7 anti-malware layers: {len(active)}/6",
+        severity="High",
+        details=f"Active: {active}",
+        remediation=(
+            f"{remediation_for('clamav')}\n"
+            "Add rootkit detection: apt-get install -y rkhunter chkrootkit"
+        ),
+        cross_references={
+            "ISO27001": "A.8.7",
+            "NIST": "SI-3", "PCI-DSS": "5.2.1",
+        },
+    ))
+
+
+def _check_iso_v35_vuln_mgmt_a88(results, shared_data, os_info):
+    """A.8.8 Management of technical vulnerabilities - depth."""
+    cat = "ISO27001 v3.5 - A.8.8"
+
+    # Vuln scanning tools
+    vuln_tools = {
+        "Lynis": _v35_command_available("lynis"),
+        "OpenSCAP": _v35_command_available("oscap"),
+        "Trivy": _v35_command_available("trivy"),
+        "Grype": _v35_command_available("grype"),
+        "Nuclei": _v35_command_available("nuclei"),
+        "debsecan": _v35_command_available("debsecan"),
+    }
+    available = [k for k, v in vuln_tools.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - Vuln Scanning Tools",
+        "Pass" if len(available) >= 2 else "Warning",
+        f"ISO 27001:2022 A.8.8 vulnerability scanning tools: {len(available)}/6",
+        severity="High",
+        details=f"Available: {available}",
+        remediation=(
+            "apt-get install -y lynis libopenscap8 debsecan rkhunter\n"
+            "Schedule: /etc/cron.daily/lynis-scan with --quick mode"
+        ),
+        cross_references={
+            "ISO27001": "A.8.8",
+            "NIST": "RA-5", "PCI-DSS": "11.4.1",
+        },
+    ))
+
+    # Auto-patch (vulnerability remediation)
+    auto_patch = (
+        _v35_systemd_active("unattended-upgrades.service") == "active" or
+        _v35_systemd_active("dnf-automatic-install.timer") == "active" or
+        _v35_systemd_active("dnf-automatic.timer") == "active"
+    )
+    results.append(_v35_iso_result(
+        f"{cat} - Auto-Patch Active",
+        "Pass" if auto_patch else "Warning",
+        f"ISO 27001:2022 A.8.8 Automatic security patching: {auto_patch}",
+        severity="High",
+        details=f"Auto-patch service: {auto_patch}",
+        remediation=(
+            remediation_for("unattended-upgrades")
+            if (os_info and os_info.is_debian_family())
+            else remediation_for("dnf-automatic")
+        ),
+        cross_references={
+            "ISO27001": "A.8.8",
+            "NIST": "SI-2",
+        },
+    ))
+
+
+def _check_iso_v35_information_deletion_a810(results, shared_data, os_info):
+    """A.8.10 Information deletion (new in 2022)."""
+    cat = "ISO27001 v3.5 - A.8.10"
+
+    # Secure deletion tools
+    sanit_tools = {
+        "shred": _v35_command_available("shred"),
+        "scrub": _v35_command_available("scrub"),
+        "wipe": _v35_command_available("wipe"),
+        "srm": _v35_command_available("srm"),
+        "hdparm (security-erase)": _v35_command_available("hdparm"),
+        "cryptsetup (LUKS destroy)": _v35_command_available("cryptsetup"),
+        "fstrim.timer (SSD)": _v35_systemd_active("fstrim.timer") == "active",
+    }
+    available = [k for k, v in sanit_tools.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - Secure Deletion Tools",
+        "Pass" if len(available) >= 3 else "Warning",
+        f"ISO 27001:2022 A.8.10 information deletion tooling: "
+        f"{len(available)}/7",
+        severity="Medium",
+        details=f"Available: {available}",
+        remediation=(
+            "apt-get install -y secure-delete coreutils scrub hdparm cryptsetup\n"
+            "systemctl enable --now fstrim.timer"
+        ),
+        cross_references={
+            "ISO27001": "A.8.10 (2022)",
+            "NIST": "MP-6", "GDPR": "Art 17",
+        },
+    ))
+
+
+def _check_iso_v35_data_masking_a811(results, shared_data, os_info):
+    """A.8.11 Data masking (new in 2022)."""
+    cat = "ISO27001 v3.5 - A.8.11"
+
+    # Pseudonymization / data masking tools
+    masking_tools = {
+        "openssl (HMAC capable)": _v35_command_available("openssl"),
+        "gpg (encryption)": _v35_command_available("gpg") or
+                            _v35_command_available("gpg2"),
+        "age (file encryption)": _v35_command_available("age"),
+        "minisign": _v35_command_available("minisign"),
+        "jq (JSON masking)": _v35_command_available("jq"),
+        "csvkit (CSV masking)": _v35_command_available("csvcut"),
+    }
+    available = [k for k, v in masking_tools.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - Data Masking Tools",
+        "Pass" if len(available) >= 2 else "Info",
+        f"ISO 27001:2022 A.8.11 data masking tooling: {len(available)}/6",
+        severity="Medium",
+        details=f"Available: {available}",
+        remediation=(
+            "apt-get install -y openssl gnupg age jq csvkit\n"
+            "Pseudonymize PII: openssl dgst -hmac \"key\" -sha256 < pii.txt"
+        ),
+        cross_references={
+            "ISO27001": "A.8.11 (2022)",
+            "GDPR": "Art 32(1)(a)",
+        },
+    ))
+
+
+def _check_iso_v35_dlp_a812(results, shared_data, os_info):
+    """A.8.12 Data leakage prevention (new in 2022)."""
+    cat = "ISO27001 v3.5 - A.8.12"
+
+    # DLP indicators
+    dlp_layers = {
+        "Egress firewall (nftables/iptables)": False,
+        "DNS filtering (resolved/dnsmasq)": False,
+        "auditd egress watch (connect syscall)": False,
+        "USB device control (usbguard)": _v35_systemd_active(
+            "usbguard.service"
+        ) == "active",
+        "SIEM forwarding": False,
+    }
+    rc, out, _ = _v35_run_command(["nft", "list", "ruleset"], timeout=5.0)
+    if rc == 0 and out and re.search(
+        r"chain\s+\S*output\S*\s*{.*type\s+filter", out,
+        re.DOTALL | re.IGNORECASE,
+    ):
+        dlp_layers["Egress firewall (nftables/iptables)"] = True
+    if (_v35_systemd_active("systemd-resolved.service") == "active" or
+        _v35_systemd_active("dnsmasq.service") == "active"):
+        dlp_layers["DNS filtering (resolved/dnsmasq)"] = True
+    audit_rules = ""
+    if _v35_directory_exists("/etc/audit/rules.d"):
+        for f in _v35_list_directory("/etc/audit/rules.d"):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/audit/rules.d", f)
+                )
+    if "connect" in audit_rules and "exit" in audit_rules:
+        dlp_layers["auditd egress watch (connect syscall)"] = True
+    rsy = _v35_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy or "omfwd" in rsy:
+        dlp_layers["SIEM forwarding"] = True
+
+    active = [k for k, v in dlp_layers.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - DLP Layers",
+        "Pass" if len(active) >= 2 else "Warning",
+        f"ISO 27001:2022 A.8.12 DLP layers: {len(active)}/5",
+        severity="High",
+        details=f"Active: {active}",
+        remediation=(
+            "Layered DLP approach:\n"
+            "  - Egress firewall: nftables / firewalld output rules\n"
+            "  - DNS filtering: systemd-resolved with allowlist\n"
+            "  - USB control: apt-get install -y usbguard\n"
+            "  - SIEM forwarding via rsyslog"
+        ),
+        cross_references={
+            "ISO27001": "A.8.12 (2022)",
+            "NIST": "SI-4(18), AC-3",
+        },
+    ))
+
+
+def _check_iso_v35_monitoring_a816(results, shared_data, os_info):
+    """A.8.16 Monitoring activities (new in 2022)."""
+    cat = "ISO27001 v3.5 - A.8.16"
+
+    # Monitoring stack depth
+    monitoring_layers = {
+        "auditd": _v35_systemd_active("auditd.service") == "active",
+        "AIDE FIM": (
+            _v35_file_exists("/var/lib/aide/aide.db") or
+            _v35_file_exists("/var/lib/aide/aide.db.gz")
+        ),
+        "fail2ban": _v35_systemd_active("fail2ban.service") == "active",
+        "logwatch": _v35_command_available("logwatch"),
+        "OSSEC/Wazuh": _v35_file_exists("/var/ossec/etc/ossec.conf"),
+        "rsyslog forwarding": False,
+        "journald persistent": _v35_directory_exists("/var/log/journal"),
+    }
+    rsy = _v35_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy or "omfwd" in rsy:
+        monitoring_layers["rsyslog forwarding"] = True
+    active = sum(1 for v in monitoring_layers.values() if v)
+    results.append(_v35_iso_result(
+        f"{cat} - Monitoring Stack",
+        "Pass" if active >= 4 else "Warning",
+        f"ISO 27001:2022 A.8.16 monitoring layers: {active}/7",
+        severity="High",
+        details=f"Active: {[k for k, v in monitoring_layers.items() if v]}",
+        cross_references={
+            "ISO27001": "A.8.16 (2022)",
+            "NIST": "AU-6, SI-4, CA-7",
+        },
+    ))
+
+
+def _check_iso_v35_network_segregation_a820_22(results, shared_data, os_info):
+    """A.8.20/A.8.22 Network security and segregation."""
+    cat = "ISO27001 v3.5 - A.8.20/A.8.22"
+
+    # Network security layers
+    rc, out, _ = _v35_run_command(["ufw", "status", "verbose"], timeout=5.0)
+    ufw_active = rc == 0 and "Status: active" in (out or "")
+    rc, out, _ = _v35_run_command(["firewall-cmd", "--state"], timeout=5.0)
+    firewalld_active = rc == 0 and "running" in (out or "")
+    rc, out, _ = _v35_run_command(["nft", "list", "ruleset"], timeout=5.0)
+    nft_active = rc == 0 and bool(out and out.strip())
+    fw_active = ufw_active or firewalld_active or nft_active
+    results.append(_v35_iso_result(
+        f"{cat} - Network Firewall Active",
+        "Pass" if fw_active else "Fail",
+        f"ISO 27001:2022 A.8.20 Network firewall: ufw={ufw_active}, "
+        f"firewalld={firewalld_active}, nftables={nft_active}",
+        severity="Critical",
+        details=f"Any firewall active: {fw_active}",
+        cross_references={
+            "ISO27001": "A.8.20",
+            "NIST": "SC-7", "PCI-DSS": "1.2",
+        },
+    ))
+
+    # Network segregation indicators (multiple interfaces, VLAN, namespaces)
+    rc, out, _ = _v35_run_command(["ip", "-br", "link"], timeout=5.0)
+    iface_count = 0
+    vlan_present = False
+    if rc == 0 and out:
+        for line in out.splitlines():
+            parts = line.split()
+            if not parts or parts[0] == "lo":
+                continue
+            iface_count += 1
+            if "@" in parts[0] or "vlan" in parts[0].lower():
+                vlan_present = True
+    netns_count = 0
+    rc, out, _ = _v35_run_command(["ip", "netns", "list"], timeout=3.0)
+    if rc == 0 and out:
+        netns_count = len([l for l in out.splitlines() if l.strip()])
+
+    segregation_indicators = sum([
+        iface_count > 1, vlan_present, netns_count > 0,
+    ])
+    results.append(_v35_iso_result(
+        f"{cat} - Network Segregation",
+        "Info",
+        f"ISO 27001:2022 A.8.22 Segregation indicators: "
+        f"{segregation_indicators}/3 (ifaces: {iface_count}, VLAN: {vlan_present}, "
+        f"netns: {netns_count})",
+        severity="Informational",
+        details=(
+            f"interfaces: {iface_count}, VLAN: {vlan_present}, "
+            f"network namespaces: {netns_count}"
+        ),
+        cross_references={
+            "ISO27001": "A.8.22",
+            "NIST": "SC-7(13)",
+        },
+    ))
+
+
+def _check_iso_v35_secure_dev_a825_28(results, shared_data, os_info):
+    """A.8.25/A.8.28 Secure development life cycle and coding."""
+    cat = "ISO27001 v3.5 - A.8.25/A.8.28"
+
+    # Secure development tooling
+    dev_tools = {
+        "git (version control)": _v35_command_available("git"),
+        "shellcheck (shell SAST)": _v35_command_available("shellcheck"),
+        "bandit (Python SAST)": _v35_command_available("bandit"),
+        "semgrep": _v35_command_available("semgrep"),
+        "yamllint": _v35_command_available("yamllint"),
+        "pylint/flake8": (
+            _v35_command_available("pylint") or
+            _v35_command_available("flake8")
+        ),
+        "gpg (signed commits)": (
+            _v35_command_available("gpg") or _v35_command_available("gpg2")
+        ),
+    }
+    available = [k for k, v in dev_tools.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - Secure Dev Tooling",
+        "Pass" if len(available) >= 4 else "Info",
+        f"ISO 27001:2022 A.8.25/A.8.28 secure dev tooling: "
+        f"{len(available)}/7",
+        severity="Medium",
+        details=f"Available: {available}",
+        remediation=(
+            "Install development security tools:\n"
+            "  apt-get install -y git shellcheck python3-bandit yamllint "
+            "pylint flake8 gnupg2\n"
+            "  pip install --user semgrep"
+        ),
+        cross_references={
+            "ISO27001": "A.8.25, A.8.28 (2022)",
+            "NIST": "SA-3, SA-11", "SSDF": "PW.7, PW.8",
+        },
+    ))
+
+
+def _check_iso_v35_dev_test_prod_a831(results, shared_data, os_info):
+    """A.8.31 Separation of development, test and production environments."""
+    cat = "ISO27001 v3.5 - A.8.31"
+
+    # Container/namespace based separation
+    separation_indicators = {
+        "Container runtime": (
+            _v35_command_available("docker") or
+            _v35_command_available("podman") or
+            _v35_command_available("buildah")
+        ),
+        "K8s namespace support": (
+            _v35_command_available("kubectl") or
+            _v35_systemd_active("kubelet.service") == "active"
+        ),
+        "systemd-nspawn": _v35_command_available("systemd-nspawn"),
+        "LXC/LXD": _v35_command_available("lxc"),
+        "User namespaces": _v35_file_exists("/proc/sys/user/max_user_namespaces"),
+    }
+    available = [k for k, v in separation_indicators.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - Environment Separation",
+        "Pass" if len(available) >= 2 else "Info",
+        f"ISO 27001:2022 A.8.31 separation tooling: {len(available)}/5",
+        severity="Medium",
+        details=f"Available: {available}",
+        cross_references={
+            "ISO27001": "A.8.31",
+            "NIST": "SC-2, SC-39",
+        },
+    ))
+
+
+def _check_iso_v35_change_mgmt_a832(results, shared_data, os_info):
+    """A.8.32 Change management."""
+    cat = "ISO27001 v3.5 - A.8.32"
+
+    # Change management indicators
+    change_mgmt_layers = {
+        "Configuration mgmt (ansible/puppet/salt)": (
+            _v35_command_available("ansible") or
+            _v35_command_available("puppet") or
+            _v35_command_available("salt") or
+            _v35_command_available("chef-client")
+        ),
+        "Version control (git)": _v35_command_available("git"),
+        "Package mgmt audit trail": (
+            _v35_file_exists("/var/log/dpkg.log") or
+            _v35_file_exists("/var/log/dnf.log") or
+            _v35_file_exists("/var/log/yum.log")
+        ),
+        "Auditd configuration watching": False,
+        "etckeeper": _v35_command_available("etckeeper"),
+    }
+    audit_rules = ""
+    if _v35_directory_exists("/etc/audit/rules.d"):
+        for f in _v35_list_directory("/etc/audit/rules.d"):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/audit/rules.d", f)
+                )
+    if "/etc" in audit_rules and "wa" in audit_rules:
+        change_mgmt_layers["Auditd configuration watching"] = True
+
+    active = [k for k, v in change_mgmt_layers.items() if v]
+    results.append(_v35_iso_result(
+        f"{cat} - Change Mgmt Layers",
+        "Pass" if len(active) >= 3 else "Warning",
+        f"ISO 27001:2022 A.8.32 change management layers: "
+        f"{len(active)}/5",
+        severity="High",
+        details=f"Active: {active}",
+        remediation=(
+            "Establish change management:\n"
+            "  apt-get install -y etckeeper ansible\n"
+            "  etckeeper init  (auto-track /etc in git)\n"
+            "  Audit /etc with auditd: -w /etc -p wa -k config-changes"
+        ),
+        cross_references={
+            "ISO27001": "A.8.32",
+            "NIST": "CM-3, CM-5",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_iso_v35 = run_checks
+
+
+def run_checks(shared_data: Optional[Dict[str, Any]] = None) -> List[AuditResult]:
+    """Execute the v3.5 expanded ISO27001 module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_iso_v35(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_iso_v35_threat_intel_a57(results, shared_data, os_info)
+        _check_iso_v35_cloud_a523(results, shared_data, os_info)
+        _check_iso_v35_business_continuity_a530(results, shared_data, os_info)
+        _check_iso_v35_anti_malware_a87(results, shared_data, os_info)
+        _check_iso_v35_vuln_mgmt_a88(results, shared_data, os_info)
+        _check_iso_v35_information_deletion_a810(results, shared_data, os_info)
+        _check_iso_v35_data_masking_a811(results, shared_data, os_info)
+        _check_iso_v35_dlp_a812(results, shared_data, os_info)
+        _check_iso_v35_monitoring_a816(results, shared_data, os_info)
+        _check_iso_v35_network_segregation_a820_22(results, shared_data, os_info)
+        _check_iso_v35_secure_dev_a825_28(results, shared_data, os_info)
+        _check_iso_v35_dev_test_prod_a831(results, shared_data, os_info)
+        _check_iso_v35_change_mgmt_a832(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="ISO27001 - Error",
+            status="Error",
+            message=f"ISO27001 v3.5 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
 if __name__ == "__main__":
     """
     Standalone testing capability for the ISO27001 module
@@ -2507,7 +3677,3 @@ if __name__ == "__main__":
     print(f"ISO27001 module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
-
-# ============================================================================
-# End of module_iso27001.py
-# ============================================================================
