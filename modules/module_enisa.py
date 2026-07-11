@@ -2,7 +2,7 @@
 """
 module_enisa.py
 ENISA Cybersecurity Recommendations Module for Linux
-Version: 2.2
+Version: 2.0
 
 SYNOPSIS:
     Comprehensive ENISA cybersecurity compliance assessment for Linux systems
@@ -163,7 +163,61 @@ except ImportError:
         HAS_COMMON_LIB = False
 
 MODULE_NAME = "ENISA"
-MODULE_VERSION = "2.2"
+
+# v3.4 Remediation library wiring
+try:
+    from shared_components.remediation_library import get_remediation as _v34_get_remediation
+    from shared_components.remediation_library import get_removal_remediation as _v34_get_removal
+    from shared_components.remediation_library import get_patch_remediation as _v34_get_patch
+    from shared_components.os_detection import detect_os as _v34_detect_os
+    _v34_OSINFO_CACHE = None
+    def remediation_for(tool_id):
+        """Return distro-aware remediation text for a registered tool.
+
+        Falls back to a short "Install <tool>" string if the library
+        does not have an entry for the tool_id.
+        """
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        text = _v34_get_remediation(tool_id, _v34_OSINFO_CACHE)
+        return text if text else f"Install {tool_id} via your distribution\'s package manager"
+
+    def _v34_resolve_os():
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        return _v34_OSINFO_CACHE
+
+    def removal_for(canonical_token, extra_context=""):
+        """Return OS-aware package-removal remediation text."""
+        try:
+            return _v34_get_removal(canonical_token, _v34_resolve_os(),
+                                    extra_context=extra_context)
+        except Exception:
+            return f"Remove {canonical_token} via your distribution\'s package manager"
+
+    def patch_for(extra_context=""):
+        """Return OS-aware security-patch remediation text."""
+        try:
+            return _v34_get_patch(_v34_resolve_os(), extra_context=extra_context)
+        except Exception:
+            return "Apply available security updates via your distribution\'s package manager"
+except ImportError:  # pragma: no cover
+    def remediation_for(tool_id):
+        return f"Install {tool_id} via your distribution\'s package manager"
+    def removal_for(canonical_token, extra_context=""):
+        return f"Remove {canonical_token} via your distribution\'s package manager"
+    def patch_for(extra_context=""):
+        return "Apply available security updates via your distribution\'s package manager"
+
+MODULE_VERSION = "3.9"
 
 # Module logger (uses structured logging if audit_common is available)
 logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
@@ -351,7 +405,7 @@ def check_baseline_security(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if av_installed else "Warning",
         message=f"{get_enisa_id('BSM', 5)}: Anti-malware software installed",
         details="ClamAV installed" if av_installed else "Not installed",
-        remediation="Install: apt-get install clamav || yum install clamav"
+        remediation=remediation_for("clamav")
     ))
     
     # BSM-006: System logging active
@@ -373,7 +427,7 @@ def check_baseline_security(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if logging_status['auditd'] else "Warning",
         message=f"{get_enisa_id('BSM', 7)}: Audit logging configured",
         details="Active" if logging_status['auditd'] else "Not active",
-        remediation="Enable: systemctl enable auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # BSM-008: Password policy configured
@@ -487,7 +541,7 @@ def check_baseline_security(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if time_active else "Warning",
         message=f"{get_enisa_id('BSM', 15)}: Time synchronization active",
         details="Active" if time_active else "Not active",
-        remediation="Enable: systemctl enable chronyd"
+        remediation=remediation_for("chrony")
     ))
     
     # BSM-016: File integrity monitoring
@@ -500,7 +554,7 @@ def check_baseline_security(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if installed_fim else "Warning",
         message=f"{get_enisa_id('BSM', 16)}: File integrity monitoring",
         details=f"Installed: {', '.join(installed_fim)}" if installed_fim else "Not installed",
-        remediation="Install AIDE: apt-get install aide"
+        remediation=remediation_for("aide")
     ))
     
     # BSM-017: Disk encryption
@@ -852,7 +906,7 @@ def check_network_security(results: List[AuditResult], shared_data: Dict[str, An
         status="Pass" if fail2ban_installed else "Info",
         message=f"{get_enisa_id('NET', 16)}: Automated attack response",
         details="fail2ban installed" if fail2ban_installed else "Not installed",
-        remediation="Install fail2ban for automated response"
+        remediation=remediation_for("fail2ban")
     ))
     
     # NET-017: Network segmentation
@@ -1360,7 +1414,7 @@ def check_incident_response_monitoring(results: List[AuditResult], shared_data: 
         status="Pass" if logging_status['auditd'] else "Warning",
         message=f"{get_enisa_id('INC', 2)}: Audit daemon active",
         details="Active" if logging_status['auditd'] else "Not active",
-        remediation="Enable: systemctl enable auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # INC-003: Remote logging configured
@@ -1838,6 +1892,1191 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
 # Module Testing
 # ============================================================================
 
+
+
+# ============================================================================
+# v3.3 EXPANSION - ENISA Deep Coverage
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across:
+#   - NIS2 Directive Article 21 cybersecurity risk-management measures (10)
+#   - DORA (Digital Operational Resilience Act) for financial entities
+#   - EU Cybersecurity Act Article 51 baseline
+#   - ENISA Threat Landscape technical indicators
+#   - Cross-Border Resilience indicators
+# ============================================================================
+
+from shared_components.module_helpers import (
+    read_file_safe as _v33_read_file_safe,
+    file_exists as _v33_file_exists,
+    directory_exists as _v33_directory_exists,
+    command_available as _v33_command_available,
+    run_command as _v33_run_command,
+    read_sysctl as _v33_read_sysctl,
+    systemd_active as _v33_systemd_active,
+    file_mode as _v33_file_mode,
+    list_directory as _v33_list_directory,
+)
+
+
+def _v33_enisa_result(category, status, message, severity="Medium",
+                      details="", remediation="", cross_references=None):
+    """Build AuditResult for ENISA v3.3 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_enisa_v33_nis2_article21(results, shared_data, os_info):
+    """NIS2 Directive Article 21 - 10 cybersecurity risk-management measures."""
+
+    # 21.2(a) - Risk analysis and information system security policies
+    auditd_active = _v33_systemd_active("auditd.service") == "active"
+    audit_rules_count = 0
+    rules_d = "/etc/audit/rules.d"
+    if _v33_directory_exists(rules_d):
+        for f in _v33_list_directory(rules_d):
+            if f.endswith(".rules"):
+                c = _v33_read_file_safe(os.path.join(rules_d, f))
+                audit_rules_count += sum(
+                    1 for ln in c.splitlines()
+                    if ln.strip() and not ln.strip().startswith("#")
+                )
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(a) v3.3 - Risk Analysis",
+        "Pass" if (auditd_active and audit_rules_count >= 25) else "Warning",
+        f"NIS2 Article 21.2(a) Risk analysis (auditd, {audit_rules_count} rules)",
+        severity="High",
+        details=(
+            f"auditd active: {auditd_active}, audit rules: {audit_rules_count}"
+        ),
+        remediation=(
+            "Deploy CIS-recommended ruleset (~75 rules) and document baseline"
+        ),
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(a)", "NIST": "RA-3",
+        },
+    ))
+
+    # 21.2(b) - Incident handling
+    rsy_remote = False
+    rsy_conf = _v33_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy_conf or "omfwd" in rsy_conf:
+        rsy_remote = True
+    if not rsy_remote and _v33_directory_exists("/etc/rsyslog.d"):
+        for f in _v33_list_directory("/etc/rsyslog.d"):
+            if not f.endswith(".conf"):
+                continue
+            c = _v33_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+            if "@@" in c or "omfwd" in c:
+                rsy_remote = True
+                break
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(b) v3.3 - Incident Handling",
+        "Pass" if rsy_remote else "Fail",
+        f"NIS2 Article 21.2(b) Remote log forwarding for incident handling",
+        severity="Critical",
+        details=f"rsyslog forwarding: {rsy_remote}",
+        remediation=(
+            "Configure /etc/rsyslog.d/50-remote.conf for SIEM forwarding"
+        ),
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(b)", "NIST": "IR-4",
+        },
+    ))
+
+    # 21.2(c) - Business continuity, backup management, crisis management
+    backup_tools = {
+        "rsync": _v33_command_available("rsync"),
+        "borg": _v33_command_available("borg"),
+        "restic": _v33_command_available("restic"),
+        "duplicity": _v33_command_available("duplicity"),
+    }
+    detected = [k for k, v in backup_tools.items() if v]
+    backup_cron = []
+    for cron_dir in ["/etc/cron.daily", "/etc/cron.weekly", "/etc/cron.d"]:
+        if _v33_directory_exists(cron_dir):
+            for f in _v33_list_directory(cron_dir):
+                lf = f.lower()
+                if any(k in lf for k in ["backup", "rsync", "borg", "restic"]):
+                    backup_cron.append(f)
+    bc_score = bool(detected) + bool(backup_cron)
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(c) v3.3 - Business Continuity",
+        "Pass" if bc_score >= 2 else "Warning",
+        f"NIS2 Article 21.2(c) Backup management ({bc_score}/2)",
+        severity="High",
+        details=(
+            f"Backup tools: {detected}, scheduled jobs: {len(backup_cron)}"
+        ),
+        remediation=(
+            "Schedule backups via cron; test restore procedures quarterly"
+        ),
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(c)", "NIST": "CP-9",
+        },
+    ))
+
+    # 21.2(d) - Supply chain security
+    apt_keyring = (
+        _v33_directory_exists("/etc/apt/trusted.gpg.d") or
+        _v33_directory_exists("/etc/apt/keyrings")
+    )
+    rpm_gpgcheck = "gpgcheck=1" in (
+        _v33_read_file_safe("/etc/yum.conf") or
+        _v33_read_file_safe("/etc/dnf/dnf.conf")
+    )
+    pacman_keyring = _v33_directory_exists("/etc/pacman.d/gnupg")
+    sig_indicators = sum([apt_keyring, rpm_gpgcheck, pacman_keyring])
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(d) v3.3 - Supply Chain",
+        "Pass" if sig_indicators >= 1 else "Fail",
+        f"NIS2 Article 21.2(d) Supply chain controls ({sig_indicators})",
+        severity="High",
+        details=(
+            f"apt keyring: {apt_keyring}, rpm gpgcheck: {rpm_gpgcheck}, "
+            f"pacman keyring: {pacman_keyring}"
+        ),
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(d)", "NIST": "SR-3",
+        },
+    ))
+
+    # 21.2(e) - Security in network and information systems acquisition
+    update_active = (
+        _v33_systemd_active("unattended-upgrades.service") == "active" or
+        _v33_systemd_active("dnf-automatic-install.timer") == "active"
+    )
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(e) v3.3 - Acquisition Security",
+        "Pass" if update_active else "Warning",
+        f"NIS2 Article 21.2(e) Automated patch management",
+        severity="High",
+        details=f"Update automation: {update_active}",
+        remediation=(
+            "apt-get install -y unattended-upgrades; "
+            "dpkg-reconfigure unattended-upgrades"
+        ),
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(e)", "NIST": "SI-2",
+        },
+    ))
+
+    # 21.2(f) - Policies and procedures to assess effectiveness
+    scanners = ["lynis", "oscap", "trivy", "nuclei"]
+    detected_s = [s for s in scanners if _v33_command_available(s)]
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(f) v3.3 - Effectiveness Assessment",
+        "Pass" if detected_s else "Warning",
+        f"NIS2 Article 21.2(f) Effectiveness assessment tools ({len(detected_s)})",
+        severity="Medium",
+        details=f"Detected: {detected_s}",
+        remediation=remediation_for("lynis"),
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(f)", "NIST": "CA-2",
+        },
+    ))
+
+    # 21.2(g) - Basic cyber hygiene practices and cybersecurity training
+    pam_dir = "/etc/pam.d"
+    pam_files_count = (
+        len(_v33_list_directory(pam_dir))
+        if _v33_directory_exists(pam_dir) else 0
+    )
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(g) v3.3 - Cyber Hygiene",
+        "Pass" if pam_files_count >= 10 else "Warning",
+        f"NIS2 Article 21.2(g) PAM hygiene modules ({pam_files_count})",
+        severity="Medium",
+        details=f"PAM files: {pam_files_count}",
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(g)", "NIST": "AT-2",
+        },
+    ))
+
+    # 21.2(h) - Policies and procedures regarding the use of cryptography
+    fips_active = False
+    if _v33_file_exists("/proc/sys/crypto/fips_enabled"):
+        fips_active = _v33_read_file_safe(
+            "/proc/sys/crypto/fips_enabled"
+        ).strip() == "1"
+    crypto_policy = ""
+    if _v33_file_exists("/etc/crypto-policies/config"):
+        crypto_policy = _v33_read_file_safe("/etc/crypto-policies/config").strip()
+    crypto_ok = fips_active or crypto_policy in ("DEFAULT", "FUTURE", "FIPS")
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(h) v3.3 - Cryptography",
+        "Pass" if crypto_ok else "Warning",
+        f"NIS2 Article 21.2(h) Cryptography policy",
+        severity="High",
+        details=(
+            f"Kernel FIPS: {fips_active}, crypto-policies: {crypto_policy or 'unset'}"
+        ),
+        remediation=(
+            "Enable system crypto policy: update-crypto-policies --set FUTURE"
+        ),
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(h)", "NIST": "SC-13",
+        },
+    ))
+
+    # 21.2(i) - Human resources security, access control policies, asset mgmt
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+    permit_root_match = re.search(r"^\s*PermitRootLogin\s+(\S+)", sshd, re.MULTILINE)
+    permit_root = permit_root_match.group(1) if permit_root_match else "yes"
+    root_secure = permit_root.lower() in ("no", "prohibit-password",
+                                            "without-password")
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(i) v3.3 - Access Control",
+        "Pass" if root_secure else "Fail",
+        f"NIS2 Article 21.2(i) Access control (SSH root: {permit_root})",
+        severity="High",
+        details=f"PermitRootLogin = {permit_root}",
+        remediation="In /etc/ssh/sshd_config: PermitRootLogin no",
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(i)", "NIST": "AC-6",
+        },
+    ))
+
+    # 21.2(j) - Use of multi-factor authentication or continuous authentication
+    pam_files = ["/etc/pam.d/sshd", "/etc/pam.d/system-auth",
+                 "/etc/pam.d/common-auth"]
+    mfa_modules = ["pam_google_authenticator", "pam_yubico", "pam_oath",
+                    "pam_duo", "pam_u2f", "pam_pkcs11"]
+    detected_mfa = set()
+    for pf in pam_files:
+        c = _v33_read_file_safe(pf)
+        for mod in mfa_modules:
+            if mod + ".so" in c:
+                detected_mfa.add(mod.replace("pam_", ""))
+    results.append(_v33_enisa_result(
+        "ENISA NIS2 21.2(j) v3.3 - MFA",
+        "Pass" if detected_mfa else "Warning",
+        f"NIS2 Article 21.2(j) MFA modules ({len(detected_mfa)})",
+        severity="High",
+        details=f"Detected: {sorted(detected_mfa) or 'none'}",
+        remediation=remediation_for("pam-google-authenticator"),
+        cross_references={
+            "ENISA-NIS2": "Art.21.2(j)", "NIST": "IA-2(1)",
+        },
+    ))
+
+
+def _check_enisa_v33_dora(results, shared_data, os_info):
+    """DORA - Digital Operational Resilience Act (financial sector)."""
+
+    # DORA Article 6 - ICT risk management framework
+    auditd_active = _v33_systemd_active("auditd.service") == "active"
+    fim_present = (
+        _v33_file_exists("/var/lib/aide/aide.db") or
+        _v33_file_exists("/var/lib/aide/aide.db.gz")
+    )
+    risk_layers = sum([auditd_active, fim_present])
+    results.append(_v33_enisa_result(
+        "ENISA DORA Art.6 v3.3 - ICT Risk Management",
+        "Pass" if risk_layers >= 2 else "Warning",
+        f"DORA Article 6 ICT risk layers ({risk_layers}/2)",
+        severity="High",
+        details=f"auditd: {auditd_active}, FIM: {fim_present}",
+        cross_references={
+            "ENISA-DORA": "Art.6", "NIST": "RA-3",
+        },
+    ))
+
+    # DORA Article 9 - Identification (asset visibility)
+    asset_tools = {
+        "osquery": _v33_command_available("osqueryi"),
+        "package_mgr": (
+            _v33_command_available("dpkg") or
+            _v33_command_available("rpm") or
+            _v33_command_available("pacman")
+        ),
+    }
+    detected = sum(1 for v in asset_tools.values() if v)
+    results.append(_v33_enisa_result(
+        "ENISA DORA Art.9 v3.3 - Identification",
+        "Pass" if detected >= 1 else "Fail",
+        f"DORA Article 9 Asset identification capability",
+        severity="High",
+        details=f"Asset visibility tools: {detected}",
+        cross_references={
+            "ENISA-DORA": "Art.9", "NIST": "CM-8",
+        },
+    ))
+
+    # DORA Article 10 - Protection and prevention
+    prevention_layers = {
+        "firewall": (
+            _v33_systemd_active("ufw.service") == "active" or
+            _v33_systemd_active("firewalld.service") == "active" or
+            _v33_systemd_active("nftables.service") == "active"
+        ),
+        "antivirus": (
+            _v33_command_available("clamscan") or
+            _v33_file_exists("/opt/microsoft/mdatp/sbin/wdavdaemon") or
+            _v33_file_exists("/opt/CrowdStrike/falconctl") or
+            _v33_command_available("rkhunter")
+        ),
+        "MAC": (
+            _v33_systemd_active("apparmor.service") == "active" or
+            _v33_file_exists("/sys/fs/selinux/enforce")
+        ),
+    }
+    detected_p = sum(1 for v in prevention_layers.values() if v)
+    results.append(_v33_enisa_result(
+        "ENISA DORA Art.10 v3.3 - Protection",
+        "Pass" if detected_p >= 2 else "Warning",
+        f"DORA Article 10 Protection layers ({detected_p}/3)",
+        severity="High",
+        details=(
+            f"Firewall: {prevention_layers['firewall']}, "
+            f"AV: {prevention_layers['antivirus']}, "
+            f"MAC: {prevention_layers['MAC']}"
+        ),
+        cross_references={
+            "ENISA-DORA": "Art.10", "NIST": "SC-7",
+        },
+    ))
+
+    # DORA Article 11 - Detection
+    detection_layers = {
+        "ids": (
+            _v33_command_available("suricata") or
+            _v33_command_available("snort") or
+            _v33_command_available("zeek")
+        ),
+        "edr": (
+            _v33_command_available("falco") or
+            _v33_file_exists("/opt/CrowdStrike/falconctl") or
+            _v33_file_exists("/opt/sentinelone/bin/sentinelctl")
+        ),
+        "auditd": _v33_systemd_active("auditd.service") == "active",
+    }
+    detected_d = sum(1 for v in detection_layers.values() if v)
+    results.append(_v33_enisa_result(
+        "ENISA DORA Art.11 v3.3 - Detection",
+        "Pass" if detected_d >= 1 else "Fail",
+        f"DORA Article 11 Detection layers ({detected_d}/3)",
+        severity="High",
+        details=f"Detection: {[k for k, v in detection_layers.items() if v]}",
+        cross_references={
+            "ENISA-DORA": "Art.11", "NIST": "DE.CM",
+        },
+    ))
+
+    # DORA Article 12 - Response and recovery
+    backup_tools = {
+        "rsync": _v33_command_available("rsync"),
+        "borg": _v33_command_available("borg"),
+        "restic": _v33_command_available("restic"),
+    }
+    detected_b = [k for k, v in backup_tools.items() if v]
+    results.append(_v33_enisa_result(
+        "ENISA DORA Art.12 v3.3 - Response and Recovery",
+        "Pass" if detected_b else "Fail",
+        f"DORA Article 12 Backup/recovery tools ({len(detected_b)})",
+        severity="High",
+        details=f"Detected: {detected_b}",
+        cross_references={
+            "ENISA-DORA": "Art.12", "NIST": "CP-9",
+        },
+    ))
+
+
+def _check_enisa_v33_threat_landscape(results, shared_data, os_info):
+    """ENISA Threat Landscape - top threats technical indicators."""
+
+    # Ransomware: backup integrity
+    backup_present = (
+        _v33_command_available("borg") or
+        _v33_command_available("restic") or
+        _v33_command_available("duplicity")
+    )
+    immutable_indicators = (
+        _v33_command_available("zfs") or
+        _v33_command_available("btrfs")
+    )
+    ransom_def = backup_present and immutable_indicators
+    results.append(_v33_enisa_result(
+        "ENISA Threat v3.3 - Ransomware",
+        "Pass" if ransom_def else "Warning",
+        f"Top threat: ransomware mitigations",
+        severity="Critical",
+        details=(
+            f"Backup tool: {backup_present}, snapshot capability: {immutable_indicators}"
+        ),
+        remediation=(
+            "Use borg/restic with off-host backup storage. "
+            "Use ZFS/Btrfs snapshots for instant recovery."
+        ),
+        cross_references={
+            "ENISA-Threat": "Ransomware", "NIST": "CP-9",
+        },
+    ))
+
+    # Malware: AV/EDR
+    av_detected = (
+        _v33_command_available("clamscan") or
+        _v33_file_exists("/opt/CrowdStrike/falconctl") or
+        _v33_file_exists("/opt/microsoft/mdatp/sbin/wdavdaemon") or
+        _v33_command_available("falco")
+    )
+    results.append(_v33_enisa_result(
+        "ENISA Threat v3.3 - Malware",
+        "Pass" if av_detected else "Fail",
+        f"Top threat: malware detection",
+        severity="High",
+        details=f"AV/EDR detected: {av_detected}",
+        cross_references={
+            "ENISA-Threat": "Malware", "NIST": "SI-3",
+        },
+    ))
+
+    # Social engineering: MFA
+    pam_files = ["/etc/pam.d/sshd", "/etc/pam.d/system-auth",
+                 "/etc/pam.d/common-auth"]
+    mfa_modules = ["pam_google_authenticator", "pam_yubico", "pam_oath",
+                    "pam_duo", "pam_u2f"]
+    has_mfa = False
+    for pf in pam_files:
+        c = _v33_read_file_safe(pf)
+        if any(mod + ".so" in c for mod in mfa_modules):
+            has_mfa = True
+            break
+    results.append(_v33_enisa_result(
+        "ENISA Threat v3.3 - Social Engineering",
+        "Pass" if has_mfa else "Warning",
+        f"Top threat: phishing/social engineering (MFA)",
+        severity="High",
+        details=f"MFA configured: {has_mfa}",
+        cross_references={
+            "ENISA-Threat": "Social Engineering", "NIST": "IA-2(1)",
+        },
+    ))
+
+    # Threats against data: encryption
+    rc, out, _ = _v33_run_command(["lsblk", "-o", "TYPE", "-n"], timeout=3.0)
+    luks = rc == 0 and "crypt" in out.lower()
+    results.append(_v33_enisa_result(
+        "ENISA Threat v3.3 - Data Threats",
+        "Pass" if luks else "Warning",
+        f"Top threat: data theft (LUKS at-rest encryption): {luks}",
+        severity="High",
+        details=f"LUKS volumes: {luks}",
+        cross_references={
+            "ENISA-Threat": "Data Threats", "NIST": "SC-28",
+        },
+    ))
+
+    # DDoS: rate limiting / fail2ban
+    f2b_active = _v33_systemd_active("fail2ban.service") == "active"
+    nft_with_limits = False
+    rc, out, _ = _v33_run_command(["nft", "list", "ruleset"], timeout=3.0)
+    if rc == 0 and out and "limit" in out.lower():
+        nft_with_limits = True
+    ddos_def = f2b_active or nft_with_limits
+    results.append(_v33_enisa_result(
+        "ENISA Threat v3.3 - DDoS",
+        "Pass" if ddos_def else "Info",
+        f"Top threat: DDoS rate-limiting indicators",
+        severity="Medium",
+        details=f"fail2ban: {f2b_active}, nftables limits: {nft_with_limits}",
+        remediation="Install fail2ban or add nftables rate-limit rules",
+        cross_references={
+            "ENISA-Threat": "DDoS", "NIST": "SC-5",
+        },
+    ))
+
+    # Disinformation/AI: integrity tooling
+    fim_present = (
+        _v33_file_exists("/var/lib/aide/aide.db") or
+        _v33_file_exists("/var/lib/aide/aide.db.gz")
+    )
+    results.append(_v33_enisa_result(
+        "ENISA Threat v3.3 - Disinformation/Integrity",
+        "Pass" if fim_present else "Warning",
+        f"Top threat: information integrity (FIM)",
+        severity="Medium",
+        details=f"AIDE FIM database: {fim_present}",
+        cross_references={
+            "ENISA-Threat": "Disinformation", "NIST": "SI-7",
+        },
+    ))
+
+    # Supply chain attacks
+    apt_keyring = (
+        _v33_directory_exists("/etc/apt/trusted.gpg.d") or
+        _v33_directory_exists("/etc/apt/keyrings")
+    )
+    rpm_check = "gpgcheck=1" in (
+        _v33_read_file_safe("/etc/yum.conf") or
+        _v33_read_file_safe("/etc/dnf/dnf.conf")
+    )
+    sc_ok = apt_keyring or rpm_check
+    results.append(_v33_enisa_result(
+        "ENISA Threat v3.3 - Supply Chain",
+        "Pass" if sc_ok else "Fail",
+        f"Top threat: supply chain (signature verification)",
+        severity="High",
+        details=f"apt keyring: {apt_keyring}, rpm gpgcheck: {rpm_check}",
+        cross_references={
+            "ENISA-Threat": "Supply Chain", "NIST": "SR-3",
+        },
+    ))
+
+
+def _check_enisa_v33_eu_csa(results, shared_data, os_info):
+    """EU Cybersecurity Act Article 51 - certification baseline."""
+
+    # Basic - basic level of confidence
+    fw_active = (
+        _v33_systemd_active("ufw.service") == "active" or
+        _v33_systemd_active("firewalld.service") == "active" or
+        _v33_systemd_active("nftables.service") == "active"
+    )
+    update_active = (
+        _v33_systemd_active("unattended-upgrades.service") == "active" or
+        _v33_systemd_active("dnf-automatic-install.timer") == "active"
+    )
+    basic_layers = sum([fw_active, update_active])
+    results.append(_v33_enisa_result(
+        "ENISA EU-CSA v3.3 - Basic",
+        "Pass" if basic_layers >= 2 else "Warning",
+        f"EU-CSA Basic ({basic_layers}/2)",
+        severity="Medium",
+        details=f"firewall: {fw_active}, auto-update: {update_active}",
+        cross_references={
+            "ENISA-EU-CSA": "Art.51 Basic", "NIST": "SI-2",
+        },
+    ))
+
+    # Substantial - protection against known cybersecurity risks
+    fim = (
+        _v33_file_exists("/var/lib/aide/aide.db") or
+        _v33_file_exists("/var/lib/aide/aide.db.gz")
+    )
+    audit_active = _v33_systemd_active("auditd.service") == "active"
+    sub_layers = sum([fim, audit_active])
+    results.append(_v33_enisa_result(
+        "ENISA EU-CSA v3.3 - Substantial",
+        "Pass" if sub_layers >= 1 else "Warning",
+        f"EU-CSA Substantial ({sub_layers}/2)",
+        severity="High",
+        details=f"FIM: {fim}, auditd: {audit_active}",
+        cross_references={
+            "ENISA-EU-CSA": "Art.51 Substantial", "NIST": "SI-7",
+        },
+    ))
+
+    # High - protection against state-of-the-art cyberattacks
+    fips_active = False
+    if _v33_file_exists("/proc/sys/crypto/fips_enabled"):
+        fips_active = _v33_read_file_safe(
+            "/proc/sys/crypto/fips_enabled"
+        ).strip() == "1"
+    mac_active = _v33_systemd_active("apparmor.service") == "active"
+    if not mac_active and _v33_file_exists("/sys/fs/selinux/enforce"):
+        try:
+            with open("/sys/fs/selinux/enforce") as f:
+                mac_active = f.read().strip() == "1"
+        except OSError:
+            pass
+    high_layers = sum([fips_active, mac_active])
+    results.append(_v33_enisa_result(
+        "ENISA EU-CSA v3.3 - High",
+        "Pass" if high_layers >= 1 else "Info",
+        f"EU-CSA High ({high_layers}/2)",
+        severity="High",
+        details=f"FIPS: {fips_active}, MAC enforcing: {mac_active}",
+        cross_references={
+            "ENISA-EU-CSA": "Art.51 High", "NIST": "SC-13",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_enisa_v33 = run_checks
+
+
+def run_checks(shared_data):
+    """Execute the v3.3 expanded ENISA module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_enisa_v33(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_enisa_v33_nis2_article21(results, shared_data, os_info)
+        _check_enisa_v33_dora(results, shared_data, os_info)
+        _check_enisa_v33_threat_landscape(results, shared_data, os_info)
+        _check_enisa_v33_eu_csa(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="ENISA - Error",
+            status="Error",
+            message=f"ENISA v3.3 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
+
+
+# ============================================================================
+# v3.5 EXPANSION - ENISA NIS2 + Cyber Resilience Act + Modern Guidance
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across ENISA / EU regulatory framework areas:
+#     - NIS2 Directive (Directive (EU) 2022/2555) Article 21 measures
+#     - EU Cyber Resilience Act (CRA) Annex I requirements
+#     - ENISA Threat Landscape recommendations (multi-year)
+#     - DORA (Digital Operational Resilience Act) for financial entities
+#     - eIDAS 2.0 cryptographic alignment
+#     - ENISA Cloud Security Recommendations
+#     - ENISA 5G Security indicators
+# ============================================================================
+
+# v3.5 helpers
+from shared_components.module_helpers import (
+    read_file_safe as _v35_read_file_safe,
+    file_exists as _v35_file_exists,
+    directory_exists as _v35_directory_exists,
+    command_available as _v35_command_available,
+    run_command as _v35_run_command,
+    read_sysctl as _v35_read_sysctl,
+    systemd_active as _v35_systemd_active,
+    list_directory as _v35_list_directory,
+)
+
+
+def _v35_enisa_result(category, status, message, severity="Medium",
+                    details="", remediation="", cross_references=None):
+    """Build AuditResult for ENISA v3.5 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_enisa_v35_nis2_article21(results, shared_data, os_info):
+    """NIS2 Directive Article 21 - Cybersecurity risk-management measures."""
+    cat = "ENISA v3.5 - NIS2 Art 21"
+
+    # Art 21(2)(a) Risk analysis policies (technical: vuln scanning)
+    risk_tools = sum(1 for t in ["lynis", "oscap", "trivy", "nuclei"]
+                     if _v35_command_available(t))
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 21(2)(a) Risk Analysis",
+        "Pass" if risk_tools >= 2 else "Warning",
+        f"NIS2 Art 21(2)(a) Risk analysis tools: {risk_tools}/4",
+        severity="High",
+        details=f"Vuln/risk tools available: {risk_tools}",
+        remediation=remediation_for("lynis"),
+        cross_references={
+            "ENISA": "NIS2 Art 21(2)(a)",
+            "NIST": "RA-3, RA-5",
+        },
+    ))
+
+    # Art 21(2)(b) Incident handling (auditd + IR tooling)
+    ir_layers = sum([
+        _v35_systemd_active("auditd.service") == "active",
+        _v35_command_available("tcpdump"),
+        _v35_command_available("lsof"),
+        _v35_command_available("strace"),
+        _v35_command_available("journalctl"),
+    ])
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 21(2)(b) Incident Handling",
+        "Pass" if ir_layers >= 4 else "Warning",
+        f"NIS2 Art 21(2)(b) IR tooling layers: {ir_layers}/5",
+        severity="High",
+        details=f"IR tools active: {ir_layers}",
+        remediation=(
+            "apt-get install -y auditd tcpdump lsof strace systemd"
+        ),
+        cross_references={
+            "ENISA": "NIS2 Art 21(2)(b)",
+            "NIST": "IR-4, IR-5",
+        },
+    ))
+
+    # Art 21(2)(c) Business continuity (backup + recovery)
+    bc_layers = sum([
+        any(_v35_command_available(t) for t in ["borg", "restic", "duplicity"]),
+        any(_v35_command_available(t) for t in ["zfs", "btrfs", "snapper"]),
+        _v35_command_available("ansible") or _v35_command_available("puppet"),
+    ])
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 21(2)(c) Business Continuity",
+        "Pass" if bc_layers >= 2 else "Warning",
+        f"NIS2 Art 21(2)(c) BC layers: {bc_layers}/3",
+        severity="High",
+        details=f"BC tooling layers: {bc_layers}",
+        remediation=remediation_for("borg"),
+        cross_references={
+            "ENISA": "NIS2 Art 21(2)(c)",
+            "NIST": "CP-9, CP-10",
+        },
+    ))
+
+    # Art 21(2)(d) Supply chain security (SBOM + signing)
+    supply_chain_layers = sum([
+        _v35_command_available("syft") or _v35_command_available("trivy"),
+        _v35_command_available("cosign") or _v35_command_available("gpg"),
+        _v35_directory_exists("/etc/apt/keyrings") or
+        _v35_directory_exists("/etc/apt/trusted.gpg.d"),
+    ])
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 21(2)(d) Supply Chain Security",
+        "Pass" if supply_chain_layers >= 2 else "Warning",
+        f"NIS2 Art 21(2)(d) Supply chain layers: {supply_chain_layers}/3",
+        severity="High",
+        details=f"Supply chain tooling: {supply_chain_layers}",
+        remediation=(
+            f"{remediation_for('syft')}\n"
+            "Plus install cosign for artifact signing."
+        ),
+        cross_references={
+            "ENISA": "NIS2 Art 21(2)(d)",
+            "NIST": "SR-3, SR-4, SR-11",
+        },
+    ))
+
+    # Art 21(2)(e) Vulnerability handling and disclosure (auto-patch + tracker)
+    auto_patch_active = (
+        _v35_systemd_active("unattended-upgrades.service") == "active" or
+        _v35_systemd_active("dnf-automatic-install.timer") == "active" or
+        _v35_systemd_active("dnf-automatic.timer") == "active"
+    )
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 21(2)(e) Vuln Handling",
+        "Pass" if auto_patch_active else "Warning",
+        f"NIS2 Art 21(2)(e) Auto-patch active: {auto_patch_active}",
+        severity="High",
+        details=f"Auto-patch service: {auto_patch_active}",
+        remediation=(
+            remediation_for("unattended-upgrades")
+            if (os_info and os_info.is_debian_family())
+            else remediation_for("dnf-automatic")
+        ),
+        cross_references={
+            "ENISA": "NIS2 Art 21(2)(e)",
+            "NIST": "SI-2",
+        },
+    ))
+
+    # Art 21(2)(g) Cyber hygiene & training (technical surrogate: CIS-aligned baseline)
+    cis_baseline_layers = sum([
+        _v35_command_available("lynis"),
+        _v35_command_available("oscap"),
+        _v35_systemd_active("auditd.service") == "active",
+        _v35_file_exists("/var/lib/aide/aide.db") or
+        _v35_file_exists("/var/lib/aide/aide.db.gz"),
+    ])
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 21(2)(g) Cyber Hygiene",
+        "Pass" if cis_baseline_layers >= 3 else "Info",
+        f"NIS2 Art 21(2)(g) Hardening evidence: {cis_baseline_layers}/4",
+        severity="Medium",
+        details=f"Hardening tools: {cis_baseline_layers}",
+        cross_references={
+            "ENISA": "NIS2 Art 21(2)(g)",
+            "CIS": "1.0",
+        },
+    ))
+
+    # Art 21(2)(h) Cryptography use
+    fips_aligned = (
+        _v35_read_sysctl("crypto.fips_enabled") == "1" or
+        _v35_read_file_safe("/etc/crypto-policies/state/current").strip().upper()
+        in ("FIPS", "FUTURE")
+    )
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 21(2)(h) Cryptography",
+        "Pass" if fips_aligned else "Warning",
+        f"NIS2 Art 21(2)(h) FIPS-aligned cryptography: {fips_aligned}",
+        severity="High",
+        details=f"FIPS / FUTURE crypto policy: {fips_aligned}",
+        remediation=(
+            "RHEL: fips-mode-setup --enable\n"
+            "Or: update-crypto-policies --set FUTURE\n"
+            "Ubuntu Pro: pro enable fips"
+        ),
+        cross_references={
+            "ENISA": "NIS2 Art 21(2)(h)",
+            "FIPS": "140-3", "eIDAS": "2.0",
+        },
+    ))
+
+    # Art 21(2)(i) HR security (access control on workforce changes)
+    pam_lockout = False
+    pam_files_content = ""
+    for pf in ["/etc/pam.d/system-auth", "/etc/pam.d/password-auth",
+                "/etc/pam.d/common-auth"]:
+        pam_files_content += "\n" + _v35_read_file_safe(pf)
+    if "pam_faillock" in pam_files_content or "pam_tally2" in pam_files_content:
+        pam_lockout = True
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 21(2)(i) HR Security",
+        "Pass" if pam_lockout else "Warning",
+        f"NIS2 Art 21(2)(i) PAM account lockout: {pam_lockout}",
+        severity="Medium",
+        details=f"PAM lockout module: {pam_lockout}",
+        cross_references={
+            "ENISA": "NIS2 Art 21(2)(i)",
+            "NIST": "AC-7",
+        },
+    ))
+
+    # Art 21(2)(j) MFA / continuous authentication
+    sshd = _v35_read_file_safe("/etc/ssh/sshd_config")
+    sshd_d = ""
+    if _v35_directory_exists("/etc/ssh/sshd_config.d"):
+        for f in _v35_list_directory("/etc/ssh/sshd_config.d"):
+            if f.endswith(".conf"):
+                sshd_d += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/ssh/sshd_config.d", f)
+                )
+    full_sshd = sshd + "\n" + sshd_d
+    mfa_method = bool(re.search(
+        r"^\s*AuthenticationMethods\s+\S+,",
+        full_sshd, re.MULTILINE,
+    ))
+    pam_mfa = any(mod in pam_files_content for mod in [
+        "pam_google_authenticator", "pam_yubico", "pam_oath",
+        "pam_u2f", "pam_duo",
+    ])
+    mfa_present = mfa_method or pam_mfa
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 21(2)(j) MFA",
+        "Pass" if mfa_present else "Warning",
+        f"NIS2 Art 21(2)(j) MFA evidence: {mfa_present}",
+        severity="High",
+        details=(
+            f"SSH AuthMethods MFA: {mfa_method}, PAM MFA: {pam_mfa}"
+        ),
+        remediation=remediation_for("pam-google-authenticator"),
+        cross_references={
+            "ENISA": "NIS2 Art 21(2)(j)",
+            "NIST": "IA-2(1), IA-2(2)",
+        },
+    ))
+
+
+def _check_enisa_v35_cra_annex1(results, shared_data, os_info):
+    """EU Cyber Resilience Act (CRA) Annex I essential cybersecurity reqs."""
+    cat = "ENISA v3.5 - CRA Annex I"
+
+    # Annex I Section 1: appropriate level of cybersecurity (FIPS-aligned)
+    fips = _v35_read_sysctl("crypto.fips_enabled") == "1"
+    crypto_strong = fips or _v35_read_file_safe(
+        "/etc/crypto-policies/state/current"
+    ).strip().upper() in ("FIPS", "FUTURE")
+    results.append(_v35_enisa_result(
+        f"{cat} - Sec 1 Cybersecurity Level",
+        "Pass" if crypto_strong else "Info",
+        f"CRA Annex I Sec 1 cryptographic baseline: {crypto_strong}",
+        severity="Medium",
+        details=f"FIPS/FUTURE crypto: {crypto_strong}",
+        cross_references={
+            "ENISA": "CRA Annex I.1",
+            "FIPS": "140-3",
+        },
+    ))
+
+    # Annex I Section 2(a): No known exploitable vulnerabilities
+    auto_patch = (
+        _v35_systemd_active("unattended-upgrades.service") == "active" or
+        _v35_systemd_active("dnf-automatic-install.timer") == "active" or
+        _v35_systemd_active("dnf-automatic.timer") == "active"
+    )
+    results.append(_v35_enisa_result(
+        f"{cat} - Sec 2(a) No Known Vulns",
+        "Pass" if auto_patch else "Warning",
+        f"CRA Annex I Sec 2(a) Auto-patch: {auto_patch}",
+        severity="High",
+        details=f"Auto-patch active: {auto_patch}",
+        cross_references={
+            "ENISA": "CRA Annex I.2(a)",
+            "NIST": "SI-2",
+        },
+    ))
+
+    # Annex I Section 2(b): Security by default
+    fw_active = (
+        _v35_systemd_active("ufw.service") == "active" or
+        (_v35_run_command(["firewall-cmd", "--state"], timeout=3.0)[0] == 0 and
+         "running" in (_v35_run_command(
+            ["firewall-cmd", "--state"], timeout=3.0,
+        )[1] or ""))
+    )
+    results.append(_v35_enisa_result(
+        f"{cat} - Sec 2(b) Security by Default",
+        "Pass" if fw_active else "Warning",
+        f"CRA Annex I Sec 2(b) Default firewall active: {fw_active}",
+        severity="High",
+        details=f"firewall active: {fw_active}",
+        cross_references={
+            "ENISA": "CRA Annex I.2(b)",
+            "NIST": "SC-7",
+        },
+    ))
+
+    # Annex I Section 2(c): Protection from unauthorized access
+    auth_layers = sum([
+        bool(re.search(r"^\s*PermitRootLogin\s+no",
+                        _v35_read_file_safe("/etc/ssh/sshd_config"),
+                        re.MULTILINE)),
+        bool(re.search(r"^\s*PasswordAuthentication\s+no",
+                        _v35_read_file_safe("/etc/ssh/sshd_config"),
+                        re.MULTILINE)),
+        _v35_command_available("sudo"),
+    ])
+    results.append(_v35_enisa_result(
+        f"{cat} - Sec 2(c) Access Protection",
+        "Pass" if auth_layers >= 2 else "Warning",
+        f"CRA Annex I Sec 2(c) Auth hardening layers: {auth_layers}/3",
+        severity="High",
+        details=f"Hardening layers: {auth_layers}",
+        cross_references={
+            "ENISA": "CRA Annex I.2(c)",
+            "NIST": "AC-2, AC-3",
+        },
+    ))
+
+    # Annex I Section 2(d): Protection of data integrity
+    fim_present = (
+        _v35_file_exists("/var/lib/aide/aide.db") or
+        _v35_file_exists("/var/lib/aide/aide.db.gz") or
+        _v35_file_exists("/var/lib/tripwire/tw.db")
+    )
+    results.append(_v35_enisa_result(
+        f"{cat} - Sec 2(d) Data Integrity",
+        "Pass" if fim_present else "Warning",
+        f"CRA Annex I Sec 2(d) FIM database present: {fim_present}",
+        severity="High",
+        details=f"AIDE/Tripwire DB: {fim_present}",
+        remediation=remediation_for("aide"),
+        cross_references={
+            "ENISA": "CRA Annex I.2(d)",
+            "NIST": "SI-7", "PCI-DSS": "11.5.2",
+        },
+    ))
+
+    # Annex I Section 2(e): Limit data processing (least privilege)
+    selinux_enforcing = (
+        _v35_command_available("getenforce") and
+        ((_v35_run_command(["getenforce"], timeout=2.0)[1] or "").strip()
+         == "Enforcing")
+    )
+    apparmor_active = _v35_command_available("aa-status")
+    mac_active = selinux_enforcing or apparmor_active
+    results.append(_v35_enisa_result(
+        f"{cat} - Sec 2(e) Limited Data Processing",
+        "Pass" if mac_active else "Info",
+        f"CRA Annex I Sec 2(e) MAC active: {mac_active}",
+        severity="Medium",
+        details=(
+            f"SELinux: {selinux_enforcing}, AppArmor: {apparmor_active}"
+        ),
+        cross_references={
+            "ENISA": "CRA Annex I.2(e)",
+            "NIST": "AC-3, AC-6",
+        },
+    ))
+
+    # Annex I Section 2(f): Minimize attack surface
+    rc, out, _ = _v35_run_command(["ss", "-tlnp"], timeout=5.0)
+    listening_external = 0
+    if rc == 0 and out:
+        for line in out.splitlines()[1:]:
+            parts = line.split()
+            if len(parts) < 4 or parts[0] != "LISTEN":
+                continue
+            local = parts[3]
+            if not (local.startswith("127.") or local.startswith("[::1]") or
+                    local.startswith("[::ffff:127")):
+                listening_external += 1
+    results.append(_v35_enisa_result(
+        f"{cat} - Sec 2(f) Minimal Attack Surface",
+        "Pass" if listening_external <= 5 else "Warning",
+        f"CRA Annex I Sec 2(f) External listeners: {listening_external}",
+        severity="Medium",
+        details=f"Externally-bound TCP listeners: {listening_external}",
+        cross_references={
+            "ENISA": "CRA Annex I.2(f)",
+            "NIST": "CM-7",
+        },
+    ))
+
+    # Annex I Section 2(j): Secure default configurations
+    umask_match = re.search(
+        r"^\s*UMASK\s+(\d+)",
+        _v35_read_file_safe("/etc/login.defs"),
+        re.MULTILINE,
+    )
+    umask = umask_match.group(1) if umask_match else "022"
+    secure_default = umask in ("027", "077")
+    results.append(_v35_enisa_result(
+        f"{cat} - Sec 2(j) Secure Defaults",
+        "Pass" if secure_default else "Info",
+        f"CRA Annex I Sec 2(j) Secure default UMASK: {umask}",
+        severity="Medium",
+        details=f"UMASK = {umask}",
+        cross_references={
+            "ENISA": "CRA Annex I.2(j)",
+            "NIST": "CM-6",
+        },
+    ))
+
+
+def _check_enisa_v35_dora_financial(results, shared_data, os_info):
+    """DORA (Digital Operational Resilience Act) for financial entities."""
+    cat = "ENISA v3.5 - DORA"
+
+    # DORA Article 7 - ICT risk management
+    risk_mgmt_layers = sum([
+        _v35_command_available("lynis"),
+        _v35_command_available("oscap"),
+        _v35_systemd_active("auditd.service") == "active",
+        _v35_file_exists("/var/lib/aide/aide.db") or
+        _v35_file_exists("/var/lib/aide/aide.db.gz"),
+    ])
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 7 ICT Risk Mgmt",
+        "Pass" if risk_mgmt_layers >= 3 else "Warning",
+        f"DORA Art 7 ICT risk management layers: {risk_mgmt_layers}/4",
+        severity="High",
+        details=f"Layers: {risk_mgmt_layers}",
+        cross_references={
+            "ENISA": "DORA Art 7",
+            "NIST": "RA-3, RA-5, CA-7",
+        },
+    ))
+
+    # DORA Article 17 - ICT-related incident reporting
+    mail_capable = (
+        _v35_command_available("mail") or
+        _v35_command_available("mailx") or
+        _v35_systemd_active("postfix.service") == "active"
+    )
+    results.append(_v35_enisa_result(
+        f"{cat} - Art 17 Incident Reporting",
+        "Pass" if mail_capable else "Warning",
+        f"DORA Art 17 Incident reporting capability: {mail_capable}",
+        severity="High",
+        details=f"Mail tooling: {mail_capable}",
+        cross_references={
+            "ENISA": "DORA Art 17",
+            "NIST": "IR-6",
+        },
+    ))
+
+
+def _check_enisa_v35_cloud_security(results, shared_data, os_info):
+    """ENISA Cloud Security Recommendations."""
+    cat = "ENISA v3.5 - Cloud Security"
+
+    # ENISA Cloud Computing Risk Assessment surrogates
+    cloud_security_layers = {
+        "FIPS-aligned crypto": (
+            _v35_read_sysctl("crypto.fips_enabled") == "1" or
+            _v35_read_file_safe(
+                "/etc/crypto-policies/state/current"
+            ).strip().upper() in ("FIPS", "FUTURE")
+        ),
+        "LUKS encryption at rest": False,
+        "MAC active (SELinux/AppArmor)": False,
+        "Centralized logging": False,
+        "Auto-patching": (
+            _v35_systemd_active("unattended-upgrades.service") == "active" or
+            _v35_systemd_active("dnf-automatic-install.timer") == "active" or
+            _v35_systemd_active("dnf-automatic.timer") == "active"
+        ),
+    }
+    rc, out, _ = _v35_run_command(["lsblk", "-o", "TYPE", "-n"], timeout=5.0)
+    if rc == 0 and out and "crypt" in out.lower():
+        cloud_security_layers["LUKS encryption at rest"] = True
+    if (_v35_command_available("getenforce") and
+        (_v35_run_command(["getenforce"], timeout=2.0)[1] or "").strip()
+        == "Enforcing") or _v35_command_available("aa-status"):
+        cloud_security_layers["MAC active (SELinux/AppArmor)"] = True
+    rsy = _v35_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy or "omfwd" in rsy:
+        cloud_security_layers["Centralized logging"] = True
+    elif _v35_directory_exists("/etc/rsyslog.d"):
+        for f in _v35_list_directory("/etc/rsyslog.d"):
+            c = _v35_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+            if "@@" in c or "omfwd" in c:
+                cloud_security_layers["Centralized logging"] = True
+                break
+
+    active = sum(1 for v in cloud_security_layers.values() if v)
+    results.append(_v35_enisa_result(
+        f"{cat} - Cloud Security Layers",
+        "Pass" if active >= 3 else "Warning",
+        f"ENISA Cloud Security layers: {active}/5",
+        severity="Medium",
+        details=(
+            f"Active: {[k for k, v in cloud_security_layers.items() if v]}"
+        ),
+        cross_references={
+            "ENISA": "Cloud Security Recommendations",
+            "ISO27017": "Cloud Services",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_enisa_v35 = run_checks
+
+
+def run_checks(shared_data: Optional[Dict[str, Any]] = None) -> List[AuditResult]:
+    """Execute the v3.5 expanded ENISA module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_enisa_v35(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_enisa_v35_nis2_article21(results, shared_data, os_info)
+        _check_enisa_v35_cra_annex1(results, shared_data, os_info)
+        _check_enisa_v35_dora_financial(results, shared_data, os_info)
+        _check_enisa_v35_cloud_security(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="ENISA - Error",
+            status="Error",
+            message=f"ENISA v3.5 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
 if __name__ == "__main__":
     """
     Standalone testing capability for the ENISA module
@@ -1909,7 +3148,3 @@ if __name__ == "__main__":
     print(f"ENISA module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
-
-# ============================================================================
-# End of module_enisa.py
-# ============================================================================
