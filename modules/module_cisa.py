@@ -2,7 +2,7 @@
 """
 module_cisa.py
 CISA (Cybersecurity and Infrastructure Security Agency) Module for Linux
-Version: 2.2
+Version: 2.1
 
 SYNOPSIS:
     CISA Cybersecurity Directives and best practices compliance checks for Linux systems.
@@ -179,7 +179,61 @@ except ImportError:
         HAS_COMMON_LIB = False
 
 MODULE_NAME = "CISA"
-MODULE_VERSION = "2.2"
+
+# v3.4 Remediation library wiring
+try:
+    from shared_components.remediation_library import get_remediation as _v34_get_remediation
+    from shared_components.remediation_library import get_removal_remediation as _v34_get_removal
+    from shared_components.remediation_library import get_patch_remediation as _v34_get_patch
+    from shared_components.os_detection import detect_os as _v34_detect_os
+    _v34_OSINFO_CACHE = None
+    def remediation_for(tool_id):
+        """Return distro-aware remediation text for a registered tool.
+
+        Falls back to a short "Install <tool>" string if the library
+        does not have an entry for the tool_id.
+        """
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        text = _v34_get_remediation(tool_id, _v34_OSINFO_CACHE)
+        return text if text else f"Install {tool_id} via your distribution\'s package manager"
+
+    def _v34_resolve_os():
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        return _v34_OSINFO_CACHE
+
+    def removal_for(canonical_token, extra_context=""):
+        """Return OS-aware package-removal remediation text."""
+        try:
+            return _v34_get_removal(canonical_token, _v34_resolve_os(),
+                                    extra_context=extra_context)
+        except Exception:
+            return f"Remove {canonical_token} via your distribution\'s package manager"
+
+    def patch_for(extra_context=""):
+        """Return OS-aware security-patch remediation text."""
+        try:
+            return _v34_get_patch(_v34_resolve_os(), extra_context=extra_context)
+        except Exception:
+            return "Apply available security updates via your distribution\'s package manager"
+except ImportError:  # pragma: no cover
+    def remediation_for(tool_id):
+        return f"Install {tool_id} via your distribution\'s package manager"
+    def removal_for(canonical_token, extra_context=""):
+        return f"Remove {canonical_token} via your distribution\'s package manager"
+    def patch_for(extra_context=""):
+        return "Apply available security updates via your distribution\'s package manager"
+
+MODULE_VERSION = "3.9"
 
 # Module logger (uses structured logging if audit_common is available)
 logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
@@ -1104,7 +1158,7 @@ def check_network_security(results: List[AuditResult], shared_data: Dict[str, An
         status="Pass" if firewall_installed else "Fail",
         message=f"{get_cisa_id('NET', 2)}: Firewall software installed (Critical)",
         details="Firewall package installed" if firewall_installed else "No firewall",
-        remediation="Install firewall: apt install ufw"
+        remediation=remediation_for("ufw")
     ))
     
     # NET-003: IP forwarding disabled
@@ -1335,7 +1389,7 @@ def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, 
         status="Pass" if auditd_installed else "Fail",
         message=f"{get_cisa_id('LOG', 1)}: Linux auditd installed (High)",
         details="auditd installed" if auditd_installed else "Not installed",
-        remediation="Install: apt install auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # LOG-002: auditd service active
@@ -1359,7 +1413,7 @@ def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, 
         status="Pass" if auditd_enabled else "Warning",
         message=f"{get_cisa_id('LOG', 3)}: auditd enabled at boot (High)",
         details="Enabled" if auditd_enabled else "Not enabled",
-        remediation="Enable: systemctl enable auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # LOG-004: Audit log size
@@ -1397,7 +1451,7 @@ def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, 
         status="Pass" if rsyslog_installed else "Warning",
         message=f"{get_cisa_id('LOG', 6)}: rsyslog installed (High)",
         details="rsyslog installed" if rsyslog_installed else "Not installed",
-        remediation="Install: apt install rsyslog"
+        remediation=remediation_for("rsyslog")
     ))
     
     # LOG-007: rsyslog service active
@@ -1463,7 +1517,7 @@ def check_logging_monitoring(results: List[AuditResult], shared_data: Dict[str, 
         status="Pass" if logrotate_installed else "Fail",
         message=f"{get_cisa_id('LOG', 11)}: logrotate installed (Medium)",
         details="logrotate installed" if logrotate_installed else "Not installed",
-        remediation="Install: apt install logrotate"
+        remediation=remediation_for("logrotate")
     ))
     
     # LOG-012: logrotate configured for audit
@@ -1710,7 +1764,7 @@ def check_data_protection(results: List[AuditResult], shared_data: Dict[str, Any
         status="Pass" if len(encryption_tools) >= 2 else "Warning",
         message=f"{get_cisa_id('DP', 2)}: Encryption tools available (Medium)",
         details=f"Tools: {encryption_tools}" if encryption_tools else "No encryption tools",
-        remediation="Install cryptsetup and gpg"
+        remediation=remediation_for("cryptsetup")
     ))
     
     # DP-003: Secure deletion tools
@@ -1752,7 +1806,7 @@ def check_data_protection(results: List[AuditResult], shared_data: Dict[str, Any
                 status="Warning",
                 message=f"{get_cisa_id('DP', 4)}: AIDE installed but not initialized (High)",
                 details="AIDE database missing",
-                remediation="Initialize AIDE: sudo aideinit"
+                remediation=remediation_for("aide")
             ))
     else:
         results.append(AuditResult(
@@ -1803,17 +1857,16 @@ def check_data_protection(results: List[AuditResult], shared_data: Dict[str, Any
             remediation="Set permissions: chmod 700 ~/.ssh"
         ))
     
-    # DP-007: World-writable files
-    world_writable = run_command("find / -xdev -type f -perm -002 2>/dev/null | head -10").stdout.strip()
-    has_world_writable = bool(world_writable)
-    
+    # DP-007: World-writable files (canonical assessment)
+    from shared_components.shared_assessments import get_world_writable_assessment as _ww_assess
+    _ww = _ww_assess("fail")
     results.append(AuditResult(
         module=MODULE_NAME,
         category="CISA - Data Protection",
-        status="Fail" if has_world_writable else "Pass",
+        status=_ww.status,
         message=f"{get_cisa_id('DP', 7)}: No world-writable files (Medium)",
-        details=f"Found world-writable files" if has_world_writable else "None found",
-        remediation="Remove world-write permissions from files"
+        details=_ww.details,
+        remediation=_ww.remediation
     ))
     
     # DP-008: Unowned files
@@ -2516,6 +2569,1293 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
 # Module Testing
 # ============================================================================
 
+
+
+# ============================================================================
+# v3.3 EXPANSION - CISA Deep Coverage
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across:
+#   - CISA Cross-Sector Cybersecurity Performance Goals (CPG v1.0.1)
+#   - CISA Zero Trust Maturity Model (ZTMM) v2.0
+#   - CISA Binding Operational Directives (BOD) 22-01 KEV, 23-01 attack surface
+#   - CISA Cybersecurity Advisories technical indicators
+#   - CISA Secure by Design principles
+# ============================================================================
+
+from shared_components.module_helpers import (
+    read_file_safe as _v33_read_file_safe,
+    file_exists as _v33_file_exists,
+    directory_exists as _v33_directory_exists,
+    command_available as _v33_command_available,
+    run_command as _v33_run_command,
+    read_sysctl as _v33_read_sysctl,
+    systemd_active as _v33_systemd_active,
+    file_mode as _v33_file_mode,
+    list_directory as _v33_list_directory,
+)
+
+
+def _v33_cisa_result(category, status, message, severity="Medium",
+                     details="", remediation="", cross_references=None):
+    """Build AuditResult for CISA v3.3 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_cisa_v33_cpg_account_security(results, shared_data, os_info):
+    """CISA CPG 2.A - Account Security."""
+
+    # 2.A - Changing Default Passwords (no empty passwords)
+    shadow = _v33_read_file_safe("/etc/shadow")
+    empty_pw = []
+    if shadow:
+        for line in shadow.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and parts[1] == "":
+                empty_pw.append(parts[0])
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.A v3.3 - Default Passwords",
+        "Pass" if not empty_pw else "Fail",
+        f"CPG 2.A No accounts with empty passwords ({len(empty_pw)})",
+        severity="Critical",
+        details=f"Empty password users: {empty_pw[:5]}",
+        remediation="passwd -l <user> for each",
+        cross_references={
+            "CISA-CPG": "2.A", "NIST": "IA-5",
+        },
+    ))
+
+    # 2.B - Minimum Password Strength
+    pwq = _v33_read_file_safe("/etc/security/pwquality.conf")
+    minlen = 0
+    if pwq:
+        m = re.search(r"^\s*minlen\s*=\s*(\d+)", pwq, re.MULTILINE)
+        if m:
+            minlen = int(m.group(1))
+    pwq_ok = minlen >= 14
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.B v3.3 - Password Strength",
+        "Pass" if pwq_ok else "Warning",
+        f"CPG 2.B Minimum password length >= 14 ({minlen})",
+        severity="High",
+        details=f"pwquality minlen = {minlen}",
+        remediation="In /etc/security/pwquality.conf: minlen = 14",
+        cross_references={
+            "CISA-CPG": "2.B", "NIST": "IA-5(1)",
+        },
+    ))
+
+    # 2.C - Unique Credentials (UID 0 uniqueness)
+    passwd = _v33_read_file_safe("/etc/passwd")
+    uid0 = []
+    if passwd:
+        for line in passwd.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3:
+                try:
+                    if int(parts[2]) == 0 and parts[0] != "root":
+                        uid0.append(parts[0])
+                except ValueError:
+                    pass
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.C v3.3 - Unique Credentials",
+        "Pass" if not uid0 else "Fail",
+        f"CPG 2.C Only root has UID 0 ({len(uid0)} extras)",
+        severity="Critical",
+        details=f"Non-root UID 0: {uid0}",
+        remediation="usermod -u <new_uid> <user>",
+        cross_references={
+            "CISA-CPG": "2.C", "NIST": "AC-6",
+        },
+    ))
+
+    # 2.D - Revoking Credentials for Departing Employees (account lifecycle)
+    inact_match = re.search(r"^\s*INACTIVE\s+(-?\d+)",
+                              _v33_read_file_safe("/etc/login.defs"),
+                              re.MULTILINE)
+    inact = int(inact_match.group(1)) if inact_match else -1
+    inact_ok = 0 < inact <= 35
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.D v3.3 - Account Lifecycle",
+        "Pass" if inact_ok else "Warning",
+        f"CPG 2.D Inactive account auto-disable ({inact})",
+        severity="High",
+        details=f"INACTIVE = {inact} days",
+        remediation="In /etc/default/useradd: INACTIVE=35",
+        cross_references={
+            "CISA-CPG": "2.D", "NIST": "AC-2(3)",
+        },
+    ))
+
+    # 2.E - Separating User and Privileged Accounts
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+    permit_root_match = re.search(r"^\s*PermitRootLogin\s+(\S+)", sshd, re.MULTILINE)
+    permit_root = permit_root_match.group(1) if permit_root_match else "yes"
+    root_secure = permit_root.lower() in ("no", "prohibit-password",
+                                            "without-password")
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.E v3.3 - Privileged Separation",
+        "Pass" if root_secure else "Fail",
+        f"CPG 2.E Direct root login restricted ({permit_root})",
+        severity="High",
+        details=f"PermitRootLogin = {permit_root}",
+        remediation="In /etc/ssh/sshd_config: PermitRootLogin no",
+        cross_references={
+            "CISA-CPG": "2.E", "NIST": "AC-6",
+        },
+    ))
+
+    # 2.F - Network Segmentation (firewall)
+    fw_active = (
+        _v33_systemd_active("ufw.service") == "active" or
+        _v33_systemd_active("firewalld.service") == "active" or
+        _v33_systemd_active("nftables.service") == "active"
+    )
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.F v3.3 - Network Segmentation",
+        "Pass" if fw_active else "Fail",
+        f"CPG 2.F Firewall active for network segmentation",
+        severity="Critical",
+        details=f"Firewall service active: {fw_active}",
+        remediation="systemctl enable --now ufw",
+        cross_references={
+            "CISA-CPG": "2.F", "NIST": "SC-7",
+        },
+    ))
+
+    # 2.G - Detection of Unsuccessful Login Attempts
+    pam_files = ["/etc/pam.d/system-auth", "/etc/pam.d/common-auth",
+                 "/etc/pam.d/password-auth"]
+    has_faillock = False
+    for pf in pam_files:
+        if "pam_faillock" in _v33_read_file_safe(pf):
+            has_faillock = True
+            break
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.G v3.3 - Failed Login Detection",
+        "Pass" if has_faillock else "Warning",
+        f"CPG 2.G Failed login detection (pam_faillock)",
+        severity="High",
+        details=f"pam_faillock detected: {has_faillock}",
+        remediation=(
+            "Configure /etc/security/faillock.conf with deny=5 unlock_time=900"
+        ),
+        cross_references={
+            "CISA-CPG": "2.G", "NIST": "AC-7",
+        },
+    ))
+
+    # 2.H - Phishing-Resistant MFA
+    mfa_modules_phishing_resistant = [
+        "pam_yubico", "pam_u2f", "pam_pkcs11"  # hardware-backed
+    ]
+    detected_pr_mfa = set()
+    for pf in pam_files + ["/etc/pam.d/sshd"]:
+        c = _v33_read_file_safe(pf)
+        for mod in mfa_modules_phishing_resistant:
+            if mod + ".so" in c:
+                detected_pr_mfa.add(mod.replace("pam_", ""))
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.H v3.3 - Phishing-Resistant MFA",
+        "Pass" if detected_pr_mfa else "Warning",
+        f"CPG 2.H Phishing-resistant MFA modules ({len(detected_pr_mfa)})",
+        severity="High",
+        details=f"Detected: {sorted(detected_pr_mfa) or 'none'}",
+        remediation=(
+            "Deploy hardware-token MFA: apt-get install -y libpam-u2f or "
+            "libpam-yubico"
+        ),
+        cross_references={
+            "CISA-CPG": "2.H", "NIST": "IA-2(1)",
+        },
+    ))
+
+
+def _check_cisa_v33_cpg_data_security(results, shared_data, os_info):
+    """CISA CPG 2.K-2.N - Data Security."""
+
+    # 2.K - Strong Encryption
+    openssl_cnf = (
+        _v33_read_file_safe("/etc/ssl/openssl.cnf") or
+        _v33_read_file_safe("/etc/pki/tls/openssl.cnf")
+    )
+    has_tls12 = "TLSv1.2" in openssl_cnf or "MinProtocol" in openssl_cnf
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.K v3.3 - Strong Encryption",
+        "Pass" if has_tls12 else "Warning",
+        f"CPG 2.K TLS 1.2+ minimum protocol set",
+        severity="High",
+        details=f"OpenSSL TLSv1.2/MinProtocol indicator: {has_tls12}",
+        remediation=(
+            "In /etc/ssl/openssl.cnf [system_default_sect]: "
+            "MinProtocol = TLSv1.2"
+        ),
+        cross_references={
+            "CISA-CPG": "2.K", "NIST": "SC-13",
+        },
+    ))
+
+    # 2.L - Secure Sensitive Data (LUKS / disk encryption)
+    rc, out, _ = _v33_run_command(["lsblk", "-o", "TYPE", "-n"], timeout=3.0)
+    luks = rc == 0 and "crypt" in out.lower()
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.L v3.3 - Secure Sensitive Data",
+        "Pass" if luks else "Warning",
+        f"CPG 2.L Disk encryption (LUKS) detected: {luks}",
+        severity="High",
+        details=f"LUKS volumes: {luks}",
+        remediation="cryptsetup luksFormat <device> for sensitive volumes",
+        cross_references={
+            "CISA-CPG": "2.L", "NIST": "SC-28",
+        },
+    ))
+
+    # 2.M - Email Security (TLS in mail clients - mostly server-side)
+    mail_tls = (
+        _v33_file_exists("/etc/postfix/main.cf") and
+        "smtpd_tls_security_level" in _v33_read_file_safe("/etc/postfix/main.cf")
+    )
+    if _v33_file_exists("/etc/postfix/main.cf"):
+        results.append(_v33_cisa_result(
+            "CISA CPG 2.M v3.3 - Email Security",
+            "Pass" if mail_tls else "Info",
+            f"CPG 2.M Postfix TLS configured: {mail_tls}",
+            severity="Medium",
+            details=f"smtpd_tls_security_level set: {mail_tls}",
+            remediation=(
+                "In /etc/postfix/main.cf: smtpd_tls_security_level = encrypt"
+            ),
+            cross_references={
+                "CISA-CPG": "2.M", "NIST": "SC-8",
+            },
+        ))
+
+    # 2.N - Disable Macros by Default (LibreOffice indicator)
+    libreoffice_present = (
+        _v33_command_available("libreoffice") or
+        _v33_command_available("soffice")
+    )
+    if libreoffice_present:
+        results.append(_v33_cisa_result(
+            "CISA CPG 2.N v3.3 - Disable Macros",
+            "Info",
+            f"CPG 2.N LibreOffice present (macro security policy review needed)",
+            severity="Informational",
+            details=f"LibreOffice/soffice available: {libreoffice_present}",
+            remediation=(
+                "Configure LibreOffice macro security via "
+                "/etc/libreoffice/registry/...; deploy via group policy"
+            ),
+            cross_references={
+                "CISA-CPG": "2.N", "NIST": "CM-7",
+            },
+        ))
+
+
+def _check_cisa_v33_cpg_vulnerability_mgmt(results, shared_data, os_info):
+    """CISA CPG 2.O-2.S - Vulnerability Management."""
+
+    # 2.O - System Backups
+    backup_tools = {
+        "rsync": _v33_command_available("rsync"),
+        "borg": _v33_command_available("borg"),
+        "restic": _v33_command_available("restic"),
+        "duplicity": _v33_command_available("duplicity"),
+    }
+    detected = [k for k, v in backup_tools.items() if v]
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.O v3.3 - System Backups",
+        "Pass" if detected else "Fail",
+        f"CPG 2.O Backup tools available ({len(detected)})",
+        severity="High",
+        details=f"Detected: {detected}",
+        cross_references={
+            "CISA-CPG": "2.O", "NIST": "CP-9",
+        },
+    ))
+
+    # 2.P - Document Network Topology (interface enumeration)
+    rc, out, _ = _v33_run_command(["ip", "-br", "addr"], timeout=3.0)
+    iface_count = 0
+    if rc == 0 and out:
+        iface_count = sum(
+            1 for line in out.splitlines()
+            if line.strip() and "lo" not in line.split()[0]
+        )
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.P v3.3 - Network Topology",
+        "Info",
+        f"CPG 2.P Network interfaces enumerable ({iface_count})",
+        severity="Informational",
+        details=f"Non-loopback interfaces: {iface_count}",
+        cross_references={
+            "CISA-CPG": "2.P", "NIST": "CM-8",
+        },
+    ))
+
+    # 2.Q - Hardware and Software Approval Process (CM tools)
+    cm_tools = {
+        "ansible": _v33_command_available("ansible"),
+        "puppet": _v33_command_available("puppet"),
+        "salt": (_v33_command_available("salt-minion") or
+                 _v33_command_available("salt-call")),
+        "chef": _v33_command_available("chef-client"),
+    }
+    detected_cm = [k for k, v in cm_tools.items() if v]
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.Q v3.3 - HW/SW Approval",
+        "Info",
+        f"CPG 2.Q Configuration management agents ({len(detected_cm)})",
+        severity="Informational",
+        details=f"Detected: {detected_cm or 'none'}",
+        remediation="Deploy IaC: Ansible/Puppet/Salt for change tracking",
+        cross_references={
+            "CISA-CPG": "2.Q", "NIST": "CM-3",
+        },
+    ))
+
+    # 2.R - Vulnerability Scanning
+    scanners = ["lynis", "oscap", "trivy", "nuclei", "openvas-scanner"]
+    detected_scanners = [s for s in scanners if _v33_command_available(s)]
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.R v3.3 - Vulnerability Scanning",
+        "Pass" if detected_scanners else "Fail",
+        f"CPG 2.R Vulnerability scanners ({len(detected_scanners)})",
+        severity="High",
+        details=f"Detected: {detected_scanners}",
+        remediation=remediation_for("lynis"),
+        cross_references={
+            "CISA-CPG": "2.R", "NIST": "RA-5",
+        },
+    ))
+
+    # 2.S - Vulnerability Disclosure / KEV (BOD 22-01)
+    update_active = (
+        _v33_systemd_active("unattended-upgrades.service") == "active" or
+        _v33_systemd_active("dnf-automatic-install.timer") == "active"
+    )
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.S v3.3 - KEV Patching",
+        "Pass" if update_active else "Fail",
+        f"CPG 2.S Automated patching for KEV (BOD 22-01)",
+        severity="Critical",
+        details=f"Update automation: {update_active}",
+        remediation=(
+            "apt-get install -y unattended-upgrades; "
+            "dpkg-reconfigure unattended-upgrades  (Ubuntu/Debian); "
+            "systemctl enable --now dnf-automatic-install.timer  (RHEL)"
+        ),
+        cross_references={
+            "CISA-CPG": "2.S", "CISA-BOD": "22-01", "NIST": "SI-2",
+        },
+    ))
+
+
+def _check_cisa_v33_cpg_supply_chain(results, shared_data, os_info):
+    """CISA CPG 2.T-2.U - Supply Chain / Third Party."""
+
+    # 2.T - Third-Party Software Procurement (signature verification)
+    apt_keyring = (
+        _v33_directory_exists("/etc/apt/trusted.gpg.d") or
+        _v33_directory_exists("/etc/apt/keyrings")
+    )
+    rpm_gpgcheck = "gpgcheck=1" in (
+        _v33_read_file_safe("/etc/yum.conf") or
+        _v33_read_file_safe("/etc/dnf/dnf.conf")
+    )
+    pacman_keyring = _v33_directory_exists("/etc/pacman.d/gnupg")
+    sig_indicators = sum([apt_keyring, rpm_gpgcheck, pacman_keyring])
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.T v3.3 - Software Procurement",
+        "Pass" if sig_indicators >= 1 else "Fail",
+        f"CPG 2.T Package signature verification ({sig_indicators})",
+        severity="High",
+        details=(
+            f"apt: {apt_keyring}, rpm gpgcheck: {rpm_gpgcheck}, "
+            f"pacman: {pacman_keyring}"
+        ),
+        cross_references={
+            "CISA-CPG": "2.T", "NIST": "SR-3",
+        },
+    ))
+
+    # 2.U - Vendor/Supplier Cybersecurity Requirements (SBOM)
+    sbom_tools = {
+        "syft": _v33_command_available("syft"),
+        "trivy": _v33_command_available("trivy"),
+        "grype": _v33_command_available("grype"),
+    }
+    detected = [k for k, v in sbom_tools.items() if v]
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.U v3.3 - SBOM Tooling",
+        "Pass" if detected else "Info",
+        f"CPG 2.U SBOM/vulnerability tools ({len(detected)})",
+        severity="Medium",
+        details=f"Detected: {detected or 'none'}",
+        remediation=(
+            "Install Syft for SBOM generation. Required by EO 14028 and "
+            "OMB M-22-18 for federal procurement"
+        ),
+        cross_references={
+            "CISA-CPG": "2.U", "NIST": "SR-4",
+        },
+    ))
+
+
+def _check_cisa_v33_cpg_response_recovery(results, shared_data, os_info):
+    """CISA CPG 2.V-2.W - Response and Recovery."""
+
+    # 2.V - Incident Reporting (log forwarding)
+    rsy_remote = False
+    rsy_conf = _v33_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy_conf or "omfwd" in rsy_conf:
+        rsy_remote = True
+    if not rsy_remote and _v33_directory_exists("/etc/rsyslog.d"):
+        for f in _v33_list_directory("/etc/rsyslog.d"):
+            if not f.endswith(".conf"):
+                continue
+            c = _v33_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+            if "@@" in c or "omfwd" in c:
+                rsy_remote = True
+                break
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.V v3.3 - Incident Reporting",
+        "Pass" if rsy_remote else "Fail",
+        f"CPG 2.V Remote log forwarding for incident reporting",
+        severity="Critical",
+        details=f"rsyslog forwarding: {rsy_remote}",
+        remediation=(
+            "Configure /etc/rsyslog.d/50-remote.conf: "
+            "*.* @@logserver.example.com:6514"
+        ),
+        cross_references={
+            "CISA-CPG": "2.V", "NIST": "IR-6",
+        },
+    ))
+
+    # 2.W - Incident Response Plans (audit trail readiness)
+    audit_log_present = _v33_file_exists("/var/log/audit/audit.log")
+    auditd_active = _v33_systemd_active("auditd.service") == "active"
+    ir_ready = audit_log_present and auditd_active
+    results.append(_v33_cisa_result(
+        "CISA CPG 2.W v3.3 - IR Plan Readiness",
+        "Pass" if ir_ready else "Fail",
+        f"CPG 2.W Audit trail for incident response",
+        severity="High",
+        details=(
+            f"auditd active: {auditd_active}, audit.log: {audit_log_present}"
+        ),
+        remediation=remediation_for("auditd"),
+        cross_references={
+            "CISA-CPG": "2.W", "NIST": "IR-4",
+        },
+    ))
+
+
+def _check_cisa_v33_ztmm(results, shared_data, os_info):
+    """CISA Zero Trust Maturity Model v2.0 - 5 pillars."""
+
+    # Pillar 1 - Identity
+    pam_files = ["/etc/pam.d/system-auth", "/etc/pam.d/common-auth",
+                 "/etc/pam.d/password-auth", "/etc/pam.d/sshd"]
+    mfa_modules = ["pam_google_authenticator", "pam_yubico", "pam_oath",
+                    "pam_duo", "pam_u2f", "pam_pkcs11"]
+    detected_mfa = set()
+    for pf in pam_files:
+        c = _v33_read_file_safe(pf)
+        for mod in mfa_modules:
+            if mod + ".so" in c:
+                detected_mfa.add(mod.replace("pam_", ""))
+    results.append(_v33_cisa_result(
+        "CISA ZTMM v3.3 - Pillar 1 Identity",
+        "Pass" if detected_mfa else "Warning",
+        f"ZTMM Identity: MFA modules ({len(detected_mfa)})",
+        severity="High",
+        details=f"Detected: {sorted(detected_mfa) or 'none'}",
+        cross_references={
+            "CISA-ZTMM": "Pillar 1 Identity", "NIST": "IA-2(1)",
+        },
+    ))
+
+    # Pillar 2 - Devices (FIM, EDR)
+    fim_present = (
+        _v33_file_exists("/var/lib/aide/aide.db") or
+        _v33_file_exists("/var/lib/aide/aide.db.gz") or
+        _v33_file_exists("/etc/tripwire/tw.cfg") or
+        _v33_file_exists("/var/ossec/etc/ossec.conf")
+    )
+    edr_present = (
+        _v33_file_exists("/opt/microsoft/mdatp/sbin/wdavdaemon") or
+        _v33_file_exists("/opt/CrowdStrike/falconctl") or
+        _v33_file_exists("/opt/sentinelone/bin/sentinelctl") or
+        _v33_command_available("falco") or
+        _v33_command_available("osqueryi")
+    )
+    device_layers = sum([fim_present, edr_present])
+    results.append(_v33_cisa_result(
+        "CISA ZTMM v3.3 - Pillar 2 Devices",
+        "Pass" if device_layers >= 1 else "Warning",
+        f"ZTMM Devices: FIM and/or EDR ({device_layers}/2)",
+        severity="High",
+        details=f"FIM: {fim_present}, EDR/visibility: {edr_present}",
+        remediation=(
+            "Deploy FIM (AIDE) and EDR (Falco/MDE/CrowdStrike)"
+        ),
+        cross_references={
+            "CISA-ZTMM": "Pillar 2 Devices", "NIST": "SI-7",
+        },
+    ))
+
+    # Pillar 3 - Networks (firewall + segmentation)
+    fw_active = (
+        _v33_systemd_active("ufw.service") == "active" or
+        _v33_systemd_active("firewalld.service") == "active" or
+        _v33_systemd_active("nftables.service") == "active"
+    )
+    ids_present = (
+        _v33_command_available("suricata") or
+        _v33_command_available("snort") or
+        _v33_command_available("zeek")
+    )
+    network_layers = sum([fw_active, ids_present])
+    results.append(_v33_cisa_result(
+        "CISA ZTMM v3.3 - Pillar 3 Networks",
+        "Pass" if network_layers >= 1 else "Fail",
+        f"ZTMM Networks: firewall and/or IDS ({network_layers}/2)",
+        severity="Critical",
+        details=f"Firewall: {fw_active}, IDS: {ids_present}",
+        cross_references={
+            "CISA-ZTMM": "Pillar 3 Networks", "NIST": "SC-7",
+        },
+    ))
+
+    # Pillar 4 - Applications and Workloads (allowlisting)
+    allowlist = {
+        "fapolicyd": _v33_systemd_active("fapolicyd.service") == "active",
+        "AppArmor": _v33_systemd_active("apparmor.service") == "active",
+        "SELinux": False,
+    }
+    if _v33_file_exists("/sys/fs/selinux/enforce"):
+        try:
+            with open("/sys/fs/selinux/enforce") as f:
+                allowlist["SELinux"] = f.read().strip() == "1"
+        except OSError:
+            pass
+    detected_al = [k for k, v in allowlist.items() if v]
+    results.append(_v33_cisa_result(
+        "CISA ZTMM v3.3 - Pillar 4 Applications",
+        "Pass" if detected_al else "Warning",
+        f"ZTMM Applications: allowlisting/MAC ({len(detected_al)})",
+        severity="High",
+        details=f"Detected: {detected_al}",
+        cross_references={
+            "CISA-ZTMM": "Pillar 4 Applications", "NIST": "CM-7(2)",
+        },
+    ))
+
+    # Pillar 5 - Data (encryption + classification indicators)
+    rc, out, _ = _v33_run_command(["lsblk", "-o", "TYPE", "-n"], timeout=3.0)
+    luks = rc == 0 and "crypt" in out.lower()
+    crypto_libs = (
+        _v33_command_available("openssl") or
+        _v33_command_available("gpg")
+    )
+    data_layers = sum([luks, crypto_libs])
+    results.append(_v33_cisa_result(
+        "CISA ZTMM v3.3 - Pillar 5 Data",
+        "Pass" if data_layers >= 1 else "Warning",
+        f"ZTMM Data: encryption layers ({data_layers}/2)",
+        severity="High",
+        details=f"LUKS: {luks}, crypto libs: {crypto_libs}",
+        cross_references={
+            "CISA-ZTMM": "Pillar 5 Data", "NIST": "SC-28",
+        },
+    ))
+
+    # Cross-cutting: Visibility and Analytics
+    audit_active = _v33_systemd_active("auditd.service") == "active"
+    rsy_remote = False
+    rsy_conf = _v33_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy_conf or "omfwd" in rsy_conf:
+        rsy_remote = True
+    if not rsy_remote and _v33_directory_exists("/etc/rsyslog.d"):
+        for f in _v33_list_directory("/etc/rsyslog.d"):
+            c = _v33_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+            if "@@" in c or "omfwd" in c:
+                rsy_remote = True
+                break
+    visibility_layers = sum([audit_active, rsy_remote])
+    results.append(_v33_cisa_result(
+        "CISA ZTMM v3.3 - Visibility & Analytics",
+        "Pass" if visibility_layers >= 2 else "Warning",
+        f"ZTMM Visibility: audit+SIEM ({visibility_layers}/2)",
+        severity="High",
+        details=f"auditd: {audit_active}, remote forwarding: {rsy_remote}",
+        cross_references={
+            "CISA-ZTMM": "Cross-cutting Visibility", "NIST": "AU-6",
+        },
+    ))
+
+    # Cross-cutting: Automation and Orchestration
+    cm_tools = {
+        "ansible": _v33_command_available("ansible"),
+        "puppet": _v33_command_available("puppet"),
+        "salt": (_v33_command_available("salt-minion") or
+                 _v33_command_available("salt-call")),
+    }
+    detected_cm = [k for k, v in cm_tools.items() if v]
+    results.append(_v33_cisa_result(
+        "CISA ZTMM v3.3 - Automation",
+        "Info",
+        f"ZTMM Automation: CM agents ({len(detected_cm)})",
+        severity="Informational",
+        details=f"Detected: {detected_cm or 'none'}",
+        cross_references={
+            "CISA-ZTMM": "Cross-cutting Automation", "NIST": "CM-2(2)",
+        },
+    ))
+
+    # Cross-cutting: Governance
+    pam_dir = "/etc/pam.d"
+    pam_files_count = (
+        len(_v33_list_directory(pam_dir))
+        if _v33_directory_exists(pam_dir) else 0
+    )
+    results.append(_v33_cisa_result(
+        "CISA ZTMM v3.3 - Governance",
+        "Pass" if pam_files_count >= 10 else "Warning",
+        f"ZTMM Governance: PAM policy modules ({pam_files_count})",
+        severity="Medium",
+        details=f"PAM files: {pam_files_count}",
+        cross_references={
+            "CISA-ZTMM": "Cross-cutting Governance", "NIST": "PL-1",
+        },
+    ))
+
+
+def _check_cisa_v33_bod_directives(results, shared_data, os_info):
+    """CISA Binding Operational Directives technical indicators."""
+
+    # BOD 22-01 Known Exploited Vulnerabilities (KEV)
+    update_active = (
+        _v33_systemd_active("unattended-upgrades.service") == "active" or
+        _v33_systemd_active("dnf-automatic-install.timer") == "active"
+    )
+    results.append(_v33_cisa_result(
+        "CISA BOD 22-01 v3.3 - KEV",
+        "Pass" if update_active else "Fail",
+        "BOD 22-01 Patching automation for KEV catalog",
+        severity="Critical",
+        details=f"Auto-update active: {update_active}",
+        remediation="Enable unattended-upgrades or dnf-automatic-install.timer",
+        cross_references={
+            "CISA-BOD": "22-01", "NIST": "SI-2",
+        },
+    ))
+
+    # BOD 23-01 Improving Asset Visibility and Vulnerability Detection
+    asset_visibility = {
+        "osquery": _v33_command_available("osqueryi"),
+        "wazuh": _v33_file_exists("/var/ossec/etc/ossec.conf"),
+        "auditd": _v33_systemd_active("auditd.service") == "active",
+    }
+    detected_av = [k for k, v in asset_visibility.items() if v]
+    results.append(_v33_cisa_result(
+        "CISA BOD 23-01 v3.3 - Asset Visibility",
+        "Pass" if len(detected_av) >= 1 else "Warning",
+        f"BOD 23-01 Asset visibility tools ({len(detected_av)})",
+        severity="High",
+        details=f"Detected: {detected_av}",
+        remediation=(
+            "Deploy osquery for endpoint visibility: "
+            "https://osquery.io/downloads"
+        ),
+        cross_references={
+            "CISA-BOD": "23-01", "NIST": "CM-8",
+        },
+    ))
+
+
+def _check_cisa_v33_secure_by_design(results, shared_data, os_info):
+    """CISA Secure by Design principles - technical indicators."""
+
+    # Memory-safe languages: indicator via runtime presence
+    runtimes = {
+        "rust": _v33_command_available("rustc") or _v33_command_available("cargo"),
+        "go": _v33_command_available("go"),
+    }
+    msl_detected = [k for k, v in runtimes.items() if v]
+    results.append(_v33_cisa_result(
+        "CISA SbD v3.3 - Memory-Safe Languages",
+        "Info",
+        f"Memory-safe language runtimes ({len(msl_detected)})",
+        severity="Informational",
+        details=f"Detected: {msl_detected or 'none'}",
+        remediation=(
+            "CISA recommends migration to memory-safe languages "
+            "(Rust, Go) for new development"
+        ),
+        cross_references={
+            "CISA-SbD": "Memory Safety", "NIST": "SA-15",
+        },
+    ))
+
+    # Default-secure configuration: SSH PermitRootLogin
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+    permit_root_match = re.search(r"^\s*PermitRootLogin\s+(\S+)", sshd, re.MULTILINE)
+    permit_root = permit_root_match.group(1) if permit_root_match else "yes"
+    secure_default = permit_root.lower() in ("no", "prohibit-password",
+                                              "without-password")
+    results.append(_v33_cisa_result(
+        "CISA SbD v3.3 - Default Secure",
+        "Pass" if secure_default else "Fail",
+        f"Secure-by-default SSH (PermitRootLogin: {permit_root})",
+        severity="High",
+        details=f"PermitRootLogin = {permit_root}",
+        remediation="In /etc/ssh/sshd_config: PermitRootLogin no",
+        cross_references={
+            "CISA-SbD": "Default Secure", "NIST": "AC-6",
+        },
+    ))
+
+    # Hardening principles: kernel parameters
+    aslr = _v33_read_sysctl("kernel.randomize_va_space") == "2"
+    nx_safe = "nx" in _v33_read_file_safe("/proc/cpuinfo")
+    hardening_count = sum([aslr, nx_safe])
+    results.append(_v33_cisa_result(
+        "CISA SbD v3.3 - Hardening Principles",
+        "Pass" if hardening_count >= 2 else "Warning",
+        f"Memory protection (ASLR + NX): {hardening_count}/2",
+        severity="High",
+        details=f"ASLR: {aslr}, NX: {nx_safe}",
+        cross_references={
+            "CISA-SbD": "Hardening", "NIST": "SI-16",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_cisa_v33 = run_checks
+
+
+def run_checks(shared_data):
+    """Execute the v3.3 expanded CISA module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_cisa_v33(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_cisa_v33_cpg_account_security(results, shared_data, os_info)
+        _check_cisa_v33_cpg_data_security(results, shared_data, os_info)
+        _check_cisa_v33_cpg_vulnerability_mgmt(results, shared_data, os_info)
+        _check_cisa_v33_cpg_supply_chain(results, shared_data, os_info)
+        _check_cisa_v33_cpg_response_recovery(results, shared_data, os_info)
+        _check_cisa_v33_ztmm(results, shared_data, os_info)
+        _check_cisa_v33_bod_directives(results, shared_data, os_info)
+        _check_cisa_v33_secure_by_design(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="CISA - Error",
+            status="Error",
+            message=f"CISA v3.3 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
+
+
+# ============================================================================
+# v3.5 EXPANSION - CISA Secure by Design + KEV + Zero Trust + Ransomware
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across CISA guidance areas:
+#     - CISA Secure by Design (SbD) principles depth
+#     - CISA Known Exploited Vulnerabilities (KEV) catalog readiness
+#     - CISA Zero Trust Maturity Model (ZTMM) Pillars 1-5 depth
+#     - CISA Stop Ransomware guidance
+#     - CISA Shields Up activities
+#     - CISA Cybersecurity Performance Goals (CPGs) extended
+# ============================================================================
+
+# v3.5 helpers
+from shared_components.module_helpers import (
+    read_file_safe as _v35_read_file_safe,
+    file_exists as _v35_file_exists,
+    directory_exists as _v35_directory_exists,
+    command_available as _v35_command_available,
+    run_command as _v35_run_command,
+    read_sysctl as _v35_read_sysctl,
+    systemd_active as _v35_systemd_active,
+    list_directory as _v35_list_directory,
+)
+
+
+def _v35_cisa_result(category, status, message, severity="Medium",
+                    details="", remediation="", cross_references=None):
+    """Build AuditResult for CISA v3.5 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_cisa_v35_secure_by_design_depth(results, shared_data, os_info):
+    """CISA Secure by Design (SbD) principles depth."""
+    cat = "CISA v3.5 - SbD"
+
+    # SbD Principle 1: Take Ownership of Customer Security Outcomes
+    # Surrogate: package signing infrastructure + auto-patch
+    sbd_p1_layers = sum([
+        bool(
+            _v35_directory_exists("/etc/apt/keyrings") or
+            _v35_directory_exists("/etc/apt/trusted.gpg.d") or
+            _v35_directory_exists("/etc/pki/rpm-gpg")
+        ),
+        bool(
+            _v35_systemd_active("unattended-upgrades.service") == "active" or
+            _v35_systemd_active("dnf-automatic-install.timer") == "active" or
+            _v35_systemd_active("dnf-automatic.timer") == "active"
+        ),
+    ])
+    results.append(_v35_cisa_result(
+        f"{cat} - P1 Customer Outcomes",
+        "Pass" if sbd_p1_layers >= 2 else "Warning",
+        f"CISA SbD P1 Customer outcome layers: {sbd_p1_layers}/2",
+        severity="Medium",
+        details=f"Pkg signing + auto-patch: {sbd_p1_layers}",
+        cross_references={
+            "CISA-SbD": "P1",
+            "NIST": "SI-2, SR-3",
+        },
+    ))
+
+    # SbD Principle 2: Embrace Radical Transparency and Accountability
+    # Surrogate: auditd + journald persistent + SBOM tooling
+    sbd_p2_layers = sum([
+        _v35_systemd_active("auditd.service") == "active",
+        _v35_directory_exists("/var/log/journal"),
+        _v35_command_available("syft") or _v35_command_available("trivy"),
+    ])
+    results.append(_v35_cisa_result(
+        f"{cat} - P2 Transparency/Accountability",
+        "Pass" if sbd_p2_layers >= 2 else "Warning",
+        f"CISA SbD P2 Transparency layers (audit + persistence + SBOM): "
+        f"{sbd_p2_layers}/3",
+        severity="Medium",
+        details=f"Layers: {sbd_p2_layers}",
+        cross_references={
+            "CISA-SbD": "P2",
+            "NIST": "AU-2, SR-4",
+        },
+    ))
+
+    # SbD Principle 3: Build Organizational Structure to Achieve SbD
+    # Surrogate: configuration management + version control
+    sbd_p3_layers = sum([
+        _v35_command_available("git"),
+        bool(
+            _v35_command_available("ansible") or
+            _v35_command_available("puppet") or
+            _v35_command_available("salt") or
+            _v35_command_available("etckeeper")
+        ),
+    ])
+    results.append(_v35_cisa_result(
+        f"{cat} - P3 Org Structure (Tools)",
+        "Pass" if sbd_p3_layers >= 2 else "Info",
+        f"CISA SbD P3 Org tooling: {sbd_p3_layers}/2",
+        severity="Medium",
+        details=f"git + config mgmt: {sbd_p3_layers}",
+        cross_references={
+            "CISA-SbD": "P3",
+            "NIST": "CM-3, CM-5",
+        },
+    ))
+
+
+def _check_cisa_v35_kev_readiness(results, shared_data, os_info):
+    """CISA Known Exploited Vulnerabilities (KEV) catalog readiness."""
+    cat = "CISA v3.5 - KEV"
+
+    # Auto-patch active for KEV remediation timeline
+    auto_patch = (
+        _v35_systemd_active("unattended-upgrades.service") == "active" or
+        _v35_systemd_active("dnf-automatic-install.timer") == "active" or
+        _v35_systemd_active("dnf-automatic.timer") == "active"
+    )
+    results.append(_v35_cisa_result(
+        f"{cat} - KEV Auto-Patch",
+        "Pass" if auto_patch else "Warning",
+        f"CISA KEV auto-patch active: {auto_patch}",
+        severity="Critical",
+        details=f"Auto-patch active: {auto_patch}",
+        remediation=(
+            remediation_for("unattended-upgrades")
+            if (os_info and os_info.is_debian_family())
+            else remediation_for("dnf-automatic")
+        ),
+        cross_references={
+            "CISA": "BOD 22-01 KEV",
+            "NIST": "SI-2(2)",
+        },
+    ))
+
+    # Vuln scanning capability for KEV detection
+    vuln_tools = sum(_v35_command_available(t) for t in
+                     ["lynis", "oscap", "trivy", "grype", "debsecan"])
+    results.append(_v35_cisa_result(
+        f"{cat} - KEV Detection Tools",
+        "Pass" if vuln_tools >= 2 else "Warning",
+        f"CISA KEV detection tools: {vuln_tools}/5",
+        severity="High",
+        details=f"Tools: {vuln_tools}",
+        remediation=(
+            "apt-get install -y lynis libopenscap8 debsecan\n"
+            "Trivy: https://github.com/aquasecurity/trivy"
+        ),
+        cross_references={
+            "CISA": "KEV Catalog Use",
+            "NIST": "RA-5",
+        },
+    ))
+
+
+def _check_cisa_v35_ztmm_pillars(results, shared_data, os_info):
+    """CISA Zero Trust Maturity Model (ZTMM) Pillars 1-5 depth."""
+    cat = "CISA v3.5 - ZTMM"
+
+    # Pillar 1: Identity (MFA, continuous authentication)
+    pam_files_content = ""
+    for pf in ["/etc/pam.d/sshd", "/etc/pam.d/system-auth",
+                "/etc/pam.d/password-auth", "/etc/pam.d/common-auth"]:
+        pam_files_content += "\n" + _v35_read_file_safe(pf)
+    pam_mfa = any(mod in pam_files_content for mod in [
+        "pam_google_authenticator", "pam_yubico", "pam_oath", "pam_u2f", "pam_duo",
+    ])
+    results.append(_v35_cisa_result(
+        f"{cat} - Pillar 1 Identity (MFA)",
+        "Pass" if pam_mfa else "Warning",
+        f"ZTMM Pillar 1 MFA detected: {pam_mfa}",
+        severity="High",
+        details=f"PAM MFA module: {pam_mfa}",
+        cross_references={
+            "CISA-ZTMM": "Pillar 1",
+            "NIST": "IA-2(11)",
+        },
+    ))
+
+    # Pillar 2: Devices (FIM, integrity monitoring)
+    fim_present = (
+        _v35_file_exists("/var/lib/aide/aide.db") or
+        _v35_file_exists("/var/lib/aide/aide.db.gz") or
+        _v35_file_exists("/var/lib/tripwire/tw.db")
+    )
+    results.append(_v35_cisa_result(
+        f"{cat} - Pillar 2 Devices (FIM)",
+        "Pass" if fim_present else "Warning",
+        f"ZTMM Pillar 2 device integrity (FIM): {fim_present}",
+        severity="High",
+        details=f"FIM database: {fim_present}",
+        cross_references={
+            "CISA-ZTMM": "Pillar 2",
+            "NIST": "SI-7",
+        },
+    ))
+
+    # Pillar 3: Networks (segmentation indicators)
+    rc, out, _ = _v35_run_command(["nft", "list", "ruleset"], timeout=5.0)
+    nft_present = rc == 0 and bool(out and out.strip())
+    rc, out, _ = _v35_run_command(["firewall-cmd", "--state"], timeout=3.0)
+    firewalld_active = rc == 0 and "running" in (out or "")
+    network_segmented = nft_present or firewalld_active
+    results.append(_v35_cisa_result(
+        f"{cat} - Pillar 3 Networks",
+        "Pass" if network_segmented else "Warning",
+        f"ZTMM Pillar 3 Network segmentation tooling: {network_segmented}",
+        severity="High",
+        details=f"nftables/firewalld: {network_segmented}",
+        cross_references={
+            "CISA-ZTMM": "Pillar 3",
+            "NIST": "SC-7",
+        },
+    ))
+
+    # Pillar 4: Applications and Workloads (containers, MAC)
+    container_runtime = (
+        _v35_command_available("docker") or
+        _v35_command_available("podman") or
+        _v35_command_available("containerd")
+    )
+    mac_active = (
+        (_v35_command_available("getenforce") and
+         (_v35_run_command(["getenforce"], timeout=2.0)[1] or "").strip()
+         == "Enforcing") or _v35_command_available("aa-status")
+    )
+    workload_isolation = container_runtime or mac_active
+    results.append(_v35_cisa_result(
+        f"{cat} - Pillar 4 Applications/Workloads",
+        "Pass" if workload_isolation else "Warning",
+        f"ZTMM Pillar 4 Workload isolation: {workload_isolation}",
+        severity="Medium",
+        details=(
+            f"Container runtime: {container_runtime}, MAC: {mac_active}"
+        ),
+        cross_references={
+            "CISA-ZTMM": "Pillar 4",
+            "NIST": "SC-39",
+        },
+    ))
+
+    # Pillar 5: Data (at-rest encryption, classification, DLP)
+    luks_present = False
+    rc, out, _ = _v35_run_command(["lsblk", "-o", "TYPE", "-n"], timeout=5.0)
+    if rc == 0 and out and "crypt" in out.lower():
+        luks_present = True
+    results.append(_v35_cisa_result(
+        f"{cat} - Pillar 5 Data Protection",
+        "Pass" if luks_present else "Warning",
+        f"ZTMM Pillar 5 Data at-rest encryption (LUKS): {luks_present}",
+        severity="High",
+        details=f"LUKS volumes: {luks_present}",
+        cross_references={
+            "CISA-ZTMM": "Pillar 5",
+            "NIST": "SC-28",
+        },
+    ))
+
+    # Cross-cutting: Visibility & Analytics, Automation & Orchestration
+    cross_cutting = sum([
+        # Visibility
+        bool(_v35_systemd_active("auditd.service") == "active"),
+        bool(_v35_directory_exists("/var/log/journal")),
+        # Automation/Orchestration
+        bool(_v35_command_available("ansible") or _v35_command_available("puppet")),
+        # Centralized logging
+        any("@@" in _v35_read_file_safe("/etc/rsyslog.conf") or
+            "omfwd" in _v35_read_file_safe("/etc/rsyslog.conf") or
+            (_v35_directory_exists("/etc/rsyslog.d") and any(
+                "@@" in _v35_read_file_safe(os.path.join("/etc/rsyslog.d", f)) or
+                "omfwd" in _v35_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+                for f in _v35_list_directory("/etc/rsyslog.d")
+            )) for _ in [None]),
+    ])
+    results.append(_v35_cisa_result(
+        f"{cat} - Cross-Cutting Capabilities",
+        "Pass" if cross_cutting >= 3 else "Warning",
+        f"ZTMM Cross-cutting capabilities: {cross_cutting}/4",
+        severity="Medium",
+        details=f"Layers: {cross_cutting}",
+        cross_references={
+            "CISA-ZTMM": "Visibility/Analytics, Automation/Orchestration",
+            "NIST": "AU-6, CA-7",
+        },
+    ))
+
+
+def _check_cisa_v35_stop_ransomware(results, shared_data, os_info):
+    """CISA Stop Ransomware guidance."""
+    cat = "CISA v3.5 - Stop Ransomware"
+
+    # Anti-ransomware foundation: 3-2-1 backup + offline
+    backup_layers = sum([
+        bool(any(_v35_command_available(t) for t in [
+            "borg", "restic", "duplicity",
+        ])),
+        bool(any(_v35_command_available(t) for t in [
+            "zfs", "btrfs", "snapper",
+        ])),
+    ])
+    encrypted_backup = bool(
+        _v35_command_available("borg") or
+        _v35_command_available("restic")
+    )
+    backup_score = backup_layers + (1 if encrypted_backup else 0)
+    results.append(_v35_cisa_result(
+        f"{cat} - 3-2-1 Backup Foundation",
+        "Pass" if backup_score >= 2 else "Warning",
+        f"CISA Stop Ransomware backup foundation: {backup_score}/3",
+        severity="Critical",
+        details=(
+            f"backup tools layers: {backup_layers}, "
+            f"encrypted: {encrypted_backup}"
+        ),
+        remediation=remediation_for("borg"),
+        cross_references={
+            "CISA": "Stop Ransomware",
+            "NIST": "CP-9, CP-9(8)",
+        },
+    ))
+
+    # Network segmentation for ransomware containment
+    segmentation_layers = sum([
+        bool(
+            _v35_systemd_active("ufw.service") == "active" or
+            (_v35_run_command(["firewall-cmd", "--state"], timeout=3.0)[0] == 0 and
+             "running" in (_v35_run_command(
+                ["firewall-cmd", "--state"], timeout=3.0,
+            )[1] or ""))
+        ),
+        # MAC enforcement
+        bool(
+            (_v35_command_available("getenforce") and
+             (_v35_run_command(["getenforce"], timeout=2.0)[1] or "").strip()
+             == "Enforcing") or _v35_command_available("aa-status")
+        ),
+        # Mount restrictions
+        ("noexec" in _v35_read_file_safe("/etc/fstab") or
+         "nodev" in _v35_read_file_safe("/etc/fstab")),
+    ])
+    results.append(_v35_cisa_result(
+        f"{cat} - Containment Layers",
+        "Pass" if segmentation_layers >= 2 else "Warning",
+        f"CISA Stop Ransomware containment: {segmentation_layers}/3",
+        severity="High",
+        details=f"Layers: {segmentation_layers}",
+        cross_references={
+            "CISA": "Stop Ransomware",
+            "NIST": "SC-7, AC-3",
+        },
+    ))
+
+    # Anti-malware + EDR
+    anti_malware_layers = sum([
+        bool(
+            _v35_systemd_active("clamav-daemon.service") == "active" or
+            _v35_systemd_active("clamd.service") == "active"
+        ),
+        _v35_command_available("rkhunter"),
+        _v35_command_available("chkrootkit"),
+        _v35_file_exists("/var/ossec/etc/ossec.conf"),
+        _v35_systemd_active("falco.service") == "active",
+    ])
+    results.append(_v35_cisa_result(
+        f"{cat} - Anti-Malware/EDR Layers",
+        "Pass" if anti_malware_layers >= 2 else "Warning",
+        f"CISA Stop Ransomware AV/EDR layers: {anti_malware_layers}/5",
+        severity="High",
+        details=f"Layers: {anti_malware_layers}",
+        cross_references={
+            "CISA": "Stop Ransomware",
+            "NIST": "SI-3, SI-4",
+        },
+    ))
+
+
+def _check_cisa_v35_shields_up(results, shared_data, os_info):
+    """CISA Shields Up heightened-defense activities."""
+    cat = "CISA v3.5 - Shields Up"
+
+    # Shields Up: validate logging is comprehensive
+    logging_comprehensive = (
+        _v35_systemd_active("auditd.service") == "active" and
+        _v35_directory_exists("/var/log/journal")
+    )
+    # Centralized logging
+    rsy = _v35_read_file_safe("/etc/rsyslog.conf")
+    siem_forward = "@@" in rsy or "omfwd" in rsy
+    if not siem_forward and _v35_directory_exists("/etc/rsyslog.d"):
+        for f in _v35_list_directory("/etc/rsyslog.d"):
+            c = _v35_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+            if "@@" in c or "omfwd" in c:
+                siem_forward = True
+                break
+    shields_up_logging = logging_comprehensive and siem_forward
+    results.append(_v35_cisa_result(
+        f"{cat} - Logging Comprehensive",
+        "Pass" if shields_up_logging else "Warning",
+        f"CISA Shields Up comprehensive logging: {shields_up_logging}",
+        severity="High",
+        details=(
+            f"auditd + persistent + SIEM forward: {shields_up_logging}"
+        ),
+        cross_references={
+            "CISA": "Shields Up",
+            "NIST": "AU-6, AU-12",
+        },
+    ))
+
+    # Shields Up: backup verification
+    backup_recent = False
+    cron_backup_dirs = ["/etc/cron.daily", "/etc/cron.hourly"]
+    for d in cron_backup_dirs:
+        if not _v35_directory_exists(d):
+            continue
+        for f in _v35_list_directory(d):
+            f_lower = f.lower()
+            if any(k in f_lower for k in [
+                "backup", "borg", "restic", "duplicity",
+            ]):
+                backup_recent = True
+                break
+        if backup_recent:
+            break
+    results.append(_v35_cisa_result(
+        f"{cat} - Backup Active",
+        "Pass" if backup_recent else "Warning",
+        f"CISA Shields Up daily backup automation: {backup_recent}",
+        severity="High",
+        details=f"Backup cron job: {backup_recent}",
+        cross_references={
+            "CISA": "Shields Up",
+            "NIST": "CP-9",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_cisa_v35 = run_checks
+
+
+def run_checks(shared_data: Optional[Dict[str, Any]] = None) -> List[AuditResult]:
+    """Execute the v3.5 expanded CISA module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_cisa_v35(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_cisa_v35_secure_by_design_depth(results, shared_data, os_info)
+        _check_cisa_v35_kev_readiness(results, shared_data, os_info)
+        _check_cisa_v35_ztmm_pillars(results, shared_data, os_info)
+        _check_cisa_v35_stop_ransomware(results, shared_data, os_info)
+        _check_cisa_v35_shields_up(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="CISA - Error",
+            status="Error",
+            message=f"CISA v3.5 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
 if __name__ == "__main__":
     """Allow module to be run standalone for testing"""
     import socket
@@ -2528,7 +3868,7 @@ if __name__ == "__main__":
     test_shared_data = {
         "hostname": socket.gethostname(),
         "os_version": f"{platform.system()} {platform.release()}",
-        "scan_date": datetime.datetime.now(),
+        "scan_date": datetime.now(),
         "is_root": os.geteuid() == 0,
         "script_path": Path(__file__).parent if hasattr(Path(__file__), 'parent') else Path.cwd()
     }
@@ -2636,7 +3976,3 @@ if __name__ == "__main__":
     print("\n" + "="*70)
     print("End of CISA module test")
     print("="*70)
-
-# ============================================================================
-# End of module_cisa.py
-# ============================================================================
