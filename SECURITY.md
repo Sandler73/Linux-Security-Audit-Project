@@ -16,10 +16,15 @@ We provide security updates for the following versions:
 
 | Version | Supported          | Status |
 | ------- | ------------------ | ------ |
-| 2.0.x   | ✅ Yes            | Current stable release |
-| 1.1.x   | ⚠️ Limited        | Security fixes only until 2026-09-30 |
-| 1.0.x   | ❌ No             | End of life |
-| < 1.0   | ❌ No             | No longer supported |
+| 3.8.x   | [x] Yes             | Current stable release (June 2026) |
+| 3.7.x   | [x] Yes             | Correlation, profiles, rollup metrics, remediation consistency |
+| 3.5.x - 3.6.x | [x] Yes       | Deeper expansion + performance caching |
+| 3.3.x - 3.4.x | [!] Limited   | Security fixes only until 2026-12-31 |
+| 3.0.x - 3.2.x | [ ] No        | End of life |
+| 2.0.x   | [!] Limited        | Security fixes only until 2026-09-30 |
+| 1.1.x   | [ ] End of life    | No further updates |
+| 1.0.x   | [ ] No             | End of life |
+| < 1.0   | [ ] No             | No longer supported |
 
 **Recommendation**: Always use the latest stable release to ensure you have the most recent security updates and features.
 
@@ -82,19 +87,19 @@ This tool is designed to find security issues in Linux systems. If you find issu
 ### Tool Security Design
 
 #### What the Tool Does
-- ✅ Reads system configuration files and /proc filesystem
-- ✅ Executes read-only system commands with intelligent caching
-- ✅ Generates local report files in reports/ directory
-- ✅ Writes structured logs to logs/ directory
-- ✅ Computes compliance scores against configurable thresholds
-- ✅ Provides remediation commands (on request)
+- [x] Reads system configuration files and /proc filesystem
+- [x] Executes read-only system commands with intelligent caching
+- [x] Generates local report files in reports/ directory
+- [x] Writes structured logs to logs/ directory
+- [x] Computes compliance scores against configurable thresholds
+- [x] Provides remediation commands (on request)
 
 #### What the Tool Does NOT Do
-- ❌ Make unauthorized system changes (without explicit user request)
-- ❌ Send data over the network
-- ❌ Collect or transmit personal information
-- ❌ Execute arbitrary code from external sources
-- ❌ Create backdoors or persistence mechanisms
+- [ ] Make unauthorized system changes (without explicit user request)
+- [ ] Send data over the network
+- [ ] Collect or transmit personal information
+- [ ] Execute arbitrary code from external sources
+- [ ] Create backdoors or persistence mechanisms
 
 ### Privilege Requirements
 
@@ -220,7 +225,7 @@ sudo python3 linux_security_audit.py --remediate-fail --auto-remediate
 #### Dependencies
 
 **Zero External Dependencies**:
-- Uses only Python standard library (requires Python 3.7+ for dataclasses)
+- Uses only Python standard library (requires Python 3.7+ for dataclasses) (requires Python 3.7+ for dataclasses) (requires Python 3.7+ for dataclasses)
 - No pip packages required
 - No external API calls
 - No internet connectivity required
@@ -301,7 +306,7 @@ sudo python3 linux_security_audit.py --remediate-fail --auto-remediate
 
 #### Running Audits
 
-**✅ DO**:
+**[x] DO**:
 - Run audits regularly (weekly/monthly)
 - Review results carefully
 - Prioritize critical findings
@@ -309,7 +314,7 @@ sudo python3 linux_security_audit.py --remediate-fail --auto-remediate
 - Track remediation progress
 - Use version control for reports
 
-**❌ DON'T**:
+**[ ] DON'T**:
 - Run as root unnecessarily (audit mode)
 - Ignore "Error" status items
 - Skip testing remediations
@@ -500,7 +505,7 @@ We appreciate responsible disclosure and will acknowledge security researchers w
 
 ---
 
-**Last Updated**: March 2, 2026  
-**Security Policy Version**: 2.0  
+**Last Updated**: March 2, 2026
+**Security Policy Version**: 2.0
 
 *This security policy is subject to change. Check this file regularly for updates.*
