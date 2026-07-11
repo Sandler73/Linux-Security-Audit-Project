@@ -16,12 +16,11 @@ We provide security updates for the following versions:
 
 | Version | Supported          | Status |
 | ------- | ------------------ | ------ |
-| 3.8.x   | [x] Yes             | Current stable release (June 2026) |
-| 3.7.x   | [x] Yes             | Correlation, profiles, rollup metrics, remediation consistency |
-| 3.5.x - 3.6.x | [x] Yes       | Deeper expansion + performance caching |
-| 3.3.x - 3.4.x | [!] Limited   | Security fixes only until 2026-12-31 |
-| 3.0.x - 3.2.x | [ ] No        | End of life |
-| 2.0.x   | [!] Limited        | Security fixes only until 2026-09-30 |
+| 3.9.x   | [x] Yes             | Current stable release (June 2026) - remediation consistency, PCI-DSS rename, scoring fix |
+| 3.8.x   | [x] Yes             | Attack-surface assessment, per-framework split reports |
+| 3.6.x - 3.7.x | [x] Yes       | Correlation, distribution profiles, rollup metrics, helper caching |
+| 3.5.x   | [!] Limited         | Security fixes only until 2026-12-31 |
+| 3.0.x - 3.4.x | [ ] No        | End of life |
 | 1.1.x   | [ ] End of life    | No further updates |
 | 1.0.x   | [ ] No             | End of life |
 | < 1.0   | [ ] No             | No longer supported |
@@ -93,6 +92,9 @@ This tool is designed to find security issues in Linux systems. If you find issu
 - [x] Writes structured logs to logs/ directory
 - [x] Computes compliance scores against configurable thresholds
 - [x] Provides remediation commands (on request)
+- [x] Runs on the Python standard library only - zero external dependencies,
+  so there is no third-party supply-chain surface to vet
+- [x] Operates fully offline - no network calls at runtime
 
 #### What the Tool Does NOT Do
 - [ ] Make unauthorized system changes (without explicit user request)
@@ -114,6 +116,7 @@ This tool is designed to find security issues in Linux systems. If you find issu
 - Makes system configuration changes
 - Should be tested in non-production first
 - Requires explicit user confirmation
+- Can emit a rollback script (`--rollback-path`) to reverse applied changes
 
 ### Data Security
 
@@ -214,7 +217,7 @@ sudo python3 linux_security_audit.py --remediate-fail --auto-remediate
 - Subprocess commands sanitized
 - Input validation on all parameters
 - Type hints for type safety
-- Comprehensive error handling
+- Robust error handling
 
 **Code Review**:
 - All changes reviewed before merge
@@ -295,7 +298,7 @@ sudo python3 linux_security_audit.py --remediate-fail --auto-remediate
 **Risk**: False sense of security.
 
 **Mitigation**:
-- Use as part of comprehensive security program
+- Use as part of a broader security program
 - Combine with other security tools
 - Regular professional security audits
 - Stay updated on new vulnerabilities
@@ -471,7 +474,7 @@ sudo python3 linux_security_audit.py -m STIG,NSA,NIST
 **Not Certified**:
 - This is not a certified security tool
 - Not a replacement for professional audits
-- Use as part of comprehensive security program
+- Use as part of a broader security program
 
 ## Contact
 
