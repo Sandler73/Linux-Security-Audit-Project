@@ -3,7 +3,7 @@
 audit_common.py
 Shared Utilities and Data Cache for Linux Security Audit Modules
 
-Version: 2.1
+Version: 2.0
 
 SYNOPSIS:
     Consolidated library of common utilities, OS detection, command execution
@@ -361,6 +361,30 @@ class OSInfo:
     def __str__(self) -> str:
         return f"{self.distro} {self.version} ({self.family})"
 
+    @property
+    def distro_id(self) -> str:
+        """Compatibility alias for the os_detection.OSInfo API.
+
+        os_detection.OSInfo exposes the distribution identifier as
+        `.distro_id`; this class historically stored it as `.distro`. Some
+        cross-module code (e.g. DistBaseline's per-distro dispatch) reads
+        `.distro_id` regardless of which OSInfo variant it receives, so we
+        expose it here too. Returns the lowercased distro id for consistency
+        with os_detection (which normalizes os-release ID to lowercase).
+        """
+        d = (self.distro or "").lower()
+        return "" if d in ("", "unknown") else d
+
+    @property
+    def distro_version(self) -> str:
+        """Compatibility alias: os_detection exposes distro_version."""
+        return self.version
+
+    @property
+    def pretty_name(self) -> str:
+        """Compatibility alias for os_detection.OSInfo.pretty_name."""
+        return f"{self.distro} {self.version}".strip()
+
     def __repr__(self) -> str:
         return (
             f"OSInfo(family={self.family!r}, distro={self.distro!r}, "
@@ -382,6 +406,21 @@ class OSInfo:
     def is_arch_based(self) -> bool:
         """Check if this is an Arch-based distribution"""
         return self.family == 'arch'
+
+    # v3.7 compatibility aliases - mirror os_detection.OSInfo's
+    # `is_<family>_family()` naming so the two OSInfo implementations are
+    # interchangeable wherever an instance flows between layers.
+    def is_debian_family(self) -> bool:
+        return self.is_debian_based()
+
+    def is_redhat_family(self) -> bool:
+        return self.is_redhat_based()
+
+    def is_suse_family(self) -> bool:
+        return self.is_suse_based()
+
+    def is_arch_family(self) -> bool:
+        return self.is_arch_based()
 
     def to_dict(self) -> Dict[str, str]:
         """Convert to dictionary for serialization"""
@@ -917,7 +956,7 @@ class SharedDataCache:
             for line in running_output.stdout.splitlines():
                 parts = line.strip().split()
                 if parts and '.service' in parts[0]:
-                    svc_name = parts[0].replace('.service', '').lstrip('●').strip()
+                    svc_name = parts[0].replace('.service', '').lstrip('*').strip()
                     running_services.add(svc_name)
         self._parsed_data['running_services'] = running_services
 
@@ -1341,14 +1380,14 @@ def check_kernel_parameter(parameter: str,
     Returns:
         Tuple of (exists: bool, value: str)
     """
-    # Try cache first (fastest — pre-parsed sysctl -a output)
+    # Try cache first (fastest - pre-parsed sysctl -a output)
     if cache:
         value = cache.get_sysctl_value(parameter)
         if value is not None:
             return True, value
-        # Cache miss — parameter may not exist, fall through to direct read
+        # Cache miss - parameter may not exist, fall through to direct read
 
-    # Try /proc/sys direct read (fast — no subprocess overhead)
+    # Try /proc/sys direct read (fast - no subprocess overhead)
     proc_path = "/proc/sys/" + parameter.replace('.', '/')
     try:
         if os.path.exists(proc_path):
@@ -2193,7 +2232,3 @@ def get_library_info() -> Dict[str, Any]:
             and not name.startswith('_')
         ])
     }
-
-# ============================================================================
-# End of audit_common.py
-# ============================================================================
