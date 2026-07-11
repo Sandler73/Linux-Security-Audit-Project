@@ -2,7 +2,7 @@
 """
 module_stig.py
 STIG (Security Technical Implementation Guide) Module for Linux
-Version: 2.2
+Version: 2.1
 
 SYNOPSIS:
     Comprehensive DISA STIG (Security Technical Implementation Guide)
@@ -165,7 +165,61 @@ except ImportError:
         HAS_COMMON_LIB = False
 
 MODULE_NAME = "STIG"
-MODULE_VERSION = "2.2"
+
+# v3.4 Remediation library wiring
+try:
+    from shared_components.remediation_library import get_remediation as _v34_get_remediation
+    from shared_components.remediation_library import get_removal_remediation as _v34_get_removal
+    from shared_components.remediation_library import get_patch_remediation as _v34_get_patch
+    from shared_components.os_detection import detect_os as _v34_detect_os
+    _v34_OSINFO_CACHE = None
+    def remediation_for(tool_id):
+        """Return distro-aware remediation text for a registered tool.
+
+        Falls back to a short "Install <tool>" string if the library
+        does not have an entry for the tool_id.
+        """
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        text = _v34_get_remediation(tool_id, _v34_OSINFO_CACHE)
+        return text if text else f"Install {tool_id} via your distribution\'s package manager"
+
+    def _v34_resolve_os():
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        return _v34_OSINFO_CACHE
+
+    def removal_for(canonical_token, extra_context=""):
+        """Return OS-aware package-removal remediation text."""
+        try:
+            return _v34_get_removal(canonical_token, _v34_resolve_os(),
+                                    extra_context=extra_context)
+        except Exception:
+            return f"Remove {canonical_token} via your distribution\'s package manager"
+
+    def patch_for(extra_context=""):
+        """Return OS-aware security-patch remediation text."""
+        try:
+            return _v34_get_patch(_v34_resolve_os(), extra_context=extra_context)
+        except Exception:
+            return "Apply available security updates via your distribution\'s package manager"
+except ImportError:  # pragma: no cover
+    def remediation_for(tool_id):
+        return f"Install {tool_id} via your distribution\'s package manager"
+    def removal_for(canonical_token, extra_context=""):
+        return f"Remove {canonical_token} via your distribution\'s package manager"
+    def patch_for(extra_context=""):
+        return "Apply available security updates via your distribution\'s package manager"
+
+MODULE_VERSION = "3.9"
 
 # Module logger (uses structured logging if audit_common is available)
 logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
@@ -686,7 +740,7 @@ def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]
         status="Pass" if sudo_installed else "Fail",
         message=f"{get_stig_id('AC', 14)}: sudo installed",
         details="sudo available" if sudo_installed else "Not installed",
-        remediation="Install: apt-get install sudo || yum install sudo"
+        remediation=remediation_for("sudo")
     ))
     
     # AC-015: sudoers file permissions (CAT II)
@@ -787,17 +841,16 @@ def check_access_control(results: List[AuditResult], shared_data: Dict[str, Any]
             remediation="chmod 0000 /etc/gshadow"
         ))
     
-    # AC-022: World-writable files (CAT II)
-    result = run_command("find / -xdev -type f -perm -0002 2>/dev/null | head -20 | wc -l")
-    world_writable = safe_int_parse(result.stdout.strip())
-    
+    # AC-022: World-writable files (CAT II) (canonical assessment)
+    from shared_components.shared_assessments import get_world_writable_assessment as _ww_assess
+    _ww = _ww_assess("fail")
     results.append(AuditResult(
         module=MODULE_NAME,
         category=f"STIG - Access Control ({CAT_II})",
-        status="Pass" if world_writable == 0 else "Fail",
+        status=_ww.status,
         message=f"{get_stig_id('AC', 22)}: No world-writable files",
-        details=f"{world_writable} world-writable files found",
-        remediation="Remove world-write: chmod o-w <file>"
+        details=_ww.details,
+        remediation=_ww.remediation
     ))
     
     # AC-023: World-writable directories (CAT II)
@@ -1097,7 +1150,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         status="Pass" if auditd_status['installed'] else "Fail",
         message=f"{get_stig_id('AU', 1)}: auditd package installed",
         details="auditd installed" if auditd_status['installed'] else "Not installed",
-        remediation="Install: apt-get install auditd || yum install audit"
+        remediation=remediation_for("auditd")
     ))
     
     # AU-002: auditd service enabled (CAT II)
@@ -1107,7 +1160,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         status="Pass" if auditd_status['enabled'] else "Fail",
         message=f"{get_stig_id('AU', 2)}: auditd service enabled",
         details="Enabled" if auditd_status['enabled'] else "Not enabled",
-        remediation="systemctl enable auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # AU-003: auditd service active (CAT II)
@@ -1426,7 +1479,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         status="Pass" if rsyslog_installed else "Fail",
         message=f"{get_stig_id('AU', 24)}: System logging installed",
         details="rsyslog/syslog-ng installed" if rsyslog_installed else "Not installed",
-        remediation="Install: apt-get install rsyslog"
+        remediation=remediation_for("rsyslog")
     ))
     
     # AU-025: rsyslog service active (CAT II)
@@ -1463,7 +1516,7 @@ def check_audit_accountability(results: List[AuditResult], shared_data: Dict[str
         status="Pass" if logrotate_installed else "Fail",
         message=f"{get_stig_id('AU', 27)}: Log rotation configured",
         details="logrotate installed" if logrotate_installed else "Not installed",
-        remediation="Install: apt-get install logrotate"
+        remediation=remediation_for("logrotate")
     ))
     
     # AU-028: Logrotate configuration exists (CAT II)
@@ -2008,7 +2061,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if aide_installed else "Fail",
         message=f"{get_stig_id('SI', 1)}: File integrity tool (AIDE) installed",
         details="AIDE installed" if aide_installed else "Not installed",
-        remediation="Install: apt-get install aide || yum install aide"
+        remediation=remediation_for("aide")
     ))
     
     # SI-002: AIDE database initialized (CAT II)
@@ -2020,7 +2073,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if aide_db else "Fail",
         message=f"{get_stig_id('SI', 2)}: AIDE database initialized",
         details="Database exists" if aide_db else "Not initialized",
-        remediation="Initialize: aideinit"
+        remediation=remediation_for("aide")
     ))
     
     # SI-003: AIDE scheduled to run (CAT II)
@@ -2045,7 +2098,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if av_installed else "Warning",
         message=f"{get_stig_id('SI', 4)}: Anti-malware software installed",
         details="ClamAV installed" if av_installed else "Not installed",
-        remediation="Install: apt-get install clamav clamav-daemon"
+        remediation=remediation_for("clamav")
     ))
     
     # SI-005: Anti-virus definitions updated (CAT II)
@@ -2064,7 +2117,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
             status="Pass" if defs_current else "Warning",
             message=f"{get_stig_id('SI', 5)}: Anti-malware definitions current",
             details=f"Last update: {db_age} days ago" if db_age else "No definitions",
-            remediation="Update: freshclam"
+            remediation=remediation_for("clamav")
         ))
     
     # SI-006: Automatic virus definition updates (CAT II)
@@ -2076,7 +2129,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if freshclam_enabled else "Warning",
         message=f"{get_stig_id('SI', 6)}: Automatic malware definition updates",
         details="Enabled" if freshclam_enabled else "Not enabled",
-        remediation="systemctl enable clamav-freshclam"
+        remediation=remediation_for("clamav")
     ))
     
     # SI-007: System baseline documented (CAT III)
@@ -2112,7 +2165,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if security_updates == 0 else "Fail",
         message=f"{get_stig_id('SI', 8)}: Security updates applied",
         details=f"{security_updates} security updates available",
-        remediation="Apply updates: apt-get upgrade || yum update"
+        remediation=patch_for()
     ))
     
     # SI-009: Automatic security updates (CAT II)
@@ -2124,7 +2177,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if auto_updates else "Warning",
         message=f"{get_stig_id('SI', 9)}: Automatic security updates configured",
         details="Configured" if auto_updates else "Not configured",
-        remediation="Install: apt-get install unattended-upgrades"
+        remediation=remediation_for("unattended-upgrades")
     ))
     
     # SI-010: Package repository security (CAT II)
@@ -2256,7 +2309,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if not prelink_installed else "Warning",
         message=f"{get_stig_id('SI', 18)}: Prelink not installed",
         details="Prelink installed" if prelink_installed else "Not installed",
-        remediation="Remove: apt-get purge prelink"
+        remediation=removal_for("prelink")
     ))
     
     # SI-019: Kernel modules verified (CAT II)
@@ -2299,7 +2352,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if not x_installed else "Warning",
         message=f"{get_stig_id('SI', 21)}: X Window System not on server",
         details="X11 installed" if x_installed else "Not installed",
-        remediation="Remove: apt-get purge xserver-xorg*"
+        remediation=removal_for("xserver")
     ))
     
     # SI-022: System error logging configured (CAT II)
@@ -2325,7 +2378,7 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         status="Pass" if time_active else "Fail",
         message=f"{get_stig_id('SI', 23)}: Time synchronization service active",
         details="Active" if time_active else "Not active",
-        remediation="systemctl enable chronyd"
+        remediation=remediation_for("chrony")
     ))
     
     # SI-024: Removable media automount disabled (CAT II)
@@ -2341,17 +2394,16 @@ def check_system_information_integrity(results: List[AuditResult], shared_data: 
         remediation="systemctl disable autofs"
     ))
     
-    # SI-025: World-writable files (CAT II)
-    result = run_command("find / -xdev -type f -perm -0002 2>/dev/null | head -10 | wc -l")
-    world_writable = safe_int_parse(result.stdout.strip())
-    
+    # SI-025: World-writable files (CAT II) (canonical assessment)
+    from shared_components.shared_assessments import get_world_writable_assessment as _ww_assess
+    _ww = _ww_assess("fail")
     results.append(AuditResult(
         module=MODULE_NAME,
         category=f"STIG - System & Information Integrity ({CAT_II})",
-        status="Pass" if world_writable == 0 else "Fail",
+        status=_ww.status,
         message=f"{get_stig_id('SI', 25)}: No world-writable files",
-        details=f"{world_writable} world-writable files",
-        remediation="Remove world-write permission: chmod o-w <file>"
+        details=_ww.details,
+        remediation=_ww.remediation
     ))
     
     # SI-026: Unowned files (CAT II)
@@ -2590,7 +2642,7 @@ def check_configuration_management(results: List[AuditResult], shared_data: Dict
         status="Pass" if sysstat_installed else "Info",
         message=f"{get_stig_id('CM', 9)}: System activity accounting available",
         details="sysstat installed" if sysstat_installed else "Not installed",
-        remediation="Install: apt-get install sysstat"
+        remediation=remediation_for("sysstat")
     ))
     
     # CM-010: Process accounting enabled (CAT III)
@@ -3686,6 +3738,1456 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
 # Module Testing
 # ============================================================================
 
+
+
+# ============================================================================
+# v3.3 EXPANSION - DISA STIG Deep V-Number Coverage
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds explicit V-number cross-references for additional STIG controls:
+#   - RHEL 9 STIG additional V-numbers
+#   - Ubuntu 22.04 STIG additional V-numbers
+#   - General Purpose Operating System SRG (GPOS-00001 to GPOS-00510)
+#   - Container Platform SRG indicators
+#   - Kubernetes STIG indicators (where containers detected)
+# ============================================================================
+
+from shared_components.module_helpers import (
+    read_file_safe as _v33_read_file_safe,
+    file_exists as _v33_file_exists,
+    directory_exists as _v33_directory_exists,
+    command_available as _v33_command_available,
+    run_command as _v33_run_command,
+    read_sysctl as _v33_read_sysctl,
+    systemd_active as _v33_systemd_active,
+    file_mode as _v33_file_mode,
+    list_directory as _v33_list_directory,
+)
+
+
+def _v33_stig_result(category, status, message, severity="Medium",
+                     details="", remediation="", cross_references=None):
+    """Build AuditResult for STIG v3.3 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_stig_v33_rhel9_additional(results, shared_data, os_info):
+    """RHEL 9 STIG additional V-numbers."""
+
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+
+    # V-258003 - PrintLastLog
+    pll_match = re.search(r"^\s*PrintLastLog\s+(\S+)", sshd, re.MULTILINE)
+    pll = pll_match.group(1).lower() if pll_match else "yes"  # default
+    results.append(_v33_stig_result(
+        "STIG V-258003 v3.3",
+        "Pass" if pll == "yes" else "Fail",
+        "V-258003 SSH PrintLastLog enabled",
+        severity="Medium",
+        details=f"PrintLastLog = {pll}",
+        remediation="In /etc/ssh/sshd_config: PrintLastLog yes",
+        cross_references={
+            "STIG": "V-258003 (RHEL 9)", "NIST": "AC-9",
+        },
+    ))
+
+    # V-258006 - GSSAPIAuthentication
+    gssapi_match = re.search(r"^\s*GSSAPIAuthentication\s+(\S+)", sshd, re.MULTILINE)
+    gssapi = gssapi_match.group(1).lower() if gssapi_match else "yes"
+    results.append(_v33_stig_result(
+        "STIG V-258006 v3.3",
+        "Pass" if gssapi == "no" else "Fail",
+        "V-258006 SSH GSSAPIAuthentication disabled",
+        severity="Medium",
+        details=f"GSSAPIAuthentication = {gssapi}",
+        remediation="In /etc/ssh/sshd_config: GSSAPIAuthentication no",
+        cross_references={
+            "STIG": "V-258006 (RHEL 9)", "NIST": "CM-7",
+        },
+    ))
+
+    # V-258007 - KerberosAuthentication
+    kerb_match = re.search(r"^\s*KerberosAuthentication\s+(\S+)", sshd, re.MULTILINE)
+    kerb = kerb_match.group(1).lower() if kerb_match else "yes"
+    results.append(_v33_stig_result(
+        "STIG V-258007 v3.3",
+        "Pass" if kerb == "no" else "Fail",
+        "V-258007 SSH KerberosAuthentication disabled",
+        severity="Medium",
+        details=f"KerberosAuthentication = {kerb}",
+        remediation="In /etc/ssh/sshd_config: KerberosAuthentication no",
+        cross_references={
+            "STIG": "V-258007 (RHEL 9)", "NIST": "CM-7",
+        },
+    ))
+
+    # V-258028 - GPG signing of repositories
+    rpm_gpgcheck = "gpgcheck=1" in (
+        _v33_read_file_safe("/etc/yum.conf") or
+        _v33_read_file_safe("/etc/dnf/dnf.conf")
+    )
+    results.append(_v33_stig_result(
+        "STIG V-258028 v3.3",
+        "Pass" if rpm_gpgcheck else "Fail",
+        "V-258028 RPM gpgcheck enabled",
+        severity="High",
+        details=f"gpgcheck=1: {rpm_gpgcheck}",
+        remediation="In /etc/dnf/dnf.conf: gpgcheck=1",
+        cross_references={
+            "STIG": "V-258028 (RHEL 9)", "NIST": "CM-5(3)",
+        },
+    ))
+
+    # V-258029 - localpkg_gpgcheck
+    localpkg_check = "localpkg_gpgcheck=1" in (
+        _v33_read_file_safe("/etc/yum.conf") or
+        _v33_read_file_safe("/etc/dnf/dnf.conf")
+    )
+    results.append(_v33_stig_result(
+        "STIG V-258029 v3.3",
+        "Pass" if localpkg_check else "Fail",
+        "V-258029 RPM localpkg_gpgcheck enabled",
+        severity="High",
+        details=f"localpkg_gpgcheck=1: {localpkg_check}",
+        remediation="In /etc/dnf/dnf.conf: localpkg_gpgcheck=1",
+        cross_references={
+            "STIG": "V-258029 (RHEL 9)", "NIST": "CM-5(3)",
+        },
+    ))
+
+    # V-258034 - kernel.dmesg_restrict
+    dmesg = _v33_read_sysctl("kernel.dmesg_restrict")
+    results.append(_v33_stig_result(
+        "STIG V-258034 v3.3",
+        "Pass" if dmesg == "1" else "Fail",
+        "V-258034 kernel.dmesg_restrict = 1",
+        severity="Medium",
+        details=f"kernel.dmesg_restrict = {dmesg}",
+        remediation=(
+            "echo 'kernel.dmesg_restrict = 1' >> /etc/sysctl.d/99-stig.conf"
+        ),
+        cross_references={
+            "STIG": "V-258034 (RHEL 9)", "NIST": "AC-3",
+        },
+    ))
+
+    # V-258035 - kernel.kptr_restrict
+    kptr = _v33_read_sysctl("kernel.kptr_restrict")
+    results.append(_v33_stig_result(
+        "STIG V-258035 v3.3",
+        "Pass" if kptr in ("1", "2") else "Fail",
+        "V-258035 kernel.kptr_restrict",
+        severity="Medium",
+        details=f"kernel.kptr_restrict = {kptr}",
+        remediation=(
+            "echo 'kernel.kptr_restrict = 2' >> /etc/sysctl.d/99-stig.conf"
+        ),
+        cross_references={
+            "STIG": "V-258035 (RHEL 9)", "NIST": "AC-3",
+        },
+    ))
+
+    # V-258049 - fs.protected_hardlinks
+    pl = _v33_read_sysctl("fs.protected_hardlinks")
+    results.append(_v33_stig_result(
+        "STIG V-258049 v3.3",
+        "Pass" if pl == "1" else "Fail",
+        "V-258049 fs.protected_hardlinks = 1",
+        severity="Medium",
+        details=f"fs.protected_hardlinks = {pl}",
+        remediation=(
+            "echo 'fs.protected_hardlinks = 1' >> /etc/sysctl.d/99-stig.conf"
+        ),
+        cross_references={
+            "STIG": "V-258049 (RHEL 9)", "NIST": "AC-3",
+        },
+    ))
+
+    # V-258050 - fs.protected_symlinks
+    ps = _v33_read_sysctl("fs.protected_symlinks")
+    results.append(_v33_stig_result(
+        "STIG V-258050 v3.3",
+        "Pass" if ps == "1" else "Fail",
+        "V-258050 fs.protected_symlinks = 1",
+        severity="Medium",
+        details=f"fs.protected_symlinks = {ps}",
+        remediation=(
+            "echo 'fs.protected_symlinks = 1' >> /etc/sysctl.d/99-stig.conf"
+        ),
+        cross_references={
+            "STIG": "V-258050 (RHEL 9)", "NIST": "AC-3",
+        },
+    ))
+
+    # V-258054 - net.ipv4.icmp_echo_ignore_broadcasts
+    icmp_b = _v33_read_sysctl("net.ipv4.icmp_echo_ignore_broadcasts")
+    results.append(_v33_stig_result(
+        "STIG V-258054 v3.3",
+        "Pass" if icmp_b == "1" else "Fail",
+        "V-258054 ICMP echo broadcasts ignored",
+        severity="Medium",
+        details=f"icmp_echo_ignore_broadcasts = {icmp_b}",
+        remediation=(
+            "echo 'net.ipv4.icmp_echo_ignore_broadcasts = 1' "
+            ">> /etc/sysctl.d/99-stig.conf"
+        ),
+        cross_references={
+            "STIG": "V-258054 (RHEL 9)", "NIST": "SC-7",
+        },
+    ))
+
+
+def _check_stig_v33_ubuntu_additional(results, shared_data, os_info):
+    """Ubuntu 22.04 STIG additional V-numbers."""
+
+    # V-260469 - Disable wireless network adapters if not needed
+    rc, out, _ = _v33_run_command(["nmcli", "radio", "wifi"], timeout=3.0)
+    wifi_off = rc == 0 and "disabled" in out.lower()
+    rc2, out2, _ = _v33_run_command(["rfkill", "list", "wifi"], timeout=3.0)
+    rfkill_off = rc2 == 0 and "Soft blocked: yes" in out2
+    wifi_state = wifi_off or rfkill_off
+    has_wifi = (rc == 0 and "wifi" in out.lower()) or (rc2 == 0 and "wlan" in out2.lower())
+    if has_wifi:
+        results.append(_v33_stig_result(
+            "STIG V-260469 v3.3",
+            "Pass" if wifi_state else "Info",
+            "V-260469 Wireless adapters disabled (Ubuntu)",
+            severity="Medium",
+            details=f"Wifi disabled: {wifi_state}",
+            remediation=(
+                "If wireless not needed: nmcli radio wifi off  (or rfkill block all)"
+            ),
+            cross_references={
+                "STIG": "V-260469 (Ubuntu 22.04)", "NIST": "CM-7",
+            },
+        ))
+
+    # V-260473 - APT GPG verification
+    apt_keyring = (
+        _v33_directory_exists("/etc/apt/trusted.gpg.d") or
+        _v33_directory_exists("/etc/apt/keyrings")
+    )
+    results.append(_v33_stig_result(
+        "STIG V-260473 v3.3",
+        "Pass" if apt_keyring else "Fail",
+        "V-260473 APT GPG keyring populated",
+        severity="High",
+        details=f"apt keyring: {apt_keyring}",
+        cross_references={
+            "STIG": "V-260473 (Ubuntu 22.04)", "NIST": "CM-5(3)",
+        },
+    ))
+
+    # V-260491 - apt-get unattended upgrades
+    unattended = _v33_systemd_active("unattended-upgrades.service") == "active"
+    results.append(_v33_stig_result(
+        "STIG V-260491 v3.3",
+        "Pass" if unattended else "Warning",
+        "V-260491 unattended-upgrades active",
+        severity="High",
+        details=f"unattended-upgrades: {unattended}",
+        remediation=(
+            "apt-get install -y unattended-upgrades; "
+            "dpkg-reconfigure unattended-upgrades"
+        ),
+        cross_references={
+            "STIG": "V-260491 (Ubuntu 22.04)", "NIST": "SI-2",
+        },
+    ))
+
+    # V-260507 - AppArmor enabled and enforcing
+    aa_active = _v33_systemd_active("apparmor.service") == "active"
+    rc, _, _ = _v33_run_command(["aa-status", "--enabled"], timeout=3.0)
+    aa_enabled = rc == 0
+    aa_ok = aa_active or aa_enabled
+    results.append(_v33_stig_result(
+        "STIG V-260507 v3.3",
+        "Pass" if aa_ok else "Fail",
+        "V-260507 AppArmor active",
+        severity="High",
+        details=f"apparmor service: {aa_active}, aa-status: {aa_enabled}",
+        remediation=remediation_for("apparmor"),
+        cross_references={
+            "STIG": "V-260507 (Ubuntu 22.04)", "NIST": "AC-3",
+        },
+    ))
+
+    # V-260511 - core dump backtraces
+    coredumps_off = (
+        _v33_read_sysctl("fs.suid_dumpable") == "0"
+    )
+    results.append(_v33_stig_result(
+        "STIG V-260511 v3.3",
+        "Pass" if coredumps_off else "Fail",
+        "V-260511 fs.suid_dumpable = 0",
+        severity="Medium",
+        details=f"suid_dumpable = {_v33_read_sysctl('fs.suid_dumpable')}",
+        remediation=(
+            "echo 'fs.suid_dumpable = 0' >> /etc/sysctl.d/99-stig.conf"
+        ),
+        cross_references={
+            "STIG": "V-260511 (Ubuntu 22.04)", "NIST": "SI-11",
+        },
+    ))
+
+
+def _check_stig_v33_gpos_srg(results, shared_data, os_info):
+    """General Purpose OS SRG (GPOS) controls."""
+
+    # SRG-OS-000023-GPOS-00006 - Logon banner
+    issue = _v33_read_file_safe("/etc/issue")
+    banner_match = re.search(
+        r"^\s*Banner\s+(\S+)", _v33_read_file_safe("/etc/ssh/sshd_config"),
+        re.MULTILINE
+    )
+    banner_set = banner_match and banner_match.group(1) != "none"
+    aup_keywords = ["authorized", "monitor", "consent", "warning"]
+    issue_has_aup = any(k in issue.lower() for k in aup_keywords)
+    banner_ok = banner_set or issue_has_aup
+    results.append(_v33_stig_result(
+        "STIG SRG-OS-000023 v3.3",
+        "Pass" if banner_ok else "Fail",
+        "SRG-OS-000023 System login banner set",
+        severity="High",
+        details=f"SSH Banner set: {bool(banner_set)}, /etc/issue has AUP: {issue_has_aup}",
+        remediation=(
+            "Edit /etc/issue with authorized-use legal banner; "
+            "in /etc/ssh/sshd_config: Banner /etc/issue.net"
+        ),
+        cross_references={
+            "STIG": "SRG-OS-000023-GPOS-00006", "NIST": "AC-8",
+        },
+    ))
+
+    # SRG-OS-000033-GPOS-00014 - FIPS-validated cryptography
+    fips_active = False
+    if _v33_file_exists("/proc/sys/crypto/fips_enabled"):
+        fips_active = _v33_read_file_safe(
+            "/proc/sys/crypto/fips_enabled"
+        ).strip() == "1"
+    results.append(_v33_stig_result(
+        "STIG SRG-OS-000033 v3.3",
+        "Pass" if fips_active else "Info",
+        f"SRG-OS-000033 FIPS-validated cryptography: {fips_active}",
+        severity="High",
+        details=f"Kernel FIPS mode: {fips_active}",
+        remediation="fips-mode-setup --enable; reboot  (RHEL family)",
+        cross_references={
+            "STIG": "SRG-OS-000033-GPOS-00014", "NIST": "SC-13", "FIPS": "140-3",
+        },
+    ))
+
+    # SRG-OS-000037-GPOS-00015 - Audit records contain identity info
+    auditd_active = _v33_systemd_active("auditd.service") == "active"
+    audit_rules = ""
+    if _v33_directory_exists(rules_d := "/etc/audit/rules.d"):
+        for f in _v33_list_directory(rules_d):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v33_read_file_safe(
+                    os.path.join(rules_d, f)
+                )
+    has_uid_filter = "auid" in audit_rules
+    results.append(_v33_stig_result(
+        "STIG SRG-OS-000037 v3.3",
+        "Pass" if (auditd_active and has_uid_filter) else "Warning",
+        "SRG-OS-000037 Audit records with identity (auid)",
+        severity="High",
+        details=f"auditd: {auditd_active}, auid filtering: {has_uid_filter}",
+        remediation=(
+            "Add audit rules with -F auid>=1000 -F auid!=4294967295"
+        ),
+        cross_references={
+            "STIG": "SRG-OS-000037-GPOS-00015", "NIST": "AU-3",
+        },
+    ))
+
+    # SRG-OS-000062-GPOS-00031 - Audit privileged functions
+    has_priv = "privileged" in audit_rules or "execve" in audit_rules
+    results.append(_v33_stig_result(
+        "STIG SRG-OS-000062 v3.3",
+        "Pass" if has_priv else "Fail",
+        "SRG-OS-000062 Audit privileged function execution",
+        severity="High",
+        details=f"privileged/execve audit: {has_priv}",
+        remediation=(
+            "-a always,exit -F arch=b64 -S execve -F euid=0 -k privileged"
+        ),
+        cross_references={
+            "STIG": "SRG-OS-000062-GPOS-00031", "NIST": "AU-2",
+        },
+    ))
+
+    # SRG-OS-000080-GPOS-00048 - Boot loader password protection
+    grub_pwd_set = False
+    for f in ["/etc/grub.d/01_users", "/etc/grub.d/40_custom",
+               "/boot/grub2/user.cfg", "/boot/grub/grub.cfg",
+               "/boot/grub2/grub.cfg"]:
+        c = _v33_read_file_safe(f)
+        if "password_pbkdf2" in c or "GRUB2_PASSWORD" in c:
+            grub_pwd_set = True
+            break
+    results.append(_v33_stig_result(
+        "STIG SRG-OS-000080 v3.3",
+        "Pass" if grub_pwd_set else "Fail",
+        "SRG-OS-000080 GRUB password protection",
+        severity="High",
+        details=f"GRUB password set: {grub_pwd_set}",
+        remediation=(
+            "RHEL: grub2-setpassword. "
+            "Debian: grub-mkpasswd-pbkdf2 then add to /etc/grub.d/40_custom"
+        ),
+        cross_references={
+            "STIG": "SRG-OS-000080-GPOS-00048", "NIST": "AC-3",
+        },
+    ))
+
+    # SRG-OS-000363-GPOS-00150 - File integrity verification
+    fim_present = (
+        _v33_file_exists("/var/lib/aide/aide.db") or
+        _v33_file_exists("/var/lib/aide/aide.db.gz") or
+        _v33_file_exists("/etc/tripwire/tw.cfg")
+    )
+    results.append(_v33_stig_result(
+        "STIG SRG-OS-000363 v3.3",
+        "Pass" if fim_present else "Fail",
+        "SRG-OS-000363 File integrity verification capability",
+        severity="High",
+        details=f"AIDE/Tripwire DB present: {fim_present}",
+        remediation=remediation_for("aide"),
+        cross_references={
+            "STIG": "SRG-OS-000363-GPOS-00150", "NIST": "SI-7",
+        },
+    ))
+
+    # SRG-OS-000437-GPOS-00194 - System startup processes via systemd
+    init_is_systemd = _v33_command_available("systemctl")
+    results.append(_v33_stig_result(
+        "STIG SRG-OS-000437 v3.3",
+        "Pass" if init_is_systemd else "Info",
+        "SRG-OS-000437 systemd-managed startup",
+        severity="Low",
+        details=f"systemctl present: {init_is_systemd}",
+        cross_references={
+            "STIG": "SRG-OS-000437-GPOS-00194", "NIST": "CM-2",
+        },
+    ))
+
+    # SRG-OS-000470-GPOS-00214 - Audit unsuccessful logon
+    has_failed_login = (
+        "/var/run/faillock" in audit_rules or "logins" in audit_rules
+    )
+    results.append(_v33_stig_result(
+        "STIG SRG-OS-000470 v3.3",
+        "Pass" if has_failed_login else "Warning",
+        "SRG-OS-000470 Audit unsuccessful logons",
+        severity="High",
+        details=f"login failure audit: {has_failed_login}",
+        remediation="-w /var/run/faillock -p wa -k logins",
+        cross_references={
+            "STIG": "SRG-OS-000470-GPOS-00214", "NIST": "AU-2",
+        },
+    ))
+
+
+def _check_stig_v33_container_srg(results, shared_data, os_info):
+    """Container Platform SRG indicators (when containers detected)."""
+
+    docker_present = (
+        _v33_command_available("docker") or
+        _v33_systemd_active("docker.service") == "active"
+    )
+    podman_present = _v33_command_available("podman")
+    k8s_present = _v33_command_available("kubelet")
+    cri_present = _v33_command_available("crictl")
+
+    if not (docker_present or podman_present or k8s_present or cri_present):
+        return
+
+    # SRG-APP-000033-CTR-00080 - Container with non-root UID
+    if docker_present:
+        rc, out, _ = _v33_run_command(
+            ["docker", "ps", "--format", "{{.Names}}"], timeout=5.0
+        )
+        any_running = rc == 0 and out.strip()
+        results.append(_v33_stig_result(
+            "STIG SRG-APP-000033-CTR v3.3",
+            "Info",
+            f"Container Platform SRG: Docker containers running ({any_running})",
+            severity="Informational",
+            details=f"Containers running: {bool(any_running)}",
+            cross_references={
+                "STIG": "SRG-APP-000033-CTR-00080", "NIST": "AC-6",
+            },
+        ))
+
+    # Docker daemon hardening
+    if docker_present:
+        daemon_json = _v33_read_file_safe("/etc/docker/daemon.json")
+        hardening = {
+            "userns-remap": "userns-remap" in daemon_json,
+            "no-new-privileges": "no-new-privileges" in daemon_json,
+            "icc-disabled": '"icc": false' in daemon_json,
+            "live-restore": "live-restore" in daemon_json,
+        }
+        enabled = sum(hardening.values())
+        results.append(_v33_stig_result(
+            "STIG SRG-APP-000516-CTR v3.3",
+            "Pass" if enabled >= 2 else "Warning",
+            f"Container daemon hardening ({enabled}/4)",
+            severity="High",
+            details=f"Enabled: {[k for k, v in hardening.items() if v]}",
+            remediation=(
+                'In /etc/docker/daemon.json: '
+                '{"userns-remap":"default","no-new-privileges":true,'
+                '"icc":false,"live-restore":true}'
+            ),
+            cross_references={
+                "STIG": "SRG-APP-000516-CTR", "NIST": "CM-7",
+            },
+        ))
+
+    # Kubernetes presence
+    if k8s_present:
+        results.append(_v33_stig_result(
+            "STIG K8s v3.3",
+            "Info",
+            "Kubernetes kubelet detected - Kubernetes STIG applies",
+            severity="Informational",
+            details="kubelet binary available",
+            remediation=(
+                "Apply Kubernetes STIG (V-242376 to V-242477). "
+                "Configure kubelet --read-only-port=0, --anonymous-auth=false"
+            ),
+            cross_references={
+                "STIG": "Kubernetes STIG", "NIST": "AC-3",
+            },
+        ))
+
+
+def _check_stig_v33_pam_additional(results, shared_data, os_info):
+    """STIG additional PAM controls."""
+
+    # V-230373 - Lock account after 35 days inactivity
+    login_defs = _v33_read_file_safe("/etc/login.defs")
+    inact_match = re.search(r"^\s*INACTIVE\s+(\d+)", login_defs, re.MULTILINE)
+    # Also check useradd defaults
+    useradd_default = _v33_read_file_safe("/etc/default/useradd")
+    inact_useradd = re.search(r"^\s*INACTIVE\s*=\s*(\d+)", useradd_default, re.MULTILINE)
+    inact = None
+    if inact_match:
+        inact = int(inact_match.group(1))
+    elif inact_useradd:
+        inact = int(inact_useradd.group(1))
+    inact_ok = inact is not None and 0 < inact <= 35
+    results.append(_v33_stig_result(
+        "STIG V-230373 v3.3",
+        "Pass" if inact_ok else "Warning",
+        f"V-230373 Inactive account lock <= 35 days ({inact})",
+        severity="Medium",
+        details=f"INACTIVE = {inact}",
+        remediation="useradd -D -f 35; or in /etc/default/useradd: INACTIVE=35",
+        cross_references={
+            "STIG": "V-230373", "NIST": "AC-2(3)",
+        },
+    ))
+
+    # V-230376 - Empty password lock
+    shadow = _v33_read_file_safe("/etc/shadow")
+    empty_pw = []
+    if shadow:
+        for line in shadow.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and parts[1] == "":
+                empty_pw.append(parts[0])
+    results.append(_v33_stig_result(
+        "STIG V-230376 v3.3",
+        "Pass" if not empty_pw else "Fail",
+        f"V-230376 No accounts with empty passwords ({len(empty_pw)})",
+        severity="Critical",
+        details=f"Empty password users: {empty_pw[:5]}",
+        remediation="passwd -l <user> for each",
+        cross_references={
+            "STIG": "V-230376", "NIST": "IA-5",
+        },
+    ))
+
+    # V-230380 - Encrypt user data at rest (LUKS detection)
+    rc, out, _ = _v33_run_command(["lsblk", "-o", "TYPE", "-n"], timeout=3.0)
+    luks = rc == 0 and "crypt" in out.lower()
+    results.append(_v33_stig_result(
+        "STIG V-230380 v3.3",
+        "Pass" if luks else "Warning",
+        f"V-230380 Disk encryption (LUKS): {luks}",
+        severity="High",
+        details=f"LUKS volumes detected: {luks}",
+        remediation="cryptsetup luksFormat <device> for sensitive volumes",
+        cross_references={
+            "STIG": "V-230380", "NIST": "SC-28",
+        },
+    ))
+
+    # V-230388 - Only root has UID 0
+    passwd = _v33_read_file_safe("/etc/passwd")
+    uid0 = []
+    if passwd:
+        for line in passwd.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3:
+                try:
+                    if int(parts[2]) == 0 and parts[0] != "root":
+                        uid0.append(parts[0])
+                except ValueError:
+                    pass
+    results.append(_v33_stig_result(
+        "STIG V-230388 v3.3",
+        "Pass" if not uid0 else "Fail",
+        f"V-230388 Only root has UID 0 ({len(uid0)} extras)",
+        severity="Critical",
+        details=f"Non-root UID 0: {uid0}",
+        remediation="usermod -u <new_uid> <user>",
+        cross_references={
+            "STIG": "V-230388", "NIST": "AC-6",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_stig_v33 = run_checks
+
+
+def run_checks(shared_data):
+    """Execute the v3.3 expanded STIG module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_stig_v33(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_stig_v33_rhel9_additional(results, shared_data, os_info)
+        _check_stig_v33_ubuntu_additional(results, shared_data, os_info)
+        _check_stig_v33_gpos_srg(results, shared_data, os_info)
+        _check_stig_v33_container_srg(results, shared_data, os_info)
+        _check_stig_v33_pam_additional(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="STIG - Error",
+            status="Error",
+            message=f"STIG v3.3 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
+
+
+# ============================================================================
+# v3.5 EXPANSION - DISA STIG Application/Network/Web/Database SRG Coverage
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across DISA STIG areas underrepresented in the existing
+#   module:
+#     - Application Security and Development STIG (server-side software)
+#     - Web Server STIG (nginx/Apache hardening)
+#     - Database STIG (PostgreSQL/MySQL/SQLite hardening surrogates)
+#     - Container Platform STIG depth (Docker/Podman/K8s)
+#     - Network Device STIG (relevant Linux network controls)
+#     - Additional RHEL 9 / Ubuntu 22.04 / Ubuntu 24.04 V-numbers
+#     - SRG-OS additional categories
+#     - SRG-APP-SRC additional categories
+# ============================================================================
+
+# v3.5 helpers
+from shared_components.module_helpers import (
+    read_file_safe as _v35_read_file_safe,
+    file_exists as _v35_file_exists,
+    directory_exists as _v35_directory_exists,
+    command_available as _v35_command_available,
+    run_command as _v35_run_command,
+    read_sysctl as _v35_read_sysctl,
+    systemd_active as _v35_systemd_active,
+    list_directory as _v35_list_directory,
+)
+
+
+def _v35_stig_result(category, status, message, severity="Medium",
+                    details="", remediation="", cross_references=None):
+    """Build AuditResult for STIG v3.5 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_stig_v35_appsrg_application_security(results, shared_data, os_info):
+    """DISA Application Security and Development STIG."""
+    cat = "STIG v3.5 - SRG-APP-SRC"
+
+    # APP-3300 (SRG-APP-000033-DB-000084) - Application security testing tools
+    sast_tools = {
+        "shellcheck": _v35_command_available("shellcheck"),
+        "bandit": _v35_command_available("bandit"),
+        "semgrep": _v35_command_available("semgrep"),
+        "pylint": _v35_command_available("pylint"),
+    }
+    sast_count = sum(1 for v in sast_tools.values() if v)
+    results.append(_v35_stig_result(
+        f"{cat} - SRG-APP-000033 SAST Tooling",
+        "Pass" if sast_count >= 2 else "Warning",
+        f"STIG SRG-APP-000033 SAST tools: {sast_count}/4",
+        severity="Medium",
+        details=f"Available: {[k for k, v in sast_tools.items() if v]}",
+        remediation=(
+            "Install for build pipelines:\n"
+            "  apt-get install -y shellcheck python3-bandit pylint\n"
+            "  pip install --user semgrep"
+        ),
+        cross_references={
+            "STIG": "SRG-APP-000033, V-218790",
+            "NIST": "SA-11", "ISO27001": "A.8.28",
+        },
+    ))
+
+    # APP-3500 - Cryptographic key management surrogate
+    key_mgmt_tools = {
+        "openssl": _v35_command_available("openssl"),
+        "gnutls": _v35_command_available("gnutls-cli"),
+        "TPM (tpm2-tools)": (
+            _v35_command_available("tpm2_pcrread") or
+            _v35_directory_exists("/sys/class/tpm/tpm0")
+        ),
+        "PKCS#11 (pkcs11-tool)": _v35_command_available("pkcs11-tool"),
+    }
+    km_count = sum(1 for v in key_mgmt_tools.values() if v)
+    results.append(_v35_stig_result(
+        f"{cat} - SRG-APP-000503 Key Management",
+        "Pass" if km_count >= 2 else "Warning",
+        f"STIG SRG-APP-000503 Cryptographic key tools: {km_count}/4",
+        severity="High",
+        details=f"Available: {[k for k, v in key_mgmt_tools.items() if v]}",
+        cross_references={
+            "STIG": "SRG-APP-000503",
+            "NIST": "SC-12, SC-13",
+            "FIPS": "140-3",
+        },
+    ))
+
+    # APP-2105 - Audit logging for application events (auditd watching app dirs)
+    rules_text = ""
+    if _v35_directory_exists("/etc/audit/rules.d"):
+        for f in _v35_list_directory("/etc/audit/rules.d"):
+            if f.endswith(".rules"):
+                rules_text += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/audit/rules.d", f)
+                )
+    app_audit_dirs = [
+        "/opt", "/usr/local", "/srv", "/var/www",
+    ]
+    audited_app_dirs = [
+        d for d in app_audit_dirs if d in rules_text
+    ]
+    results.append(_v35_stig_result(
+        f"{cat} - SRG-APP-000089 Application Audit",
+        "Pass" if audited_app_dirs else "Info",
+        f"STIG SRG-APP-000089 Application directory audit: "
+        f"{audited_app_dirs or 'none'}",
+        severity="Medium",
+        details=f"Audited paths: {audited_app_dirs}",
+        remediation=(
+            "Add to /etc/audit/rules.d/41-stig-app.rules:\n"
+            "  -w /opt/ -p wa -k application-changes\n"
+            "  -w /usr/local/ -p wa -k application-changes\n"
+            "  -w /srv/ -p wa -k application-changes"
+        ),
+        cross_references={
+            "STIG": "SRG-APP-000089",
+            "NIST": "AU-2",
+        },
+    ))
+
+
+def _check_stig_v35_websrv_hardening(results, shared_data, os_info):
+    """DISA Web Server STIG (nginx/Apache hardening)."""
+    cat = "STIG v3.5 - SRG-APP-WEB"
+
+    # Detect web server presence
+    nginx_installed = _v35_command_available("nginx") or _v35_systemd_active(
+        "nginx.service"
+    ) == "active"
+    apache_installed = _v35_command_available("apachectl") or any(
+        _v35_systemd_active(s) == "active"
+        for s in ("apache2.service", "httpd.service")
+    )
+
+    if not (nginx_installed or apache_installed):
+        results.append(_v35_stig_result(
+            f"{cat} - Web Server Status",
+            "Info",
+            "No web server detected (Web Server STIG inapplicable)",
+            severity="Informational",
+            details="Neither nginx nor Apache installed/active",
+            cross_references={"STIG": "SRG-APP-WEB"},
+        ))
+        return
+
+    # nginx hardening checks
+    if nginx_installed:
+        nginx_conf_paths = [
+            "/etc/nginx/nginx.conf",
+        ]
+        if _v35_directory_exists("/etc/nginx/conf.d"):
+            for f in _v35_list_directory("/etc/nginx/conf.d"):
+                nginx_conf_paths.append(f"/etc/nginx/conf.d/{f}")
+        nginx_full_conf = ""
+        for p in nginx_conf_paths:
+            if _v35_file_exists(p):
+                nginx_full_conf += "\n" + _v35_read_file_safe(p)
+
+        # SRG-APP-000033-WSR Server tokens off (don't expose version)
+        server_tokens_off = "server_tokens off" in nginx_full_conf
+        results.append(_v35_stig_result(
+            f"{cat} - nginx server_tokens",
+            "Pass" if server_tokens_off else "Warning",
+            f"STIG SRG-APP-000266 nginx server_tokens off: {server_tokens_off}",
+            severity="Medium",
+            details=f"server_tokens off in config: {server_tokens_off}",
+            remediation=(
+                "In /etc/nginx/conf.d/security.conf:\n"
+                "  server_tokens off;\n"
+                "Then: nginx -t && systemctl reload nginx"
+            ),
+            cross_references={
+                "STIG": "SRG-APP-000266-WSR",
+                "NIST": "AC-3",
+            },
+        ))
+
+        # SRG-APP-000516 - Strong TLS only
+        tls_strong = (
+            "TLSv1.2" in nginx_full_conf or "TLSv1.3" in nginx_full_conf
+        ) and "TLSv1 " not in nginx_full_conf and "TLSv1.1" not in nginx_full_conf
+        results.append(_v35_stig_result(
+            f"{cat} - nginx TLS Version",
+            "Pass" if tls_strong else "Warning",
+            f"STIG SRG-APP-000516 nginx TLS strict: {tls_strong}",
+            severity="High",
+            details=f"TLSv1.2/1.3 only in config: {tls_strong}",
+            remediation=(
+                "In /etc/nginx/conf.d/ssl.conf:\n"
+                "  ssl_protocols TLSv1.2 TLSv1.3;\n"
+                "  ssl_ciphers HIGH:!aNULL:!MD5:!RC4:!3DES;"
+            ),
+            cross_references={
+                "STIG": "SRG-APP-000516-WSR",
+                "NIST": "SC-13", "FIPS": "140-3",
+            },
+        ))
+
+        # SRG-APP-000358 - HSTS (Strict-Transport-Security)
+        hsts_present = "Strict-Transport-Security" in nginx_full_conf
+        results.append(_v35_stig_result(
+            f"{cat} - nginx HSTS",
+            "Pass" if hsts_present else "Warning",
+            f"STIG SRG-APP-000358 nginx HSTS header: {hsts_present}",
+            severity="Medium",
+            details=f"HSTS present: {hsts_present}",
+            remediation=(
+                "In nginx server block:\n"
+                "  add_header Strict-Transport-Security "
+                "\"max-age=31536000; includeSubDomains; preload\" always;"
+            ),
+            cross_references={"STIG": "SRG-APP-000358"},
+        ))
+
+    # Apache hardening checks
+    if apache_installed:
+        apache_paths = [
+            "/etc/apache2/apache2.conf",
+            "/etc/apache2/conf-enabled/security.conf",
+            "/etc/httpd/conf/httpd.conf",
+            "/etc/httpd/conf.d/ssl.conf",
+        ]
+        apache_full_conf = ""
+        for p in apache_paths:
+            if _v35_file_exists(p):
+                apache_full_conf += "\n" + _v35_read_file_safe(p)
+
+        # ServerTokens Prod (minimal version disclosure)
+        m = re.search(
+            r"^\s*ServerTokens\s+(\w+)", apache_full_conf, re.MULTILINE,
+        )
+        server_tokens_secure = m and m.group(1).lower() in (
+            "prod", "productonly",
+        )
+        results.append(_v35_stig_result(
+            f"{cat} - Apache ServerTokens",
+            "Pass" if server_tokens_secure else "Warning",
+            f"STIG SRG-APP-000266 Apache ServerTokens: "
+            f"{m.group(1) if m else 'default'}",
+            severity="Medium",
+            details=f"ServerTokens = {m.group(1) if m else 'unset (default Full)'}",
+            remediation=(
+                "In /etc/apache2/conf-available/security.conf or "
+                "/etc/httpd/conf.d/security.conf:\n"
+                "  ServerTokens Prod\n"
+                "  ServerSignature Off"
+            ),
+            cross_references={
+                "STIG": "SRG-APP-000266-WSR",
+            },
+        ))
+
+        # SSLProtocol restrictive
+        m = re.search(
+            r"^\s*SSLProtocol\s+(.+)$", apache_full_conf, re.MULTILINE,
+        )
+        ssl_proto_strong = (
+            m and "TLSv1.2" in m.group(1) and
+            ("-TLSv1" in m.group(1) or "-all" in m.group(1).lower())
+        )
+        results.append(_v35_stig_result(
+            f"{cat} - Apache SSLProtocol",
+            "Pass" if ssl_proto_strong else "Warning",
+            f"STIG SRG-APP-000516 Apache TLS strict: {ssl_proto_strong}",
+            severity="High",
+            details=f"SSLProtocol = {m.group(1) if m else 'unset'}",
+            remediation=(
+                "In /etc/apache2/mods-enabled/ssl.conf or "
+                "/etc/httpd/conf.d/ssl.conf:\n"
+                "  SSLProtocol -all +TLSv1.2 +TLSv1.3"
+            ),
+            cross_references={
+                "STIG": "SRG-APP-000516-WSR",
+                "NIST": "SC-13",
+            },
+        ))
+
+
+def _check_stig_v35_database_srg(results, shared_data, os_info):
+    """DISA Database STIG (PostgreSQL/MySQL hardening surrogates)."""
+    cat = "STIG v3.5 - SRG-APP-DB"
+
+    # Detect databases
+    pg_active = _v35_systemd_active("postgresql.service") == "active" or any(
+        _v35_systemd_active(f"postgresql@{ver}-main.service") == "active"
+        for ver in ("12", "13", "14", "15", "16")
+    )
+    mysql_active = (
+        _v35_systemd_active("mysql.service") == "active" or
+        _v35_systemd_active("mariadb.service") == "active" or
+        _v35_systemd_active("mysqld.service") == "active"
+    )
+
+    if not (pg_active or mysql_active):
+        results.append(_v35_stig_result(
+            f"{cat} - Database Status",
+            "Info",
+            "No database server detected (Database STIG inapplicable)",
+            severity="Informational",
+            details="Neither PostgreSQL nor MySQL/MariaDB active",
+            cross_references={"STIG": "SRG-APP-DB"},
+        ))
+        return
+
+    # PostgreSQL specific
+    if pg_active:
+        # SRG-APP-000148 - Database authentication
+        pg_hba_paths = [
+            "/etc/postgresql/12/main/pg_hba.conf",
+            "/etc/postgresql/13/main/pg_hba.conf",
+            "/etc/postgresql/14/main/pg_hba.conf",
+            "/etc/postgresql/15/main/pg_hba.conf",
+            "/etc/postgresql/16/main/pg_hba.conf",
+            "/var/lib/pgsql/data/pg_hba.conf",
+        ]
+        pg_hba_content = ""
+        for p in pg_hba_paths:
+            if _v35_file_exists(p):
+                pg_hba_content = _v35_read_file_safe(p)
+                break
+
+        if pg_hba_content:
+            trust_lines = [
+                line for line in pg_hba_content.splitlines()
+                if line.strip() and not line.strip().startswith("#")
+                and "trust" in line
+            ]
+            no_trust = not trust_lines
+            results.append(_v35_stig_result(
+                f"{cat} - PostgreSQL Auth Method",
+                "Pass" if no_trust else "Fail",
+                f"STIG SRG-APP-000148 PostgreSQL no 'trust' auth: {no_trust}",
+                severity="Critical",
+                details=f"trust auth lines: {len(trust_lines)}",
+                remediation=(
+                    "In pg_hba.conf, replace 'trust' with 'scram-sha-256' or "
+                    "'md5':\n"
+                    "  host all all 0.0.0.0/0 scram-sha-256\n"
+                    "Then: systemctl reload postgresql\n"
+                    "'trust' allows password-less authentication."
+                ),
+                cross_references={
+                    "STIG": "SRG-APP-000148-DB-000103",
+                    "NIST": "IA-2",
+                },
+            ))
+
+    # MySQL/MariaDB specific
+    if mysql_active:
+        # SRG-APP-000142 - bind-address (not 0.0.0.0 unless intentional)
+        mysql_conf_paths = [
+            "/etc/mysql/my.cnf",
+            "/etc/mysql/mysql.conf.d/mysqld.cnf",
+            "/etc/mysql/mariadb.conf.d/50-server.cnf",
+            "/etc/my.cnf",
+        ]
+        mysql_full_conf = ""
+        for p in mysql_conf_paths:
+            if _v35_file_exists(p):
+                mysql_full_conf += "\n" + _v35_read_file_safe(p)
+        # Also check mysql.conf.d if dir exists
+        if _v35_directory_exists("/etc/mysql/conf.d"):
+            for f in _v35_list_directory("/etc/mysql/conf.d"):
+                mysql_full_conf += "\n" + _v35_read_file_safe(
+                    f"/etc/mysql/conf.d/{f}"
+                )
+
+        bind_match = re.search(
+            r"^\s*bind-address\s*=\s*(\S+)", mysql_full_conf, re.MULTILINE,
+        )
+        bind_addr = bind_match.group(1) if bind_match else "0.0.0.0"
+        bind_secure = bind_addr in ("127.0.0.1", "::1", "localhost")
+        results.append(_v35_stig_result(
+            f"{cat} - MySQL bind-address",
+            "Pass" if bind_secure else "Warning",
+            f"STIG SRG-APP-000142 MySQL bind-address: {bind_addr}",
+            severity="High",
+            details=f"bind-address = {bind_addr}",
+            remediation=(
+                "Unless remote DB connections are required:\n"
+                "In my.cnf or 50-server.cnf:\n"
+                "  bind-address = 127.0.0.1\n"
+                "Then: systemctl restart mysql"
+            ),
+            cross_references={
+                "STIG": "SRG-APP-000142-DB-000094",
+                "NIST": "SC-7",
+            },
+        ))
+
+        # SRG-APP-000516 - TLS for replication / connections
+        require_secure_transport = bool(
+            re.search(
+                r"^\s*require_secure_transport\s*=\s*(?:ON|on|1)",
+                mysql_full_conf, re.MULTILINE,
+            )
+        )
+        ssl_enabled = bool(
+            re.search(r"^\s*ssl[-_]?ca\s*=", mysql_full_conf, re.MULTILINE)
+        )
+        results.append(_v35_stig_result(
+            f"{cat} - MySQL TLS",
+            "Pass" if require_secure_transport or ssl_enabled else "Info",
+            f"STIG SRG-APP-000516 MySQL TLS: "
+            f"require_secure_transport={require_secure_transport}, "
+            f"ssl_ca={ssl_enabled}",
+            severity="High",
+            details=(
+                f"require_secure_transport: {require_secure_transport}, "
+                f"ssl_ca configured: {ssl_enabled}"
+            ),
+            remediation=(
+                "In my.cnf:\n"
+                "  require_secure_transport = ON\n"
+                "  ssl_ca = /etc/mysql/ca.pem\n"
+                "  ssl_cert = /etc/mysql/server-cert.pem\n"
+                "  ssl_key = /etc/mysql/server-key.pem"
+            ),
+            cross_references={
+                "STIG": "SRG-APP-000516-DB-000363",
+                "NIST": "SC-13", "PCI-DSS": "4.2.1",
+            },
+        ))
+
+
+def _check_stig_v35_container_srg_depth(results, shared_data, os_info):
+    """DISA Container Platform SRG depth checks."""
+    cat = "STIG v3.5 - SRG-APP-CTR"
+
+    docker_present = _v35_command_available("docker") or _v35_systemd_active(
+        "docker.service"
+    ) == "active"
+    podman_present = _v35_command_available("podman")
+
+    if not (docker_present or podman_present):
+        results.append(_v35_stig_result(
+            f"{cat} - Container Status",
+            "Info",
+            "No container runtime (Container STIG inapplicable)",
+            severity="Informational",
+            details="Neither docker nor podman present",
+            cross_references={"STIG": "SRG-APP-CTR"},
+        ))
+        return
+
+    # SRG-APP-000118-CTR - Audit container daemon access
+    if docker_present:
+        rules_text = ""
+        if _v35_directory_exists("/etc/audit/rules.d"):
+            for f in _v35_list_directory("/etc/audit/rules.d"):
+                if f.endswith(".rules"):
+                    rules_text += "\n" + _v35_read_file_safe(
+                        os.path.join("/etc/audit/rules.d", f)
+                    )
+        docker_audited = (
+            "/var/lib/docker" in rules_text or
+            "/usr/bin/docker" in rules_text or
+            "docker.sock" in rules_text
+        )
+        results.append(_v35_stig_result(
+            f"{cat} - Docker Audit",
+            "Pass" if docker_audited else "Warning",
+            f"STIG SRG-APP-000118-CTR Docker audit: {docker_audited}",
+            severity="Medium",
+            details=f"Docker paths in audit rules: {docker_audited}",
+            remediation=(
+                "Add to /etc/audit/rules.d/41-stig-docker.rules:\n"
+                "  -w /var/lib/docker -p wa -k docker\n"
+                "  -w /etc/docker -p wa -k docker\n"
+                "  -w /usr/bin/docker -p x -k docker\n"
+                "  -w /usr/lib/systemd/system/docker.service -p wa -k docker\n"
+                "  -w /var/run/docker.sock -p rwxa -k docker"
+            ),
+            cross_references={
+                "STIG": "SRG-APP-000118-CTR",
+                "CIS": "1.1 (Docker Benchmark)",
+            },
+        ))
+
+    # SRG-APP-000516-CTR - Container security posture
+    rootless_capable = (
+        podman_present or  # Podman is rootless by default
+        _v35_directory_exists("/etc/subuid")
+    )
+    results.append(_v35_stig_result(
+        f"{cat} - Rootless Container Capability",
+        "Pass" if rootless_capable else "Info",
+        f"STIG Container rootless capability: {rootless_capable}",
+        severity="Medium",
+        details=(
+            f"podman: {podman_present}, "
+            f"/etc/subuid present: {_v35_directory_exists('/etc/subuid')}"
+        ),
+        remediation=(
+            "Prefer podman (rootless by default) over docker. For docker:\n"
+            "  apt-get install -y uidmap\n"
+            "  dockerd-rootless-setuptool.sh install"
+        ),
+        cross_references={
+            "STIG": "SRG-APP-000516-CTR",
+            "NIST": "AC-6",
+        },
+    ))
+
+    # Image scanning capability
+    image_scan_tools = {
+        "trivy": _v35_command_available("trivy"),
+        "grype": _v35_command_available("grype"),
+        "syft (SBOM)": _v35_command_available("syft"),
+        "docker scan": docker_present,
+    }
+    available = [k for k, v in image_scan_tools.items() if v]
+    results.append(_v35_stig_result(
+        f"{cat} - Image Scanning",
+        "Pass" if available else "Warning",
+        f"STIG Container image scanning tools: {len(available)}/4",
+        severity="High",
+        details=f"Available: {available}",
+        remediation=(
+            f"{remediation_for('trivy')}\n"
+            "Run on each image build: trivy image <repo>:<tag>"
+        ),
+        cross_references={
+            "STIG": "SRG-APP-000456-CTR, SRG-APP-000228-CTR",
+            "NIST": "SI-2, RA-5",
+        },
+    ))
+
+
+def _check_stig_v35_network_device_srg(results, shared_data, os_info):
+    """DISA Network Device STIG (Linux network controls relevant)."""
+    cat = "STIG v3.5 - SRG-NET"
+
+    # SRG-NET-000131 - Default network deny
+    rc, out, _ = _v35_run_command(["ufw", "status", "verbose"], timeout=5.0)
+    ufw_default_deny = rc == 0 and (
+        "Default: deny (incoming)" in out or
+        "deny (incoming)" in out.lower()
+    )
+    rc, out, _ = _v35_run_command(["firewall-cmd", "--get-default-zone"], timeout=5.0)
+    firewalld_strict = rc == 0 and out.strip() in ("drop", "block")
+    rc, out, _ = _v35_run_command(["nft", "list", "ruleset"], timeout=5.0)
+    nft_default_drop = rc == 0 and bool(re.search(
+        r"hook\s+input\s+priority\s+\S+;\s*policy\s+drop;",
+        out, re.MULTILINE,
+    ))
+    default_deny = ufw_default_deny or firewalld_strict or nft_default_drop
+    results.append(_v35_stig_result(
+        f"{cat} - SRG-NET-000131 Default Deny",
+        "Pass" if default_deny else "Warning",
+        f"STIG SRG-NET-000131 Default-deny network: {default_deny}",
+        severity="High",
+        details=(
+            f"ufw deny: {ufw_default_deny}, firewalld drop: {firewalld_strict}, "
+            f"nftables drop: {nft_default_drop}"
+        ),
+        cross_references={
+            "STIG": "SRG-NET-000131", "NIST": "SC-7",
+        },
+    ))
+
+    # SRG-NET-000074 - Anti-spoofing (rp_filter)
+    rp_filter_default = _v35_read_sysctl("net.ipv4.conf.default.rp_filter")
+    rp_filter_all = _v35_read_sysctl("net.ipv4.conf.all.rp_filter")
+    rp_strict = (
+        rp_filter_default in ("1", "2") and rp_filter_all in ("1", "2")
+    )
+    results.append(_v35_stig_result(
+        f"{cat} - SRG-NET-000074 Anti-Spoofing",
+        "Pass" if rp_strict else "Warning",
+        f"STIG SRG-NET-000074 Reverse-path filtering enabled: {rp_strict}",
+        severity="High",
+        details=f"rp_filter default={rp_filter_default}, all={rp_filter_all}",
+        remediation=(
+            "In /etc/sysctl.d/99-stig-network.conf:\n"
+            "  net.ipv4.conf.default.rp_filter = 1\n"
+            "  net.ipv4.conf.all.rp_filter = 1\n"
+            "Then: sysctl --system"
+        ),
+        cross_references={
+            "STIG": "SRG-NET-000074, V-230539",
+            "NIST": "SC-7",
+        },
+    ))
+
+    # SRG-NET-000235 - Source-routed packet rejection
+    accept_source_default = _v35_read_sysctl(
+        "net.ipv4.conf.default.accept_source_route"
+    )
+    accept_source_all = _v35_read_sysctl(
+        "net.ipv4.conf.all.accept_source_route"
+    )
+    src_route_blocked = (
+        accept_source_default == "0" and accept_source_all == "0"
+    )
+    results.append(_v35_stig_result(
+        f"{cat} - SRG-NET-000235 Source Route Blocked",
+        "Pass" if src_route_blocked else "Warning",
+        f"STIG SRG-NET-000235 Source-routed packet rejection: "
+        f"{src_route_blocked}",
+        severity="High",
+        details=(
+            f"accept_source_route default={accept_source_default}, "
+            f"all={accept_source_all}"
+        ),
+        remediation=(
+            "In /etc/sysctl.d/99-stig-network.conf:\n"
+            "  net.ipv4.conf.default.accept_source_route = 0\n"
+            "  net.ipv4.conf.all.accept_source_route = 0\n"
+            "  net.ipv6.conf.default.accept_source_route = 0\n"
+            "  net.ipv6.conf.all.accept_source_route = 0"
+        ),
+        cross_references={
+            "STIG": "SRG-NET-000235, V-230541",
+            "NIST": "SC-7",
+        },
+    ))
+
+
+def _check_stig_v35_additional_v_numbers(results, shared_data, os_info):
+    """Additional RHEL/Ubuntu V-numbers not yet covered."""
+    cat = "STIG v3.5 - Additional V-numbers"
+
+    # V-258134 (RHEL 9) - KexAlgorithms strict
+    sshd = _v35_read_file_safe("/etc/ssh/sshd_config")
+    sshd_d = ""
+    if _v35_directory_exists("/etc/ssh/sshd_config.d"):
+        for f in _v35_list_directory("/etc/ssh/sshd_config.d"):
+            if f.endswith(".conf"):
+                sshd_d += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/ssh/sshd_config.d", f)
+                )
+    full_sshd = sshd + "\n" + sshd_d
+
+    kex_match = re.search(
+        r"^\s*KexAlgorithms\s+(\S+)", full_sshd, re.MULTILINE,
+    )
+    kex_strict = False
+    if kex_match:
+        kex = kex_match.group(1)
+        forbidden = ["sha1", "diffie-hellman-group1", "group14-sha1"]
+        kex_strict = not any(f in kex.lower() for f in forbidden)
+    results.append(_v35_stig_result(
+        f"{cat} - V-258134 SSH KEX",
+        "Pass" if kex_strict else "Warning",
+        f"STIG V-258134 (RHEL9) SSH KexAlgorithms FIPS-aligned: {kex_strict}",
+        severity="High",
+        details=f"KexAlgorithms = {kex_match.group(1) if kex_match else 'default'}",
+        remediation=(
+            "In /etc/ssh/sshd_config.d/50-stig.conf:\n"
+            "  KexAlgorithms curve25519-sha256@libssh.org,curve25519-sha256,"
+            "ecdh-sha2-nistp256,ecdh-sha2-nistp384,ecdh-sha2-nistp521,"
+            "diffie-hellman-group16-sha512,diffie-hellman-group18-sha512"
+        ),
+        cross_references={
+            "STIG": "V-258134, V-260533",
+            "NIST": "SC-13", "FIPS": "186-5",
+        },
+    ))
+
+    # V-258153 (RHEL 9) - Audit log files mode 0600 / 0640
+    audit_log_path = "/var/log/audit/audit.log"
+    audit_perms_ok = False
+    audit_perms = "<missing>"
+    if _v35_file_exists(audit_log_path):
+        try:
+            mode = os.stat(audit_log_path).st_mode & 0o7777
+            audit_perms = oct(mode)
+            audit_perms_ok = mode <= 0o0600
+        except OSError:
+            pass
+    results.append(_v35_stig_result(
+        f"{cat} - V-258153 Audit Log Mode",
+        "Pass" if audit_perms_ok else "Warning",
+        f"STIG V-258153 audit.log mode <= 0600: {audit_perms_ok}",
+        severity="Critical",
+        details=f"audit.log mode = {audit_perms}",
+        remediation=(
+            "chmod 0600 /var/log/audit/audit.log\n"
+            "In /etc/audit/auditd.conf: log_file_mode = 0600\n"
+            "systemctl restart auditd"
+        ),
+        cross_references={
+            "STIG": "V-258153, V-230400",
+            "NIST": "AU-9", "PCI-DSS": "10.3.1",
+        },
+    ))
+
+    # V-258109 (RHEL 9) - System banner files exist
+    issue_present = _v35_file_exists("/etc/issue")
+    issue_net_present = _v35_file_exists("/etc/issue.net")
+    motd_present = _v35_file_exists("/etc/motd")
+    banner_layers = sum([issue_present, issue_net_present, motd_present])
+    results.append(_v35_stig_result(
+        f"{cat} - V-258109 System Banners",
+        "Pass" if banner_layers >= 2 else "Warning",
+        f"STIG V-258109 System banners: /etc/issue={issue_present}, "
+        f"/etc/issue.net={issue_net_present}, /etc/motd={motd_present}",
+        severity="Medium",
+        details=f"Banner files present: {banner_layers}/3",
+        remediation=(
+            "Create DoD warning banners. Example /etc/issue:\n"
+            "  You are accessing a U.S. Government (USG) Information System "
+            "(IS) that is provided for USG-authorized use only..."
+        ),
+        cross_references={
+            "STIG": "V-258109, V-230225",
+            "NIST": "AC-8",
+        },
+    ))
+
+    # V-258215 (Ubuntu 22.04) - apt repositories use HTTPS
+    apt_sources = ""
+    if _v35_file_exists("/etc/apt/sources.list"):
+        apt_sources += _v35_read_file_safe("/etc/apt/sources.list")
+    if _v35_directory_exists("/etc/apt/sources.list.d"):
+        for f in _v35_list_directory("/etc/apt/sources.list.d"):
+            if f.endswith(".list") or f.endswith(".sources"):
+                apt_sources += "\n" + _v35_read_file_safe(
+                    f"/etc/apt/sources.list.d/{f}"
+                )
+    if apt_sources:
+        active_lines = [
+            l for l in apt_sources.splitlines()
+            if l.strip() and not l.strip().startswith("#")
+            and ("deb " in l or "URIs:" in l)
+        ]
+        http_lines = [
+            l for l in active_lines
+            if " http://" in l or "URIs: http://" in l
+        ]
+        all_https = not http_lines
+        if active_lines:
+            results.append(_v35_stig_result(
+                f"{cat} - apt HTTPS Repositories",
+                "Pass" if all_https else "Info",
+                f"STIG apt repositories all HTTPS: {all_https}",
+                severity="Medium",
+                details=f"HTTP repository lines: {len(http_lines)}",
+                remediation=(
+                    "Update sources.list to use https:// URIs:\n"
+                    "  apt-get install -y apt-transport-https ca-certificates\n"
+                    "  sed -i 's|http://|https://|g' /etc/apt/sources.list"
+                ),
+                cross_references={
+                    "STIG": "V-260567 (Ubuntu)",
+                    "NIST": "SC-8, SI-7", "PCI-DSS": "6.3",
+                },
+            ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_stig_v35 = run_checks
+
+
+def run_checks(shared_data: Optional[Dict[str, Any]] = None) -> List[AuditResult]:
+    """Execute the v3.5 expanded STIG module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_stig_v35(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_stig_v35_appsrg_application_security(results, shared_data, os_info)
+        _check_stig_v35_websrv_hardening(results, shared_data, os_info)
+        _check_stig_v35_database_srg(results, shared_data, os_info)
+        _check_stig_v35_container_srg_depth(results, shared_data, os_info)
+        _check_stig_v35_network_device_srg(results, shared_data, os_info)
+        _check_stig_v35_additional_v_numbers(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="STIG - Error",
+            status="Error",
+            message=f"STIG v3.5 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
 if __name__ == "__main__":
     """
     Standalone testing capability for the STIG module
@@ -3764,7 +5266,3 @@ if __name__ == "__main__":
     print(f"STIG module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
-
-# ============================================================================
-# End of module_stig.py
-# ============================================================================
