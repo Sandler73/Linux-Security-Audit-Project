@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 module_cis.py - CIS Benchmarks Comprehensive Implementation
-Version: 2.2
+Version: 2.1
 
 SYNOPSIS:
     CIS Benchmark compliance and security audit checks for Linux systems.
@@ -159,7 +159,61 @@ except ImportError:
         HAS_COMMON_LIB = False
 
 MODULE_NAME = "CIS"
-MODULE_VERSION = "2.2"
+
+# v3.4 Remediation library wiring
+try:
+    from shared_components.remediation_library import get_remediation as _v34_get_remediation
+    from shared_components.remediation_library import get_removal_remediation as _v34_get_removal
+    from shared_components.remediation_library import get_patch_remediation as _v34_get_patch
+    from shared_components.os_detection import detect_os as _v34_detect_os
+    _v34_OSINFO_CACHE = None
+    def remediation_for(tool_id):
+        """Return distro-aware remediation text for a registered tool.
+
+        Falls back to a short "Install <tool>" string if the library
+        does not have an entry for the tool_id.
+        """
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        text = _v34_get_remediation(tool_id, _v34_OSINFO_CACHE)
+        return text if text else f"Install {tool_id} via your distribution\'s package manager"
+
+    def _v34_resolve_os():
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        return _v34_OSINFO_CACHE
+
+    def removal_for(canonical_token, extra_context=""):
+        """Return OS-aware package-removal remediation text."""
+        try:
+            return _v34_get_removal(canonical_token, _v34_resolve_os(),
+                                    extra_context=extra_context)
+        except Exception:
+            return f"Remove {canonical_token} via your distribution\'s package manager"
+
+    def patch_for(extra_context=""):
+        """Return OS-aware security-patch remediation text."""
+        try:
+            return _v34_get_patch(_v34_resolve_os(), extra_context=extra_context)
+        except Exception:
+            return "Apply available security updates via your distribution\'s package manager"
+except ImportError:  # pragma: no cover
+    def remediation_for(tool_id):
+        return f"Install {tool_id} via your distribution\'s package manager"
+    def removal_for(canonical_token, extra_context=""):
+        return f"Remove {canonical_token} via your distribution\'s package manager"
+    def patch_for(extra_context=""):
+        return "Apply available security updates via your distribution\'s package manager"
+
+MODULE_VERSION = "3.9"
 
 # Module logger (uses structured logging if audit_common is available)
 logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
@@ -435,7 +489,7 @@ def check_section1_package_management(results: List[AuditResult], shared_data: D
             status="Pass" if update_count == 0 else "Warning",
             message="1.2.4 Ensure software updates available",
             details=f"{update_count} updates available" if update_count > 0 else "System up to date",
-            remediation="Run: yum update" if update_count > 0 else ""
+            remediation=patch_for() if update_count > 0 else ""
         ))
     
     # 1.2.5 - Ensure automatic updates configured
@@ -506,7 +560,7 @@ def check_section1_package_management(results: List[AuditResult], shared_data: D
         status="Pass" if aide_installed else "Fail",
         message="1.2.10 Ensure AIDE is installed",
         details="AIDE package installed" if aide_installed else "AIDE not installed",
-        remediation="Install AIDE: apt install aide || yum install aide"
+        remediation=remediation_for("aide")
     ))
 
 
@@ -524,7 +578,7 @@ def check_section1_mandatory_access_control(results: List[AuditResult], shared_d
         status="Pass" if selinux_installed else "Fail",
         message="1.6.1.1 Ensure SELinux is installed",
         details="SELinux policy package installed" if selinux_installed else "SELinux not installed",
-        remediation="Install: yum install selinux-policy selinux-policy-targeted"
+        remediation=remediation_for("selinux")
     ))
     
     # 1.6.1.2 - Ensure SELinux is not disabled in bootloader
@@ -578,7 +632,7 @@ def check_section1_mandatory_access_control(results: List[AuditResult], shared_d
         status="Pass" if apparmor_installed else "Info",
         message="1.6.2.1 Ensure AppArmor is installed",
         details="AppArmor installed" if apparmor_installed else "AppArmor not installed",
-        remediation="Install: apt install apparmor apparmor-utils"
+        remediation=remediation_for("apparmor")
     ))
     
     # 1.6.2.2 - Ensure AppArmor is enabled in bootloader
@@ -709,7 +763,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if time_sync else "Fail",
         message="2.1.1 Ensure time synchronization is in use",
         details="Time sync package installed" if time_sync else "No time sync package",
-        remediation="Install: apt install chrony || yum install chrony"
+        remediation=remediation_for("chrony")
     ))
     
     # 2.1.2 - Ensure chrony is configured
@@ -776,7 +830,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not xorg_installed else "Warning",
         message="2.2.1 Ensure X Window System is not installed",
         details="X11 not installed" if not xorg_installed else "X11 is installed",
-        remediation="Remove X11: apt remove xserver-xorg* || yum remove xorg-x11*"
+        remediation=removal_for("xserver")
     ))
     
     # 2.2.2 - Ensure Avahi Server is not installed
@@ -786,7 +840,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not avahi_installed else "Fail",
         message="2.2.2 Ensure Avahi Server is not installed",
         details="Avahi not installed" if not avahi_installed else "Avahi is installed",
-        remediation="Remove: apt purge avahi-daemon || yum remove avahi"
+        remediation=removal_for("avahi")
     ))
     
     # 2.2.3 - Ensure CUPS is not installed
@@ -796,7 +850,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not cups_installed else "Warning",
         message="2.2.3 Ensure CUPS is not installed",
         details="CUPS not installed" if not cups_installed else "CUPS is installed",
-        remediation="Remove: apt purge cups || yum remove cups"
+        remediation=removal_for("cups")
     ))
     
     # 2.2.4 - Ensure DHCP Server is not installed
@@ -806,7 +860,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not dhcp_installed else "Fail",
         message="2.2.4 Ensure DHCP Server is not installed",
         details="DHCP server not installed" if not dhcp_installed else "DHCP server installed",
-        remediation="Remove: apt purge isc-dhcp-server || yum remove dhcp-server"
+        remediation=removal_for("dhcp-server")
     ))
     
     # 2.2.5 - Ensure LDAP server is not installed
@@ -816,7 +870,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not ldap_installed else "Fail",
         message="2.2.5 Ensure LDAP server is not installed",
         details="LDAP server not installed" if not ldap_installed else "LDAP server installed",
-        remediation="Remove: apt purge slapd || yum remove openldap-servers"
+        remediation=removal_for("ldap-server")
     ))
     
     # 2.2.6 - Ensure NFS is not installed
@@ -826,7 +880,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not nfs_installed else "Warning",
         message="2.2.6 Ensure NFS is not installed",
         details="NFS not installed" if not nfs_installed else "NFS is installed",
-        remediation="Remove: apt purge nfs-kernel-server || yum remove nfs-utils"
+        remediation=removal_for("nfs-server")
     ))
     
     # 2.2.7 - Ensure DNS Server is not installed
@@ -836,7 +890,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not dns_installed else "Fail",
         message="2.2.7 Ensure DNS Server is not installed",
         details="DNS server not installed" if not dns_installed else "DNS server installed",
-        remediation="Remove: apt purge bind9 || yum remove bind"
+        remediation=removal_for("dns-server")
     ))
     
     # 2.2.8 - Ensure FTP Server is not installed
@@ -846,7 +900,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not ftp_installed else "Fail",
         message="2.2.8 Ensure FTP Server is not installed",
         details="FTP server not installed" if not ftp_installed else "FTP server installed",
-        remediation="Remove: apt purge vsftpd || yum remove vsftpd"
+        remediation=removal_for("vsftpd")
     ))
     
     # 2.2.9 - Ensure HTTP server is not installed
@@ -867,7 +921,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not mail_installed else "Fail",
         message="2.2.10 Ensure IMAP and POP3 server are not installed",
         details="Mail server not installed" if not mail_installed else "Mail server installed",
-        remediation="Remove: apt purge dovecot-imapd dovecot-pop3d"
+        remediation=removal_for("dovecot")
     ))
     
     # 2.2.11 - Ensure Samba is not installed
@@ -877,7 +931,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not samba_installed else "Warning",
         message="2.2.11 Ensure Samba is not installed",
         details="Samba not installed" if not samba_installed else "Samba is installed",
-        remediation="Remove: apt purge samba || yum remove samba"
+        remediation=removal_for("samba")
     ))
     
     # 2.2.12 - Ensure HTTP Proxy Server is not installed
@@ -887,7 +941,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not proxy_installed else "Fail",
         message="2.2.12 Ensure HTTP Proxy Server is not installed",
         details="Proxy server not installed" if not proxy_installed else "Proxy server installed",
-        remediation="Remove: apt purge squid || yum remove squid"
+        remediation=removal_for("squid")
     ))
     
     # 2.2.13 - Ensure SNMP Server is not installed
@@ -897,7 +951,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not snmp_installed else "Fail",
         message="2.2.13 Ensure SNMP Server is not installed",
         details="SNMP server not installed" if not snmp_installed else "SNMP server installed",
-        remediation="Remove: apt purge snmpd || yum remove net-snmp"
+        remediation=removal_for("snmp")
     ))
     
     # 2.2.14 - Ensure mail transfer agent is configured for local-only mode
@@ -928,7 +982,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not nis_installed else "Fail",
         message="2.2.16 Ensure NIS Server is not installed",
         details="NIS not installed" if not nis_installed else "NIS is installed",
-        remediation="Remove: apt purge nis || yum remove ypserv"
+        remediation=removal_for("nis")
     ))
     
     # 2.3.1 - Ensure NIS Client is not installed
@@ -938,7 +992,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not nis_client else "Fail",
         message="2.3.1 Ensure NIS Client is not installed",
         details="NIS client not installed" if not nis_client else "NIS client installed",
-        remediation="Remove: apt purge nis || yum remove ypbind"
+        remediation=removal_for("nis")
     ))
     
     # 2.3.2 - Ensure rsh client is not installed
@@ -948,7 +1002,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not rsh_client else "Fail",
         message="2.3.2 Ensure rsh client is not installed",
         details="rsh client not installed" if not rsh_client else "rsh client installed",
-        remediation="Remove: apt purge rsh-client || yum remove rsh"
+        remediation=removal_for("rsh")
     ))
     
     # 2.3.3 - Ensure talk client is not installed
@@ -958,7 +1012,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not talk_client else "Fail",
         message="2.3.3 Ensure talk client is not installed",
         details="talk client not installed" if not talk_client else "talk client installed",
-        remediation="Remove: apt purge talk || yum remove talk"
+        remediation=removal_for("talk")
     ))
     
     # 2.3.4 - Ensure telnet client is not installed
@@ -968,7 +1022,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not telnet_client else "Fail",
         message="2.3.4 Ensure telnet client is not installed",
         details="telnet client not installed" if not telnet_client else "telnet client installed",
-        remediation="Remove: apt purge telnet || yum remove telnet"
+        remediation=removal_for("telnet")
     ))
     
     # 2.3.5 - Ensure LDAP client is not installed
@@ -978,7 +1032,7 @@ def check_section2_services(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if not ldap_client else "Warning",
         message="2.3.5 Ensure LDAP client is not installed",
         details="LDAP client not installed" if not ldap_client else "LDAP client installed",
-        remediation="Remove if not needed: apt purge ldap-utils"
+        remediation=removal_for("ldap-utils")
     ))
     
     # Additional service checks
@@ -1636,7 +1690,7 @@ def check_section4_system_logging(results: List[AuditResult], shared_data: Dict[
         status="Pass" if auditd_installed else "Fail",
         message="4.1.1 Ensure auditing is enabled - auditd installed",
         details="auditd package installed" if auditd_installed else "auditd not installed",
-        remediation="Install: apt install auditd || yum install audit"
+        remediation=remediation_for("auditd")
     ))
     
     # 4.1.2 - Ensure auditd service is enabled
@@ -1646,7 +1700,7 @@ def check_section4_system_logging(results: List[AuditResult], shared_data: Dict[
         status="Pass" if auditd_enabled else "Fail",
         message="4.1.2 Ensure auditd service is enabled and running",
         details="auditd service enabled" if auditd_enabled else "auditd not enabled",
-        remediation="systemctl enable --now auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # 4.1.3 - Ensure auditing for processes prior to auditd is enabled
@@ -1794,7 +1848,7 @@ def check_section4_logging(results: List[AuditResult], shared_data: Dict[str, An
         status="Pass" if rsyslog_installed else "Warning",
         message="4.2.1 Ensure rsyslog is installed",
         details="rsyslog installed" if rsyslog_installed else "rsyslog not installed",
-        remediation="Install: apt install rsyslog || yum install rsyslog"
+        remediation=remediation_for("rsyslog")
     ))
     
     # 4.2.2 - Ensure rsyslog Service is enabled
@@ -1877,7 +1931,7 @@ def check_section4_logging(results: List[AuditResult], shared_data: Dict[str, An
         status="Pass" if logrotate_installed else "Fail",
         message="4.3.1 Ensure logrotate is configured",
         details="logrotate installed" if logrotate_installed else "logrotate not installed",
-        remediation="Install: apt install logrotate || yum install logrotate"
+        remediation=remediation_for("logrotate")
     ))
     
     # 4.3.2 - Ensure logrotate runs daily
@@ -2605,7 +2659,7 @@ def check_section1_bootloader(results: List[AuditResult], shared_data: Dict[str,
         status="Pass" if not prelink_installed else "Fail",
         message="1.4.7 Ensure prelink is disabled",
         details="prelink not installed" if not prelink_installed else "prelink is installed",
-        remediation="apt purge prelink || yum remove prelink"
+        remediation=removal_for("prelink")
     ))
     
     # 1.4.8 - Ensure kernel pointer restriction
@@ -2768,15 +2822,15 @@ def check_section6_file_permissions(results: List[AuditResult], shared_data: Dic
             remediation="chown root:root /etc/gshadow- && chmod 000 /etc/gshadow-"
         ))
     
-    # 6.1.10 - Ensure no world writable files exist
-    world_writable = run_command("find / -xdev -type f -perm -0002 2>/dev/null | head -10").stdout
-    has_world_writable = len(world_writable.strip()) > 0
+    # 6.1.10 - Ensure no world writable files exist (canonical assessment)
+    from shared_components.shared_assessments import get_world_writable_assessment as _ww_assess
+    _ww = _ww_assess("fail")
     results.append(AuditResult(
         module=MODULE_NAME, category="CIS 6.1 - File Permissions",
-        status="Pass" if not has_world_writable else "Fail",
+        status=_ww.status,
         message="6.1.10 Ensure no world writable files exist",
-        details="No world-writable files found" if not has_world_writable else f"World-writable files detected",
-        remediation="Review and correct world-writable file permissions: chmod o-w <file>"
+        details=_ww.details,
+        remediation=_ww.remediation
     ))
     
     # 6.1.11 - Ensure no unowned files or directories exist
@@ -3028,7 +3082,7 @@ def check_section1_process_hardening(results: List[AuditResult], shared_data: Di
         status="Fail" if prelink_installed else "Pass",
         message="1.5.4 Ensure prelink is not installed",
         details=f"prelink: {'installed (weakens ASLR)' if prelink_installed else 'not installed'}",
-        remediation="Remove: prelink -ua && apt remove prelink (or yum remove prelink)"
+        remediation=("Undo prelinking first: prelink -ua\n" + removal_for("prelink"))
     ))
 
 
@@ -3350,6 +3404,1365 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
 # Standalone Testing
 # ============================================================================
 
+
+
+# ============================================================================
+# v3.3 EXPANSION - CIS Benchmark Deep Coverage
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Extends the CIS module with deeper coverage of:
+#   - SSH key algorithms (CIS 5.2.x advanced)
+#   - PAM faillock & pwquality depth (CIS 5.4.x L2)
+#   - Auditd ruleset coverage (CIS 4.1.3.1-4.1.3.21)
+#   - nftables modern firewall (CIS 3.5.x)
+#   - Filesystem additional checks (CIS 1.1.x extended)
+#   - Crypto policy hardening (CIS 1.10)
+#
+# Notes:
+#   - Imports module_helpers for streamlined helpers
+#   - Uses AuditResult directly with cross_references and severity
+#   - Always returns results from run_checks
+# ============================================================================
+
+from shared_components.module_helpers import (
+    read_file_safe as _v33_read_file_safe,
+    file_exists as _v33_file_exists,
+    directory_exists as _v33_directory_exists,
+    command_available as _v33_command_available,
+    run_command as _v33_run_command,
+    read_sysctl as _v33_read_sysctl,
+    systemd_active as _v33_systemd_active,
+    file_mode as _v33_file_mode,
+    list_directory as _v33_list_directory,
+)
+
+
+def _v33_result(category, status, message, severity="Medium",
+                details="", remediation="", cross_references=None):
+    """Build AuditResult for CIS v3.3 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_cis_v33_ssh_advanced(results, shared_data, os_info):
+    """CIS 5.2.x extended - SSH algorithm hardening."""
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+
+    # CIS 5.2.13 - Strong Ciphers Only
+    cipher_match = re.search(r"^\s*Ciphers\s+(\S+)", sshd, re.MULTILINE)
+    ciphers = cipher_match.group(1) if cipher_match else ""
+    weak = ["arcfour", "3des", "des-cbc", "blowfish", "cast128", "rijndael"]
+    has_weak_cipher = any(w in ciphers for w in weak) if ciphers else False
+    results.append(_v33_result(
+        "CIS 5.2.13 v3.3 - SSH Ciphers",
+        "Pass" if (ciphers and not has_weak_cipher) else "Fail",
+        "5.2.13 Strong SSH ciphers configured",
+        severity="High",
+        details=f"Ciphers configured: {bool(ciphers)}, weak ciphers detected: {has_weak_cipher}",
+        remediation=(
+            "In /etc/ssh/sshd_config: "
+            "Ciphers chacha20-poly1305@openssh.com,"
+            "aes256-gcm@openssh.com,aes128-gcm@openssh.com,"
+            "aes256-ctr,aes192-ctr,aes128-ctr"
+        ),
+        cross_references={
+            "CIS": "5.2.13", "NIST": "SC-13", "STIG": "V-230252",
+        },
+    ))
+
+    # CIS 5.2.14 - Strong MACs
+    mac_match = re.search(r"^\s*MACs\s+(\S+)", sshd, re.MULTILINE)
+    macs = mac_match.group(1) if mac_match else ""
+    weak_macs = ["hmac-md5", "hmac-sha1-96", "hmac-md5-96", "umac-64"]
+    has_weak_mac = any(w in macs for w in weak_macs) if macs else False
+    results.append(_v33_result(
+        "CIS 5.2.14 v3.3 - SSH MACs",
+        "Pass" if (macs and not has_weak_mac) else "Fail",
+        "5.2.14 Strong SSH MAC algorithms configured",
+        severity="High",
+        details=f"MACs configured: {bool(macs)}, weak detected: {has_weak_mac}",
+        remediation=(
+            "In /etc/ssh/sshd_config: "
+            "MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,"
+            "hmac-sha2-512,hmac-sha2-256"
+        ),
+        cross_references={
+            "CIS": "5.2.14", "NIST": "SC-13",
+        },
+    ))
+
+    # CIS 5.2.15 - Strong Key Exchange
+    kex_match = re.search(r"^\s*KexAlgorithms\s+(\S+)", sshd, re.MULTILINE)
+    kex = kex_match.group(1) if kex_match else ""
+    weak_kex = ["diffie-hellman-group1", "diffie-hellman-group14-sha1",
+                "diffie-hellman-group-exchange-sha1"]
+    has_weak_kex = any(w in kex for w in weak_kex) if kex else False
+    results.append(_v33_result(
+        "CIS 5.2.15 v3.3 - SSH Key Exchange",
+        "Pass" if (kex and not has_weak_kex) else "Fail",
+        "5.2.15 Strong SSH KexAlgorithms configured",
+        severity="High",
+        details=f"KexAlgorithms configured: {bool(kex)}, weak detected: {has_weak_kex}",
+        remediation=(
+            "In /etc/ssh/sshd_config: "
+            "KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,"
+            "diffie-hellman-group16-sha512,diffie-hellman-group18-sha512"
+        ),
+        cross_references={
+            "CIS": "5.2.15", "NIST": "SC-13",
+        },
+    ))
+
+    # CIS 5.2.16 - HostKeyAlgorithms (modern)
+    hka_match = re.search(r"^\s*HostKeyAlgorithms\s+(\S+)", sshd, re.MULTILINE)
+    hka = hka_match.group(1) if hka_match else ""
+    weak_hka = ["ssh-dss", "ssh-rsa "]  # ssh-rsa deprecated for verification
+    has_weak_hka = any(w in (hka + " ") for w in weak_hka) if hka else False
+    results.append(_v33_result(
+        "CIS 5.2.16 v3.3 - SSH HostKeyAlgorithms",
+        "Pass" if (hka and not has_weak_hka) else "Info",
+        "5.2.16 Modern SSH HostKeyAlgorithms",
+        severity="Medium",
+        details=f"HostKeyAlgorithms: {hka or 'default'}",
+        remediation=(
+            "In /etc/ssh/sshd_config: "
+            "HostKeyAlgorithms ssh-ed25519,ecdsa-sha2-nistp256,"
+            "ecdsa-sha2-nistp384,rsa-sha2-512,rsa-sha2-256"
+        ),
+        cross_references={
+            "CIS": "5.2.16", "NIST": "SC-13",
+        },
+    ))
+
+    # CIS 5.2.17 - LoginGraceTime <= 60s
+    lgt_match = re.search(r"^\s*LoginGraceTime\s+(\d+)", sshd, re.MULTILINE)
+    lgt = int(lgt_match.group(1)) if lgt_match else 120
+    results.append(_v33_result(
+        "CIS 5.2.17 v3.3 - SSH LoginGraceTime",
+        "Pass" if lgt <= 60 else "Warning",
+        f"5.2.17 LoginGraceTime <= 60s ({lgt})",
+        severity="Medium",
+        details=f"LoginGraceTime = {lgt}",
+        remediation="In /etc/ssh/sshd_config: LoginGraceTime 60",
+        cross_references={
+            "CIS": "5.2.17", "NIST": "AC-7",
+        },
+    ))
+
+    # CIS 5.2.18 - MaxAuthTries <= 4
+    mat_match = re.search(r"^\s*MaxAuthTries\s+(\d+)", sshd, re.MULTILINE)
+    mat = int(mat_match.group(1)) if mat_match else 6
+    results.append(_v33_result(
+        "CIS 5.2.18 v3.3 - SSH MaxAuthTries",
+        "Pass" if mat <= 4 else "Warning",
+        f"5.2.18 MaxAuthTries <= 4 ({mat})",
+        severity="Medium",
+        details=f"MaxAuthTries = {mat}",
+        remediation="In /etc/ssh/sshd_config: MaxAuthTries 4",
+        cross_references={
+            "CIS": "5.2.18", "NIST": "AC-7",
+        },
+    ))
+
+    # CIS 5.2.19 - MaxStartups
+    ms_match = re.search(r"^\s*MaxStartups\s+(\S+)", sshd, re.MULTILINE)
+    ms = ms_match.group(1) if ms_match else ""
+    ms_ok = ms == "10:30:60" or "10:30:60" in ms
+    results.append(_v33_result(
+        "CIS 5.2.19 v3.3 - SSH MaxStartups",
+        "Pass" if ms_ok else "Warning",
+        f"5.2.19 MaxStartups configured ({ms or 'default'})",
+        severity="Low",
+        details=f"MaxStartups = {ms}",
+        remediation="In /etc/ssh/sshd_config: MaxStartups 10:30:60",
+        cross_references={
+            "CIS": "5.2.19", "NIST": "AC-7",
+        },
+    ))
+
+    # CIS 5.2.20 - MaxSessions <= 10
+    msess_match = re.search(r"^\s*MaxSessions\s+(\d+)", sshd, re.MULTILINE)
+    msess = int(msess_match.group(1)) if msess_match else 10
+    results.append(_v33_result(
+        "CIS 5.2.20 v3.3 - SSH MaxSessions",
+        "Pass" if msess <= 10 else "Info",
+        f"5.2.20 MaxSessions <= 10 ({msess})",
+        severity="Low",
+        details=f"MaxSessions = {msess}",
+        remediation="In /etc/ssh/sshd_config: MaxSessions 10",
+        cross_references={
+            "CIS": "5.2.20", "NIST": "AC-10",
+        },
+    ))
+
+    # CIS 5.2.21 - AllowTcpForwarding no
+    atf_match = re.search(r"^\s*AllowTcpForwarding\s+(\S+)", sshd, re.MULTILINE)
+    atf = atf_match.group(1).lower() if atf_match else "yes"
+    results.append(_v33_result(
+        "CIS 5.2.21 v3.3 - SSH AllowTcpForwarding",
+        "Pass" if atf == "no" else "Info",
+        f"5.2.21 AllowTcpForwarding: {atf}",
+        severity="Medium",
+        details=f"AllowTcpForwarding = {atf}",
+        remediation="In /etc/ssh/sshd_config: AllowTcpForwarding no",
+        cross_references={
+            "CIS": "5.2.21", "NIST": "AC-4",
+        },
+    ))
+
+    # CIS 5.2.22 - PermitUserEnvironment no
+    pue_match = re.search(r"^\s*PermitUserEnvironment\s+(\S+)", sshd, re.MULTILINE)
+    pue = pue_match.group(1).lower() if pue_match else "no"
+    results.append(_v33_result(
+        "CIS 5.2.22 v3.3 - SSH PermitUserEnvironment",
+        "Pass" if pue == "no" else "Fail",
+        f"5.2.22 PermitUserEnvironment: {pue}",
+        severity="High",
+        details=f"PermitUserEnvironment = {pue}",
+        remediation="In /etc/ssh/sshd_config: PermitUserEnvironment no",
+        cross_references={
+            "CIS": "5.2.22", "NIST": "CM-7",
+        },
+    ))
+
+
+def _check_cis_v33_pam_advanced(results, shared_data, os_info):
+    """CIS 5.4.x extended - PAM password & lockout depth."""
+    # CIS 5.4.1 - faillock configuration
+    faillock_conf = _v33_read_file_safe("/etc/security/faillock.conf")
+    if faillock_conf:
+        deny_match = re.search(r"^\s*deny\s*=\s*(\d+)", faillock_conf, re.MULTILINE)
+        unlock_match = re.search(r"^\s*unlock_time\s*=\s*(\d+)", faillock_conf, re.MULTILINE)
+        deny = int(deny_match.group(1)) if deny_match else 0
+        unlock = int(unlock_match.group(1)) if unlock_match else 0
+        results.append(_v33_result(
+            "CIS 5.4.1 v3.3 - faillock deny",
+            "Pass" if 1 <= deny <= 5 else "Warning",
+            f"5.4.1.1 faillock deny <= 5 ({deny})",
+            severity="High",
+            details=f"deny = {deny}, unlock_time = {unlock}",
+            remediation="In /etc/security/faillock.conf: deny = 5; unlock_time = 900",
+            cross_references={
+                "CIS": "5.4.1.1", "NIST": "AC-7", "STIG": "V-230332",
+            },
+        ))
+        results.append(_v33_result(
+            "CIS 5.4.1 v3.3 - faillock unlock_time",
+            "Pass" if unlock >= 900 else "Warning",
+            f"5.4.1.2 faillock unlock_time >= 900 ({unlock})",
+            severity="High",
+            details=f"unlock_time = {unlock}",
+            remediation="In /etc/security/faillock.conf: unlock_time = 900",
+            cross_references={
+                "CIS": "5.4.1.2", "NIST": "AC-7",
+            },
+        ))
+
+    # CIS 5.4.2 - pwquality configuration
+    pwq_conf = _v33_read_file_safe("/etc/security/pwquality.conf")
+    if pwq_conf:
+        # minlen >= 14
+        minlen_match = re.search(r"^\s*minlen\s*=\s*(\d+)", pwq_conf, re.MULTILINE)
+        minlen = int(minlen_match.group(1)) if minlen_match else 8
+        results.append(_v33_result(
+            "CIS 5.4.2 v3.3 - pwquality minlen",
+            "Pass" if minlen >= 14 else "Warning",
+            f"5.4.2.1 pwquality minlen >= 14 ({minlen})",
+            severity="High",
+            details=f"minlen = {minlen}",
+            remediation="In /etc/security/pwquality.conf: minlen = 14",
+            cross_references={
+                "CIS": "5.4.2.1", "NIST": "IA-5(1)(a)",
+            },
+        ))
+
+        # Complexity directives: dcredit, ucredit, ocredit, lcredit
+        for prefix, name in [("dcredit", "digit"), ("ucredit", "uppercase"),
+                              ("ocredit", "other"), ("lcredit", "lowercase")]:
+            cm = re.search(rf"^\s*{prefix}\s*=\s*(-?\d+)", pwq_conf, re.MULTILINE)
+            val = int(cm.group(1)) if cm else 0
+            ok = val < 0  # Negative means at least N required
+            results.append(_v33_result(
+                f"CIS 5.4.2 v3.3 - pwquality {prefix}",
+                "Pass" if ok else "Info",
+                f"5.4.2.2 pwquality {prefix} ({name}) requires character class: {ok}",
+                severity="Medium",
+                details=f"{prefix} = {val}",
+                remediation=f"In /etc/security/pwquality.conf: {prefix} = -1",
+                cross_references={
+                    "CIS": "5.4.2.2", "NIST": "IA-5(1)(a)",
+                },
+            ))
+
+        # minclass >= 4
+        mc_match = re.search(r"^\s*minclass\s*=\s*(\d+)", pwq_conf, re.MULTILINE)
+        mc = int(mc_match.group(1)) if mc_match else 0
+        results.append(_v33_result(
+            "CIS 5.4.2 v3.3 - pwquality minclass",
+            "Pass" if mc >= 4 else "Info",
+            f"5.4.2.3 pwquality minclass >= 4 ({mc})",
+            severity="Medium",
+            details=f"minclass = {mc}",
+            remediation="In /etc/security/pwquality.conf: minclass = 4",
+            cross_references={
+                "CIS": "5.4.2.3", "NIST": "IA-5(1)(a)",
+            },
+        ))
+
+        # maxrepeat
+        mr_match = re.search(r"^\s*maxrepeat\s*=\s*(\d+)", pwq_conf, re.MULTILINE)
+        mr = int(mr_match.group(1)) if mr_match else 0
+        results.append(_v33_result(
+            "CIS 5.4.2 v3.3 - pwquality maxrepeat",
+            "Pass" if 1 <= mr <= 3 else "Info",
+            f"5.4.2.4 pwquality maxrepeat <= 3 ({mr})",
+            severity="Low",
+            details=f"maxrepeat = {mr}",
+            remediation="In /etc/security/pwquality.conf: maxrepeat = 3",
+            cross_references={
+                "CIS": "5.4.2.4", "NIST": "IA-5(1)(a)",
+            },
+        ))
+
+        # dictcheck
+        dc_match = re.search(r"^\s*dictcheck\s*=\s*(\d+)", pwq_conf, re.MULTILINE)
+        dc = int(dc_match.group(1)) if dc_match else 1
+        results.append(_v33_result(
+            "CIS 5.4.2 v3.3 - pwquality dictcheck",
+            "Pass" if dc == 1 else "Info",
+            f"5.4.2.5 pwquality dictcheck enabled ({dc})",
+            severity="Medium",
+            details=f"dictcheck = {dc}",
+            remediation="In /etc/security/pwquality.conf: dictcheck = 1",
+            cross_references={
+                "CIS": "5.4.2.5", "NIST": "IA-5(1)(a)",
+            },
+        ))
+
+    # CIS 5.4.3 - pwhistory remember
+    pam_files = [
+        "/etc/pam.d/system-auth", "/etc/pam.d/common-password",
+        "/etc/pam.d/password-auth",
+    ]
+    pwh_remember = 0
+    for pf in pam_files:
+        c = _v33_read_file_safe(pf)
+        m = re.search(r"pam_pwhistory.*remember\s*=\s*(\d+)", c)
+        if m:
+            pwh_remember = max(pwh_remember, int(m.group(1)))
+    results.append(_v33_result(
+        "CIS 5.4.3 v3.3 - pam_pwhistory",
+        "Pass" if pwh_remember >= 5 else "Warning",
+        f"5.4.3 pam_pwhistory remember >= 5 ({pwh_remember})",
+        severity="High",
+        details=f"pam_pwhistory remember = {pwh_remember}",
+        remediation="Add to PAM password stack: password required pam_pwhistory.so remember=24",
+        cross_references={
+            "CIS": "5.4.3", "NIST": "IA-5(1)(e)",
+        },
+    ))
+
+    # CIS 5.4.4 - SHA-512/yescrypt password hashing
+    login_defs = _v33_read_file_safe("/etc/login.defs")
+    em_match = re.search(r"^\s*ENCRYPT_METHOD\s+(\S+)", login_defs, re.MULTILINE)
+    em = em_match.group(1).upper() if em_match else ""
+    em_ok = em in {"SHA512", "YESCRYPT"}
+    results.append(_v33_result(
+        "CIS 5.4.4 v3.3 - ENCRYPT_METHOD",
+        "Pass" if em_ok else "Fail",
+        f"5.4.4 ENCRYPT_METHOD strong ({em or 'unset'})",
+        severity="High",
+        details=f"ENCRYPT_METHOD = {em}",
+        remediation="In /etc/login.defs: ENCRYPT_METHOD SHA512",
+        cross_references={
+            "CIS": "5.4.4", "NIST": "IA-5(1)(c)",
+        },
+    ))
+
+
+def _check_cis_v33_auditd_rules(results, shared_data, os_info):
+    """CIS 4.1.3.x - Auditd rule coverage by category."""
+    audit_rules = ""
+    if _v33_directory_exists("/etc/audit/rules.d"):
+        for f in _v33_list_directory("/etc/audit/rules.d"):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v33_read_file_safe(
+                    os.path.join("/etc/audit/rules.d", f)
+                )
+    if not audit_rules:
+        audit_rules = _v33_read_file_safe("/etc/audit/audit.rules")
+
+    # CIS 4.1.3.1 - Events that modify date/time
+    has_time = ("clock_settime" in audit_rules and
+                "settimeofday" in audit_rules and
+                "adjtimex" in audit_rules)
+    results.append(_v33_result(
+        "CIS 4.1.3.1 v3.3 - time-change",
+        "Pass" if has_time else "Fail",
+        "4.1.3.1 Date/time modification events audited",
+        severity="High",
+        details=f"clock_settime/adjtimex/settimeofday rules: {has_time}",
+        remediation=(
+            "-a always,exit -F arch=b64 -S adjtimex,settimeofday,clock_settime "
+            "-k time-change"
+        ),
+        cross_references={
+            "CIS": "4.1.3.1", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.4 - Events that modify identity
+    has_id = ("identity" in audit_rules or
+              ("/etc/passwd" in audit_rules and "/etc/shadow" in audit_rules))
+    results.append(_v33_result(
+        "CIS 4.1.3.4 v3.3 - identity",
+        "Pass" if has_id else "Fail",
+        "4.1.3.4 Identity-modification events audited",
+        severity="High",
+        details=f"Identity audit indicators: {has_id}",
+        remediation=(
+            "-w /etc/group -p wa -k identity; "
+            "-w /etc/passwd -p wa -k identity; "
+            "-w /etc/gshadow -p wa -k identity; "
+            "-w /etc/shadow -p wa -k identity; "
+            "-w /etc/security/opasswd -p wa -k identity"
+        ),
+        cross_references={
+            "CIS": "4.1.3.4", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.5 - Events that modify network environment
+    has_net = ("system-locale" in audit_rules or
+               ("/etc/hostname" in audit_rules and "/etc/hosts" in audit_rules))
+    results.append(_v33_result(
+        "CIS 4.1.3.5 v3.3 - system-locale",
+        "Pass" if has_net else "Fail",
+        "4.1.3.5 Network environment changes audited",
+        severity="High",
+        details=f"system-locale audit indicators: {has_net}",
+        remediation=(
+            "-a always,exit -F arch=b64 -S sethostname,setdomainname "
+            "-k system-locale; "
+            "-w /etc/hosts -p wa -k system-locale; "
+            "-w /etc/network -p wa -k system-locale"
+        ),
+        cross_references={
+            "CIS": "4.1.3.5", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.6 - SELinux/AppArmor MAC events
+    has_mac = "MAC-policy" in audit_rules or "/etc/selinux" in audit_rules or "/etc/apparmor" in audit_rules
+    results.append(_v33_result(
+        "CIS 4.1.3.6 v3.3 - MAC-policy",
+        "Pass" if has_mac else "Fail",
+        "4.1.3.6 MAC policy modifications audited",
+        severity="High",
+        details=f"MAC-policy audit rules: {has_mac}",
+        remediation=(
+            "-w /etc/selinux -p wa -k MAC-policy; "
+            "-w /usr/share/selinux -p wa -k MAC-policy"
+        ),
+        cross_references={
+            "CIS": "4.1.3.6", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.7 - Login/logout events
+    has_login = ("logins" in audit_rules or
+                 "/var/log/lastlog" in audit_rules or
+                 "/var/log/faillog" in audit_rules)
+    results.append(_v33_result(
+        "CIS 4.1.3.7 v3.3 - logins",
+        "Pass" if has_login else "Fail",
+        "4.1.3.7 Login/logout events audited",
+        severity="High",
+        details=f"Login audit indicators: {has_login}",
+        remediation=(
+            "-w /var/log/lastlog -p wa -k logins; "
+            "-w /var/log/faillog -p wa -k logins; "
+            "-w /var/run/faillock -p wa -k logins"
+        ),
+        cross_references={
+            "CIS": "4.1.3.7", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.8 - Session initiation events
+    has_session = ("session" in audit_rules or
+                   "/var/run/utmp" in audit_rules or
+                   "/var/log/wtmp" in audit_rules)
+    results.append(_v33_result(
+        "CIS 4.1.3.8 v3.3 - session",
+        "Pass" if has_session else "Fail",
+        "4.1.3.8 Session initiation events audited",
+        severity="High",
+        details=f"Session audit indicators: {has_session}",
+        remediation=(
+            "-w /var/run/utmp -p wa -k session; "
+            "-w /var/log/wtmp -p wa -k logins; "
+            "-w /var/log/btmp -p wa -k logins"
+        ),
+        cross_references={
+            "CIS": "4.1.3.8", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.9 - Discretionary access control modifications
+    has_perm_mod = ("perm_mod" in audit_rules or
+                     "chmod" in audit_rules or "chown" in audit_rules)
+    results.append(_v33_result(
+        "CIS 4.1.3.9 v3.3 - perm_mod",
+        "Pass" if has_perm_mod else "Fail",
+        "4.1.3.9 DAC permission modifications audited",
+        severity="High",
+        details=f"perm_mod audit indicators: {has_perm_mod}",
+        remediation=(
+            "-a always,exit -F arch=b64 -S chmod,fchmod,fchmodat -F auid>=1000 "
+            "-F auid!=4294967295 -k perm_mod; "
+            "-a always,exit -F arch=b64 -S chown,fchown,fchownat,lchown "
+            "-F auid>=1000 -F auid!=4294967295 -k perm_mod"
+        ),
+        cross_references={
+            "CIS": "4.1.3.9", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.10 - Unsuccessful unauthorized file access attempts
+    has_access = "access" in audit_rules and ("EACCES" in audit_rules or
+                                               "EPERM" in audit_rules)
+    results.append(_v33_result(
+        "CIS 4.1.3.10 v3.3 - access",
+        "Pass" if has_access else "Warning",
+        "4.1.3.10 Failed file access attempts audited",
+        severity="Medium",
+        details=f"access audit with EACCES/EPERM: {has_access}",
+        remediation=(
+            "-a always,exit -F arch=b64 -S creat,open,openat,truncate,ftruncate "
+            "-F exit=-EACCES -F auid>=1000 -F auid!=4294967295 -k access; "
+            "(also -F exit=-EPERM)"
+        ),
+        cross_references={
+            "CIS": "4.1.3.10", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.13 - Successful filesystem mounts
+    has_mount = "mount" in audit_rules
+    results.append(_v33_result(
+        "CIS 4.1.3.13 v3.3 - mount",
+        "Pass" if has_mount else "Warning",
+        "4.1.3.13 Filesystem mounts audited",
+        severity="Medium",
+        details=f"mount audit rule: {has_mount}",
+        remediation=(
+            "-a always,exit -F arch=b64 -S mount -F auid>=1000 "
+            "-F auid!=4294967295 -k mounts"
+        ),
+        cross_references={
+            "CIS": "4.1.3.13", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.14 - File deletion events by user
+    has_delete = "delete" in audit_rules and ("unlink" in audit_rules or
+                                                "rename" in audit_rules)
+    results.append(_v33_result(
+        "CIS 4.1.3.14 v3.3 - delete",
+        "Pass" if has_delete else "Warning",
+        "4.1.3.14 File deletion events audited",
+        severity="Medium",
+        details=f"delete audit indicators: {has_delete}",
+        remediation=(
+            "-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat "
+            "-F auid>=1000 -F auid!=4294967295 -k delete"
+        ),
+        cross_references={
+            "CIS": "4.1.3.14", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.16 - Modifications to /etc/sudoers
+    has_sudoers = "/etc/sudoers" in audit_rules
+    results.append(_v33_result(
+        "CIS 4.1.3.16 v3.3 - sudoers",
+        "Pass" if has_sudoers else "Fail",
+        "4.1.3.16 sudoers modifications audited",
+        severity="High",
+        details=f"sudoers audit watch: {has_sudoers}",
+        remediation=(
+            "-w /etc/sudoers -p wa -k scope; "
+            "-w /etc/sudoers.d -p wa -k scope"
+        ),
+        cross_references={
+            "CIS": "4.1.3.16", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.17 - sudo log file
+    has_sudo_log = "/var/log/sudo.log" in audit_rules
+    results.append(_v33_result(
+        "CIS 4.1.3.17 v3.3 - sudo.log",
+        "Pass" if has_sudo_log else "Info",
+        "4.1.3.17 sudo log file audited",
+        severity="Medium",
+        details=f"/var/log/sudo.log audit watch: {has_sudo_log}",
+        remediation="-w /var/log/sudo.log -p wa -k actions",
+        cross_references={
+            "CIS": "4.1.3.17", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.18 - Kernel module loading and unloading
+    has_modules = ("init_module" in audit_rules or
+                   "delete_module" in audit_rules or
+                   "modules" in audit_rules)
+    results.append(_v33_result(
+        "CIS 4.1.3.18 v3.3 - modules",
+        "Pass" if has_modules else "Fail",
+        "4.1.3.18 Kernel module changes audited",
+        severity="High",
+        details=f"modules audit indicators: {has_modules}",
+        remediation=(
+            "-a always,exit -F arch=b64 -S init_module,delete_module,finit_module "
+            "-k modules"
+        ),
+        cross_references={
+            "CIS": "4.1.3.18", "NIST": "AU-2",
+        },
+    ))
+
+    # CIS 4.1.3.20 - Audit configuration immutable
+    has_immutable = "-e 2" in audit_rules
+    results.append(_v33_result(
+        "CIS 4.1.3.20 v3.3 - immutable",
+        "Pass" if has_immutable else "Fail",
+        "4.1.3.20 Audit config immutable (-e 2)",
+        severity="High",
+        details=f"-e 2 directive in rules: {has_immutable}",
+        remediation=(
+            "Add as last line of /etc/audit/rules.d/99-finalize.rules: -e 2"
+        ),
+        cross_references={
+            "CIS": "4.1.3.20", "NIST": "AU-9",
+        },
+    ))
+
+
+def _check_cis_v33_nftables(results, shared_data, os_info):
+    """CIS 3.5 - nftables modern firewall."""
+    nft_present = _v33_command_available("nft")
+    nft_active = _v33_systemd_active("nftables.service") == "active"
+
+    if not nft_present:
+        results.append(_v33_result(
+            "CIS 3.5.2 v3.3 - nftables installed",
+            "Info",
+            "3.5.2 nftables not installed",
+            severity="Informational",
+            details="nft binary not present",
+            remediation=remediation_for("nftables"),
+            cross_references={
+                "CIS": "3.5.2", "NIST": "SC-7",
+            },
+        ))
+        return
+
+    results.append(_v33_result(
+        "CIS 3.5.2 v3.3 - nftables installed",
+        "Pass",
+        "3.5.2 nftables installed",
+        severity="Low",
+        details="nft binary available",
+        cross_references={
+            "CIS": "3.5.2", "NIST": "SC-7",
+        },
+    ))
+
+    results.append(_v33_result(
+        "CIS 3.5.2 v3.3 - nftables service",
+        "Pass" if nft_active else "Warning",
+        f"3.5.2.7 nftables service active ({nft_active})",
+        severity="High",
+        details=f"nftables.service: {nft_active}",
+        remediation="systemctl enable --now nftables",
+        cross_references={
+            "CIS": "3.5.2.7", "NIST": "SC-7",
+        },
+    ))
+
+    # Check for default deny policy
+    rc, out, _ = _v33_run_command(["nft", "list", "ruleset"], timeout=3.0)
+    has_rules = rc == 0 and "table" in out
+    has_drop_policy = rc == 0 and ("policy drop" in out or
+                                    "policy reject" in out)
+    results.append(_v33_result(
+        "CIS 3.5.2 v3.3 - nftables ruleset",
+        "Pass" if (has_rules and has_drop_policy) else "Warning",
+        f"3.5.2.6 nftables default deny policy ({has_drop_policy})",
+        severity="High",
+        details=f"rules present: {has_rules}, drop policy: {has_drop_policy}",
+        remediation=(
+            "nft add table inet filter; "
+            "nft add chain inet filter input '{type filter hook input priority 0; policy drop;}'"
+        ),
+        cross_references={
+            "CIS": "3.5.2.6", "NIST": "SC-7",
+        },
+    ))
+
+
+def _check_cis_v33_filesystem_extended(results, shared_data, os_info):
+    """CIS 1.1.x extended - filesystem hardening."""
+    # CIS 1.1.1 - Disabled filesystems
+    disabled_fs = ["cramfs", "freevxfs", "jffs2", "hfs", "hfsplus", "udf",
+                   "squashfs"]
+    blacklist_d = "/etc/modprobe.d"
+    if not _v33_directory_exists(blacklist_d):
+        return
+    blacklisted = set()
+    for f in _v33_list_directory(blacklist_d):
+        c = _v33_read_file_safe(os.path.join(blacklist_d, f))
+        for fs in disabled_fs:
+            if re.search(rf"^\s*(blacklist|install)\s+{fs}", c, re.MULTILINE):
+                blacklisted.add(fs)
+    for fs in disabled_fs:
+        results.append(_v33_result(
+            f"CIS 1.1.1 v3.3 - {fs}",
+            "Pass" if fs in blacklisted else "Warning",
+            f"1.1.1.x {fs} module disabled: {fs in blacklisted}",
+            severity="Medium",
+            details=f"{fs} blacklisted: {fs in blacklisted}",
+            remediation=f"echo 'install {fs} /bin/true' >> /etc/modprobe.d/{fs}.conf",
+            cross_references={
+                "CIS": f"1.1.1 ({fs})", "NIST": "CM-7",
+            },
+        ))
+
+
+def _check_cis_v33_crypto_policy(results, shared_data, os_info):
+    """CIS 1.10 - System-wide crypto policies (RHEL family)."""
+    if _v33_file_exists("/etc/crypto-policies/config"):
+        policy = _v33_read_file_safe("/etc/crypto-policies/config").strip()
+        good = {"DEFAULT", "FUTURE", "FIPS"}
+        results.append(_v33_result(
+            "CIS 1.10 v3.3 - crypto policy",
+            "Pass" if policy in good else "Warning",
+            f"1.10 System crypto policy ({policy or 'unset'})",
+            severity="High",
+            details=f"crypto-policies = {policy}",
+            remediation="update-crypto-policies --set FUTURE",
+            cross_references={
+                "CIS": "1.10", "NIST": "SC-13",
+            },
+        ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_cis_v33 = run_checks
+
+
+def run_checks(shared_data):
+    """Execute the v3.3 expanded CIS module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_cis_v33(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_cis_v33_ssh_advanced(results, shared_data, os_info)
+        _check_cis_v33_pam_advanced(results, shared_data, os_info)
+        _check_cis_v33_auditd_rules(results, shared_data, os_info)
+        _check_cis_v33_nftables(results, shared_data, os_info)
+        _check_cis_v33_filesystem_extended(results, shared_data, os_info)
+        _check_cis_v33_crypto_policy(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Unhandled exception in CIS v3.3 expansion") if 'logger' in dir() else None
+        results.append(AuditResult(
+            module=MODULE_NAME, category="CIS - Error",
+            status="Error",
+            message=f"CIS v3.3 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
+
+
+# ============================================================================
+# v3.5 EXPANSION - CIS Controls v8 IG3 + Benchmark Depth
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across CIS areas not yet covered:
+#     - CIS Control 16 Application Software Security
+#     - CIS Control 17 Incident Response Management
+#     - CIS Control 18 Penetration Testing readiness
+#     - CIS_Distribution_Independent_Linux Benchmark v2.x deeper
+#     - CIS Docker Benchmark surrogates
+#     - CIS Kubernetes Benchmark surrogates
+#     - IG3 specific safeguards (advanced)
+# ============================================================================
+
+# v3.5 helpers
+from shared_components.module_helpers import (
+    read_file_safe as _v35_read_file_safe,
+    file_exists as _v35_file_exists,
+    directory_exists as _v35_directory_exists,
+    command_available as _v35_command_available,
+    run_command as _v35_run_command,
+    read_sysctl as _v35_read_sysctl,
+    systemd_active as _v35_systemd_active,
+    list_directory as _v35_list_directory,
+)
+
+
+def _v35_cis_result(category, status, message, severity="Medium",
+                   details="", remediation="", cross_references=None):
+    """Build AuditResult for CIS v3.5 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_cis_v35_control16_appsec(results, shared_data, os_info):
+    """CIS Control 16 - Application Software Security."""
+    cat = "CIS v3.5 - Control 16"
+
+    # 16.7 - Use standard hardening configuration templates
+    hardening_indicators = sum([
+        _v35_command_available("oscap"),
+        _v35_command_available("lynis"),
+        _v35_directory_exists("/usr/share/xml/scap"),
+    ])
+    results.append(_v35_cis_result(
+        f"{cat} - 16.7 Hardening Templates",
+        "Pass" if hardening_indicators >= 2 else "Warning",
+        f"CIS 16.7 Hardening templates available: {hardening_indicators}/3",
+        severity="Medium",
+        details=f"Tools: oscap/lynis/SCAP content",
+        remediation=(
+            "apt-get install -y libopenscap8 ssg-applications lynis"
+        ),
+        cross_references={
+            "CIS-Controls": "16.7", "NIST": "CM-6, CM-7",
+        },
+    ))
+
+    # 16.10 - Apply secure design principles in app architectures
+    sast_tools = sum(_v35_command_available(t)
+                     for t in ["shellcheck", "bandit", "semgrep", "yamllint"])
+    results.append(_v35_cis_result(
+        f"{cat} - 16.10 Secure Design (SAST)",
+        "Pass" if sast_tools >= 2 else "Info",
+        f"CIS 16.10 SAST tooling: {sast_tools}/4",
+        severity="Medium",
+        details=f"Tools: {sast_tools}",
+        remediation=(
+            "apt-get install -y shellcheck python3-bandit yamllint\n"
+            "pip install --user semgrep"
+        ),
+        cross_references={
+            "CIS-Controls": "16.10", "NIST": "SA-11", "SSDF": "PW.7",
+        },
+    ))
+
+    # 16.11 - Leverage vetted modules / services for app security
+    pkg_signing = (
+        _v35_directory_exists("/etc/apt/keyrings") or
+        _v35_directory_exists("/etc/apt/trusted.gpg.d") or
+        _v35_directory_exists("/etc/pki/rpm-gpg")
+    )
+    results.append(_v35_cis_result(
+        f"{cat} - 16.11 Vetted Modules",
+        "Pass" if pkg_signing else "Warning",
+        f"CIS 16.11 Package signing infrastructure: {pkg_signing}",
+        severity="Medium",
+        details=f"Keyring presence: {pkg_signing}",
+        cross_references={
+            "CIS-Controls": "16.11", "NIST": "SR-3, SR-4",
+        },
+    ))
+
+
+def _check_cis_v35_control17_ir(results, shared_data, os_info):
+    """CIS Control 17 - Incident Response Management."""
+    cat = "CIS v3.5 - Control 17"
+
+    # 17.1 - Designated personnel (technical surrogate: mail capability)
+    mail_capable = (
+        _v35_command_available("mail") or
+        _v35_command_available("mailx") or
+        _v35_systemd_active("postfix.service") == "active"
+    )
+    results.append(_v35_cis_result(
+        f"{cat} - 17.1 IR Notification",
+        "Pass" if mail_capable else "Warning",
+        f"CIS 17.1 IR notification capability (mail): {mail_capable}",
+        severity="Medium",
+        details=f"Mail tooling: {mail_capable}",
+        cross_references={
+            "CIS-Controls": "17.1, 17.4", "NIST": "IR-6",
+        },
+    ))
+
+    # 17.3 - Incident handling reporting (logs preserved)
+    auditd_active = _v35_systemd_active("auditd.service") == "active"
+    journal_persistent = _v35_directory_exists("/var/log/journal")
+    ir_logging_ready = auditd_active and journal_persistent
+    results.append(_v35_cis_result(
+        f"{cat} - 17.3 IR Log Preservation",
+        "Pass" if ir_logging_ready else "Warning",
+        f"CIS 17.3 IR log preservation: {ir_logging_ready}",
+        severity="High",
+        details=(
+            f"auditd: {auditd_active}, journald persistent: {journal_persistent}"
+        ),
+        cross_references={
+            "CIS-Controls": "17.3, 17.5", "NIST": "AU-9, AU-11",
+        },
+    ))
+
+    # 17.7 - Conduct routine IR exercises (technical surrogate: IR tooling readiness)
+    ir_tools = sum(_v35_command_available(t)
+                   for t in ["tcpdump", "lsof", "strace", "ausearch", "journalctl"])
+    results.append(_v35_cis_result(
+        f"{cat} - 17.7 IR Tooling",
+        "Pass" if ir_tools >= 4 else "Warning",
+        f"CIS 17.7 IR triage tooling: {ir_tools}/5",
+        severity="High",
+        details=f"Tools: {ir_tools}",
+        cross_references={
+            "CIS-Controls": "17.7, 17.8", "NIST": "IR-3, IR-4",
+        },
+    ))
+
+
+def _check_cis_v35_control18_pentest(results, shared_data, os_info):
+    """CIS Control 18 - Penetration Testing readiness."""
+    cat = "CIS v3.5 - Control 18"
+
+    # 18.1 - Establish program / scope (vuln scanning + pentest tools)
+    pentest_indicators = sum([
+        _v35_command_available("lynis"),
+        _v35_command_available("oscap"),
+        _v35_command_available("nuclei"),
+        _v35_command_available("nmap"),
+    ])
+    results.append(_v35_cis_result(
+        f"{cat} - 18.1 Pentest Tooling",
+        "Pass" if pentest_indicators >= 2 else "Info",
+        f"CIS 18.1 Pentest/vuln tools: {pentest_indicators}/4",
+        severity="Medium",
+        details=f"Tools: {pentest_indicators}",
+        remediation=(
+            "Install vulnerability assessment tools:\n"
+            "  apt-get install -y lynis libopenscap8 nmap"
+        ),
+        cross_references={
+            "CIS-Controls": "18.1, 18.2", "NIST": "CA-8, RA-5",
+        },
+    ))
+
+    # 18.5 - Validate measures via pentest (re-test after remediation)
+    # Surrogate: scheduled vuln scans
+    scheduled_scan = False
+    for d in ["/etc/cron.daily", "/etc/cron.weekly"]:
+        if not _v35_directory_exists(d):
+            continue
+        for f in _v35_list_directory(d):
+            f_lower = f.lower()
+            if any(k in f_lower for k in [
+                "lynis", "rkhunter", "chkrootkit", "openscap", "trivy",
+            ]):
+                scheduled_scan = True
+                break
+        if scheduled_scan:
+            break
+    results.append(_v35_cis_result(
+        f"{cat} - 18.5 Re-test Cadence",
+        "Pass" if scheduled_scan else "Warning",
+        f"CIS 18.5 Scheduled vuln scans: {scheduled_scan}",
+        severity="High",
+        details=f"Scheduled scan job present: {scheduled_scan}",
+        remediation=(
+            "Add to /etc/cron.weekly/lynis-scan:\n"
+            "  #!/bin/sh\n"
+            "  lynis audit system --quick"
+        ),
+        cross_references={
+            "CIS-Controls": "18.5", "NIST": "RA-5",
+        },
+    ))
+
+
+def _check_cis_v35_distro_indep_benchmark(results, shared_data, os_info):
+    """CIS_Distribution_Independent_Linux Benchmark deeper coverage."""
+    cat = "CIS v3.5 - DIL Benchmark"
+
+    # 1.5.1 - ASLR enabled (full)
+    aslr = _v35_read_sysctl("kernel.randomize_va_space")
+    aslr_full = aslr == "2"
+    results.append(_v35_cis_result(
+        f"{cat} - 1.5.1 ASLR Full",
+        "Pass" if aslr_full else "Fail",
+        f"CIS DIL 1.5.1 randomize_va_space=2: {aslr_full}",
+        severity="High",
+        details=f"randomize_va_space = {aslr}",
+        remediation=(
+            "In /etc/sysctl.d/99-cis-aslr.conf:\n"
+            "  kernel.randomize_va_space = 2\n"
+            "Then: sysctl --system"
+        ),
+        cross_references={
+            "CIS": "DIL 1.5.1", "NIST": "SI-16",
+        },
+    ))
+
+    # 1.5.2 - prelink not installed
+    prelink_present = (
+        _v35_command_available("prelink") or
+        _v35_file_exists("/etc/prelink.conf")
+    )
+    results.append(_v35_cis_result(
+        f"{cat} - 1.5.2 Prelink Not Installed",
+        "Pass" if not prelink_present else "Warning",
+        f"CIS DIL 1.5.2 prelink not present: {not prelink_present}",
+        severity="Medium",
+        details=f"prelink detected: {prelink_present}",
+        remediation=(
+            "If prelink is present:\n"
+            "  prelink -ua  (undo all)\n"
+            "  apt-get remove --purge -y prelink  (Debian)\n"
+            "  dnf remove -y prelink  (RHEL)\n"
+            "Prelink can interfere with ASLR effectiveness."
+        ),
+        cross_references={
+            "CIS": "DIL 1.5.2", "NIST": "SI-16",
+        },
+    ))
+
+    # 1.6.x - Configure additional process information hiding (kptr_restrict)
+    kptr = _v35_read_sysctl("kernel.kptr_restrict")
+    kptr_strong = kptr in ("1", "2")
+    results.append(_v35_cis_result(
+        f"{cat} - 1.6.x kptr_restrict",
+        "Pass" if kptr_strong else "Warning",
+        f"CIS DIL kptr_restrict >= 1: {kptr_strong}",
+        severity="Medium",
+        details=f"kptr_restrict = {kptr}",
+        remediation=(
+            "In /etc/sysctl.d/99-cis-kptr.conf:\n"
+            "  kernel.kptr_restrict = 2"
+        ),
+        cross_references={
+            "CIS": "DIL", "NIST": "SI-7", "STIG": "V-230266",
+        },
+    ))
+
+    # 5.4.x - User accounts and environment / inactive password lock
+    inactive_match = re.search(
+        r"^\s*INACTIVE\s*=\s*(\d+)",
+        _v35_read_file_safe("/etc/default/useradd"),
+        re.MULTILINE,
+    )
+    inactive_set = bool(inactive_match) and 0 < int(inactive_match.group(1)) <= 30
+    results.append(_v35_cis_result(
+        f"{cat} - 5.4.1.4 Inactive Password Lock",
+        "Pass" if inactive_set else "Warning",
+        f"CIS DIL 5.4.1.4 INACTIVE <= 30 days: {inactive_set}",
+        severity="Medium",
+        details=(
+            f"INACTIVE = {inactive_match.group(1) if inactive_match else 'unset'}"
+        ),
+        remediation=(
+            "useradd -D -f 30  (set default INACTIVE to 30 days)\n"
+            "Existing accounts: chage --inactive 30 <user>"
+        ),
+        cross_references={
+            "CIS": "DIL 5.4.1.4", "NIST": "AC-2(3)",
+        },
+    ))
+
+    # 6.1.x - System file permissions
+    critical_files = {
+        "/etc/passwd": 0o0644,
+        "/etc/shadow": 0o0640,  # 0640 acceptable on modern systems
+        "/etc/group": 0o0644,
+        "/etc/gshadow": 0o0640,
+    }
+    file_perm_issues = []
+    for path, max_mode in critical_files.items():
+        if not _v35_file_exists(path):
+            continue
+        try:
+            mode = os.stat(path).st_mode & 0o7777
+            # Should not be world-writable; for shadow files, also no group-write
+            if path in ("/etc/shadow", "/etc/gshadow"):
+                if mode & 0o0027:  # group/other read or any other write
+                    file_perm_issues.append(f"{path}({oct(mode)})")
+            elif mode & 0o0022:  # group or other write
+                file_perm_issues.append(f"{path}({oct(mode)})")
+        except OSError:
+            pass
+    results.append(_v35_cis_result(
+        f"{cat} - 6.1 Critical File Permissions",
+        "Pass" if not file_perm_issues else "Fail",
+        f"CIS DIL 6.1 critical file permissions: "
+        f"{'OK' if not file_perm_issues else 'issues'}",
+        severity="High",
+        details=f"Issues: {file_perm_issues}",
+        remediation=(
+            "chmod 0644 /etc/passwd /etc/group\n"
+            "chmod 0640 /etc/shadow /etc/gshadow\n"
+            "chown root:root /etc/passwd /etc/group\n"
+            "chown root:shadow /etc/shadow /etc/gshadow  (Debian)\n"
+            "chown root:root /etc/shadow /etc/gshadow    (RHEL)"
+        ),
+        cross_references={
+            "CIS": "DIL 6.1", "NIST": "AC-3, SI-7",
+        },
+    ))
+
+
+def _check_cis_v35_docker_benchmark(results, shared_data, os_info):
+    """CIS Docker Benchmark surrogates."""
+    cat = "CIS v3.5 - Docker"
+
+    docker_present = (
+        _v35_command_available("docker") or
+        _v35_systemd_active("docker.service") == "active"
+    )
+    if not docker_present:
+        results.append(_v35_cis_result(
+            f"{cat} - Docker Status",
+            "Info",
+            "Docker not detected (Docker Benchmark inapplicable)",
+            severity="Informational",
+            details="No docker binary or service",
+            cross_references={"CIS": "Docker Benchmark"},
+        ))
+        return
+
+    # 1.1 - Audit Docker daemon
+    audit_rules = ""
+    if _v35_directory_exists("/etc/audit/rules.d"):
+        for f in _v35_list_directory("/etc/audit/rules.d"):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/audit/rules.d", f)
+                )
+    docker_audited = (
+        "/var/lib/docker" in audit_rules or
+        "/usr/bin/docker" in audit_rules or
+        "/etc/docker" in audit_rules
+    )
+    results.append(_v35_cis_result(
+        f"{cat} - 1.1 Docker Audit",
+        "Pass" if docker_audited else "Warning",
+        f"CIS Docker 1.1 Docker daemon audit rules: {docker_audited}",
+        severity="Medium",
+        details=f"Docker audit rules: {docker_audited}",
+        remediation=(
+            "Add to /etc/audit/rules.d/41-cis-docker.rules:\n"
+            "  -w /usr/bin/docker -p x -k docker\n"
+            "  -w /var/lib/docker -p wa -k docker\n"
+            "  -w /etc/docker -p wa -k docker\n"
+            "  -w /var/run/docker.sock -p rwxa -k docker"
+        ),
+        cross_references={
+            "CIS": "Docker 1.1", "NIST": "AU-2",
+        },
+    ))
+
+    # 2.5 - Restrict default-bridge networking
+    docker_daemon_conf = _v35_read_file_safe("/etc/docker/daemon.json")
+    iptables_disabled = '"iptables": false' in docker_daemon_conf
+    # Default is iptables enabled (good); check we haven't disabled it
+    iptables_kept_default = not iptables_disabled
+    results.append(_v35_cis_result(
+        f"{cat} - 2.5 Iptables NOT Disabled",
+        "Pass" if iptables_kept_default else "Warning",
+        f"CIS Docker 2.5 docker iptables management default (true): "
+        f"{iptables_kept_default}",
+        severity="High",
+        details=(
+            f'iptables: false in daemon.json: {iptables_disabled}'
+        ),
+        cross_references={
+            "CIS": "Docker 2.5", "NIST": "SC-7",
+        },
+    ))
+
+
+def _check_cis_v35_kubernetes_benchmark(results, shared_data, os_info):
+    """CIS Kubernetes Benchmark surrogates."""
+    cat = "CIS v3.5 - K8s"
+
+    k8s_present = (
+        _v35_command_available("kubectl") or
+        _v35_command_available("kubelet") or
+        _v35_directory_exists("/etc/kubernetes") or
+        _v35_systemd_active("kubelet.service") == "active"
+    )
+    if not k8s_present:
+        results.append(_v35_cis_result(
+            f"{cat} - K8s Status",
+            "Info",
+            "Kubernetes not detected (K8s Benchmark inapplicable)",
+            severity="Informational",
+            details="No kubectl/kubelet/etc-kubernetes",
+            cross_references={"CIS": "K8s Benchmark"},
+        ))
+        return
+
+    # 4.2.1 - anonymous-auth false (kubelet)
+    kubelet_config = ""
+    for path in [
+        "/var/lib/kubelet/config.yaml",
+        "/etc/kubernetes/kubelet/kubelet-config.yaml",
+        "/etc/kubernetes/kubelet/kubelet.conf",
+    ]:
+        if _v35_file_exists(path):
+            kubelet_config += "\n" + _v35_read_file_safe(path)
+
+    if kubelet_config:
+        anon_auth = bool(re.search(
+            r"anonymous-auth:\s*true",
+            kubelet_config, re.IGNORECASE,
+        ))
+        results.append(_v35_cis_result(
+            f"{cat} - 4.2.1 anonymous-auth",
+            "Pass" if not anon_auth else "Fail",
+            f"CIS K8s 4.2.1 anonymous-auth=false: {not anon_auth}",
+            severity="Critical",
+            details=f"anonymous-auth=true detected: {anon_auth}",
+            cross_references={
+                "CIS": "K8s 4.2.1", "NIST": "AC-3",
+            },
+        ))
+
+    # 4.1.x - kubelet config file permissions
+    kubelet_conf_path = "/etc/kubernetes/kubelet.conf"
+    if _v35_file_exists(kubelet_conf_path):
+        try:
+            mode = os.stat(kubelet_conf_path).st_mode & 0o7777
+            mode_secure = mode <= 0o0644
+            results.append(_v35_cis_result(
+                f"{cat} - 4.1.x kubelet.conf Permissions",
+                "Pass" if mode_secure else "Warning",
+                f"CIS K8s kubelet.conf mode <= 0644: {mode_secure}",
+                severity="High",
+                details=f"kubelet.conf mode = {oct(mode)}",
+                remediation=(
+                    "chmod 0644 /etc/kubernetes/kubelet.conf"
+                ),
+                cross_references={
+                    "CIS": "K8s 4.1.x", "NIST": "AC-3",
+                },
+            ))
+        except OSError:
+            pass
+
+
+def _check_cis_v35_ig3_advanced(results, shared_data, os_info):
+    """CIS Controls v8 IG3 specific safeguards (advanced)."""
+    cat = "CIS v3.5 - IG3"
+
+    # IG3 advanced: AI/ML threat hunting tools (osquery, sysmon, etc.)
+    advanced_detection = sum([
+        _v35_command_available("osqueryi") or
+        _v35_systemd_active("osqueryd.service") == "active",
+        _v35_systemd_active("falco.service") == "active",
+        _v35_directory_exists("/var/log/sysmon"),
+        _v35_systemd_active("auditd.service") == "active",
+        _v35_file_exists("/var/ossec/etc/ossec.conf"),
+    ])
+    results.append(_v35_cis_result(
+        f"{cat} - IG3 Advanced Detection",
+        "Pass" if advanced_detection >= 3 else "Warning",
+        f"CIS IG3 Advanced detection layers: {advanced_detection}/5",
+        severity="Medium",
+        details=f"Layers: {advanced_detection}",
+        cross_references={
+            "CIS-Controls": "IG3",
+            "NIST": "SI-4(24), RA-10",
+        },
+    ))
+
+    # IG3: SBOM + supply chain attestation
+    supply_chain = sum([
+        _v35_command_available("syft") or _v35_command_available("trivy"),
+        _v35_command_available("cosign") or _v35_command_available("minisign"),
+        _v35_command_available("gpg") or _v35_command_available("gpg2"),
+    ])
+    results.append(_v35_cis_result(
+        f"{cat} - IG3 Supply Chain",
+        "Pass" if supply_chain >= 2 else "Info",
+        f"CIS IG3 Supply chain layers (SBOM/sign/gpg): {supply_chain}/3",
+        severity="Medium",
+        details=f"Layers: {supply_chain}",
+        cross_references={
+            "CIS-Controls": "16.11 IG3, 2.4 IG3",
+            "NIST": "SR-3, SR-4, SR-11",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_cis_v35 = run_checks
+
+
+def run_checks(shared_data: Optional[Dict[str, Any]] = None) -> List[AuditResult]:
+    """Execute the v3.5 expanded CIS module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_cis_v35(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_cis_v35_control16_appsec(results, shared_data, os_info)
+        _check_cis_v35_control17_ir(results, shared_data, os_info)
+        _check_cis_v35_control18_pentest(results, shared_data, os_info)
+        _check_cis_v35_distro_indep_benchmark(results, shared_data, os_info)
+        _check_cis_v35_docker_benchmark(results, shared_data, os_info)
+        _check_cis_v35_kubernetes_benchmark(results, shared_data, os_info)
+        _check_cis_v35_ig3_advanced(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="CIS - Error",
+            status="Error",
+            message=f"CIS v3.5 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
 if __name__ == "__main__":
     """Standalone module testing"""
     import socket
@@ -3398,7 +4811,3 @@ if __name__ == "__main__":
         print(f"   Category: {result.category}")
         if result.details:
             print(f"   Details: {result.details}")
-
-# ============================================================================
-# End of module_cis.py
-# ============================================================================
