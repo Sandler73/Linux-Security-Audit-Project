@@ -1,4 +1,16 @@
+<p align="center">
+  <img src="assets/header-lsap.png" alt="Linux Security Audit Project" width="75%" />
+</p>
+
+---
+
 # Linux Security Audit Project
+
+<div align="center">
+  
+<!-- ============================================================================ -->
+<!-- DYNAMIC BADGES - reflect live GitHub Actions workflow status and repo state -->
+<!-- ============================================================================ -->
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow?logo=opensourceinitiative&logoColor=white)](https://github.com/Sandler73/Linux-Security-Audit-Project/blob/main/LICENSE.md)
 [![Python 3.7+](https://img.shields.io/badge/Python-3.7+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
@@ -20,9 +32,15 @@
 [![Fedora](https://img.shields.io/badge/Fedora-41%20%7C%2040-51A2DA?logo=fedora&logoColor=white)](https://fedoraproject.org/)
 [![Rocky/Alma](https://img.shields.io/badge/Rocky%20%7C%20Alma-9%20%7C%208-10B981?logo=rockylinux&logoColor=white)](https://rockylinux.org/)
 
+<!-- ============================================================================ -->
+<!-- STATIC BADGES - informational metadata that doesn't change without a release -->
+<!-- ============================================================================ -->
+
 **Module-Based Multi-Framework Linux Security Assessment, Auditing, and Remediation Tool**
 
 [Overview](#-overview) * [Key Features](#-key-features) * [Quick Start](#-quick-start) * [Documentation](#-documentation) * [Remediation](#-remediation-capabilities) * [Contributing](#-contributing)
+
+</div>
 
 ---
 
@@ -50,7 +68,7 @@
 
 ## Overview
 
-The **Linux Security Audit Project** is a comprehensive Python-based security compliance auditing tool that evaluates Linux systems against multiple industry-standard security frameworks. The current release performs **2,297 automated security checks** across **16 compliance frameworks**, generating interactive reports in HTML, JSON, CSV, XML, and Console formats with actionable remediation guidance.
+The **Linux Security Audit Project** is a Python-based security compliance auditing tool that evaluates Linux systems against multiple industry-standard security frameworks. The current release performs **2,297 automated security checks** across **16 compliance frameworks**, generating interactive reports in HTML, JSON, CSV, XML, and Console formats with actionable remediation guidance.
 
 Every check includes a severity rating (Critical/High/Medium/Low/Informational) and categorization by security domain, enabling compliance scoring from a single audit run. The tool is fully self-contained - zero external dependencies, pure Python stdlib - and supports parallel execution, intelligent caching, compliance scoring with configurable thresholds, and OS-aware checks across Debian, Red Hat, SUSE, and Arch distribution families.
 
@@ -58,7 +76,7 @@ Whether you're conducting compliance audits, hardening systems, maintaining secu
 
 ## Key Features
 
-### **Comprehensive Security Assessment**
+### **Security Assessment**
 
 * [x] **2,297 Security Checks** across 16 compliance frameworks
 * [x] **Multi-Framework Coverage** - Core Baseline, CIS Benchmarks, CISA Best Practices, ENISA Cybersecurity, ISO 27001:2022, NIST SP 800-53/CSF 2.0/800-171, NSA Cybersecurity, DISA STIG
@@ -86,14 +104,36 @@ Whether you're conducting compliance audits, hardening systems, maintaining secu
 * [x] **Audience-targeted** - the PCI team gets a PCI report, the HIPAA team a HIPAA report, each with its own dashboard and score
 * [x] **All formats** - HTML, CSV, JSON, XML
 
-### **Attack Surface Assessment (v3.8)**
+### **Attack Surface Assessment**
 
-* [x] **`--attack-surface`** - assessment-based report re-framing findings around *exposure* rather than compliance
-* [x] **Ten exposure domains** - Network, Authentication, Privilege, Filesystem, Service, Kernel, Container, Credentials, Cryptography, Detection
-* [x] **Severity-weighted scoring** - per-domain and overall exposure scores (0-100) with Minimal->High ratings
-* [x] **Cross-framework synthesis** - draws from every selected framework plus the host-facts registry; no duplicate checks
-* [x] **New CORE checks** - `CORE - Attack Surface` enumeration (external listeners, legacy services, SUID/SGID, world-writable, container socket, kernel lockdown)
-* [x] **HTML + JSON** output
+The `--attack-surface` flag generates a dedicated assessment report that
+re-frames findings around *exposure* rather than pass/fail compliance. It is
+produced from the same audit run and the host-facts registry, so it introduces
+no duplicate checks.
+
+* [x] **`--attack-surface`** - generate the attack-surface report (HTML + JSON)
+* [x] **Ten exposure domains** - Network Exposure, Authentication, Privilege
+  Escalation, Filesystem, Service Exposure, Kernel, Container, Credentials,
+  Cryptography, and Detection Coverage
+* [x] **Severity-weighted scoring** - each domain and the host receive an
+  exposure score (0-100) with a Minimal / Low / Moderate / High rating
+* [x] **Host summary panel** - distribution, firewall posture (each installed
+  tool with its active/inactive state), external TCP listener count, MAC
+  framework, auditd state, FIM tool, and container runtime
+* [x] **Interactive HTML** - dark/light theme, collapsible domains, per-column
+  filters, global search, sortable/resizable columns, and CSV/JSON/XML export
+* [x] **CORE attack-surface checks** (`CORE - Attack Surface`):
+  * External TCP/UDP listeners and exposed services
+  * Legacy/insecure services (telnet, rsh, ftp, and similar)
+  * SUID/SGID inventory and world-writable files
+  * Container socket exposure (Docker/Podman) and kernel module-loading lockdown
+  * **AS-008 Firewall posture** - installed vs active vs configured across
+    ufw / firewalld / nftables / iptables (a host with a firewall package that
+    is installed but disabled is reported distinctly from one with none)
+  * **AS-009 Executable PATH** - world-writable or insecure directories on the
+    executable search path
+  * **AS-010 Shared objects / linker** - insecure `ld.so` configuration and
+    writable library paths
 
 ### **Distribution Profiles (v3.7)**
 
@@ -129,7 +169,7 @@ Whether you're conducting compliance audits, hardening systems, maintaining secu
 * [x] **Automated Remediation** - batch fix with safety confirmations
 * [x] **Selective Remediation** - target specific status types (Fail, Warning, Info)
 * [x] **Targeted Remediation** - fix only selected issues from JSON export
-* [x] **Remediation Logging** - comprehensive audit trail of all changes
+* [x] **Remediation Logging** - full audit trail of all changes
 * [x] **Safety Mechanisms** - double-confirmation and countdown timers
 
 
@@ -140,7 +180,7 @@ Whether you're conducting compliance audits, hardening systems, maintaining secu
 * [x] **Baseline Drift Detection** - `--baseline` compares against previous audit JSON to identify new failures, resolved findings, regressions, and improvements with compliance-score delta.
 * [x] **Remediation Bundles** - 8 production bundles (HardenSSH, HardenKernel, EnableAuditLogging, HardenAuthentication, LockDownNetwork, SecureBootChain, HardenSystemd, DisableLegacyProtocols) with documented impact profiles.
 * [x] **Rollback Script Generation** - Capture-before-modify pattern produces atomic bash rollback scripts for every remediation operation.
-* [x] **Comprehensive OS Detection** - 30+ Linux distributions across Debian, Red Hat, SUSE, Arch, Alpine, Gentoo, Slackware, Void, NixOS families. Detects kernel version, init system, MAC framework, firewall, container runtime, and cloud provider.
+* [x] **OS Detection** - 30+ Linux distributions across Debian, Red Hat, SUSE, Arch, Alpine, Gentoo, Slackware, Void, NixOS families. Detects kernel version, init system, MAC framework, firewall, container runtime, and cloud provider.
 * [x] **Three-Method Compliance Scoring** - Simple, weighted, and severity-adjusted methods for different reporting contexts.
 
 ### v3.4-v3.5 Quality & Correctness Hardening (April 2026)
@@ -163,22 +203,22 @@ Whether you're conducting compliance audits, hardening systems, maintaining secu
 
 | Module | Framework | Checks | Focus Areas |
 |--------|-----------|--------|-------------|
-| **Core** | Linux foundational baseline + sudo/user/mount/cron/GRUB/PAM hygiene | ~191 |
-| **CIS** | CIS Benchmarks + DIL/Docker/K8s + Controls v8 IG3 | ~269 | Sections 1-6: initial setup, services, network, logging/auditing, access/auth, system maintenance |
-| **CISA** | CISA CPGs + ZTMM + KEV + Stop Ransomware + Shields Up + SbD | ~198 | BOD 22-01/23-01, KEV catalog, zero trust, CPGs, supply chain, incident response |
-| **ENISA** | ENISA + NIS2 Art 21 + Cyber Resilience Act Annex I + DORA | ~142 | EU baseline security, GDPR-aligned controls, network security, data protection, incident response |
-| **ISO27001** | ISO/IEC 27001:2022 Annex A (5/6/7/8) + 27017/27018/27701 | ~149 |
-| **NIST** | NIST 800-53 R5 / CSF 2.0 / 800-171 / 800-207 / 800-161 / SSDF 800-218 | ~235 | 13 control families (AC/AU/CM/IA/IR/SC/SI/CP/MA/MP/PE/RA/SA), CSF 2.0, CUI protection |
-| **NSA** | NSA Guidance + CNSA 2.0 + K8s Hardening + Encrypted DNS + eBPF Security | ~193 | SELinux/MAC, kernel hardening, network security, cryptographic standards, FIPS, CSfC |
-| **STIG** | DISA STIGs (V-numbers) + SRG-APP-SRC/WEB/DB/CTR/NET | ~210 | CAT I/II/III findings, V-number mapping (38.9%), RHEL/Ubuntu STIG, GPOS SRG |
-| **PCI** | PCI DSS v4.0.1 (Req 1-12 deep coverage) | ~110 | Req 1-12 deep coverage: firewalls, default passwords, data-at-rest, transit encryption, malware, secure development, access control, auth/MFA, physical access, audit logging, vulnerability testing, IR policy |
-| **ACSC** | ACSC Essential Eight + ISM + ML2/ML3 maturity | ~69 | E8.1-E8.8 (app control, patching, MFA, backups, etc.), ISM technical controls |
-| **CMMC** | CMMC 2.0 + NIST 800-171 Rev 3 + L3 (800-172) + DFARS | ~94 | L1/L2/L3 practices, NIST SP 800-171/172 alignment, CM/IA/SC/SI/SR families, DFARS 7019/7020 SPRS scoring |
-| **GDPR** | GDPR Art 32 + ePrivacy + breach notification | ~75 | Art.5 minimization, Art.17 erasure, Art.25 by-design, Art.30 ROPA, Art.32 security, Art.33 breach, Art.44-49 transfers |
-| **HIPAA** | HIPAA Security Rule + 405(d) HICP + breach notification | ~114 | Sec. 164.308 administrative, Sec. 164.310 physical, Sec. 164.312 technical safeguards, Sec. 164.314 organizational, Sec. 164.316 documentation, Sec. 164.402-414 breach notification |
-| **SOC2** | AICPA SOC 2 TSC (CC1-CC9 + Avail/Conf/PI/Privacy) | ~98 |
-| **DistBaseline** | Distribution Hardening (Ubuntu USG / RHEL DISA / SUSE / Arch) | ~90 |
-| **EDR** | Linux EDR + MITRE ATT&CK + Sigma/YARA + Cloud-Native + Forensics | ~87 | Persistence detection (T1543/T1547/T1053/T1546), process injection (T1055/T1574), network behavior (T1071/T1571), container runtime, anti-forensics (T1070/T1562), memory protection, eBPF/LSM |
+| **Core** | Linux foundational baseline | 185 | sudo/user/mount/cron/GRUB/PAM hygiene, service and listener inventory, secure boot chain, kernel lockdown, and attack-surface enumeration |
+| **CIS** | CIS Benchmarks + Controls v8 IG3 | 258 | Sections 1-6: initial setup, services, network, logging/auditing, access/auth, system maintenance; Docker/Kubernetes hardening |
+| **CISA** | CISA CPGs + ZTMM + KEV + Stop Ransomware + Secure by Design | 196 | BOD 22-01/23-01, KEV catalog, zero-trust maturity, cross-sector CPGs, supply chain, incident response |
+| **ENISA** | ENISA + NIS2 Art 21 + Cyber Resilience Act + DORA | 142 | EU baseline security, network security, data protection, incident handling, business continuity, supply-chain risk |
+| **ISO27001** | ISO/IEC 27001:2022 Annex A + 27017/27018/27701 | 147 | Organizational, people, physical, and technological controls; cloud (27017), PII (27018/27701) |
+| **NIST** | NIST 800-53 R5 / CSF 2.0 / 800-171 / 800-207 / 800-161 / SSDF 800-218 | 234 | Control families (AC/AU/CM/IA/IR/SC/SI/CP/MA/MP/PE/RA/SA), CSF 2.0 functions, CUI protection, zero trust |
+| **NSA** | NSA Guidance + CNSA 2.0 + K8s Hardening + Encrypted DNS + eBPF | 193 | SELinux/MAC, kernel hardening, network security, cryptographic standards, FIPS, CSfC |
+| **STIG** | DISA STIGs (V-numbers) + SRG-APP families | 205 | CAT I/II/III findings, V-number mapping, RHEL/Ubuntu OS STIG, GPOS SRG, application SRGs |
+| **ACSC** | ACSC Essential Eight (ML1-ML3) + ISM | 69 | E8.1-E8.8 (app control, patching, MFA, backups, admin restriction), ISM server/network/crypto/logging controls |
+| **CMMC** | CMMC 2.0 + NIST 800-171/800-172 + DFARS | 94 | L1/L2/L3 practices, 14 NIST 800-171 control families, L3 800-172 enhancements, DFARS 7012/7019/7020 SPRS |
+| **DistBaseline** | Per-distribution hardening | 90 | Ubuntu USG, RHEL/SUSE/Arch baselines, kernel features, systemd unit hardening, mount options, crypto policies, IMA/EVM, module signing |
+| **EDR** | Linux EDR + MITRE ATT&CK + Sigma/YARA | 87 | Persistence (T1543/T1547/T1053/T1546), process injection (T1055/T1574), anti-forensics (T1070/T1562), memory protection, eBPF/LSM, IR readiness |
+| **GDPR** | GDPR Art 32 technical measures + breach notification | 75 | Art.5 minimization, Art.17 erasure, Art.25 by-design, Art.30 ROPA, Art.32 security, Art.33 breach, Art.44 transfers |
+| **HIPAA** | HIPAA Security Rule + 405(d) HICP | 114 | 164.308 administrative, 164.310 physical, 164.312 technical safeguards, 164.316 documentation, Subpart D breach notification |
+| **PCI-DSS** | PCI DSS v4.0.1 (Requirements 1-12) | 110 | Network controls, secure configuration, data-at-rest/transit encryption, malware, secure development, access control, MFA, logging, testing, policy |
+| **SOC2** | AICPA SOC 2 Trust Services Criteria | 98 | Common Criteria CC1-CC9, Availability (A1), Confidentiality (C1), Processing Integrity (PI1), Privacy (P) |
 
 **Total Coverage**: 2,297 security checks across 16 frameworks with severity classification, MITRE ATT&CK mappings, and cross-framework correlation. Coverage spans access control, authentication, auditing/logging, network security, data protection, malware defense, system hardening, kernel security, mandatory access control, cryptographic standards, container runtime security, persistence/injection detection, and compliance scoring.
 
@@ -298,7 +338,7 @@ sudo python3 linux_security_audit.py --remediate-fail --auto-remediate
 * Displays all changes before execution
 * Requires typing "YES" to confirm
 * Secondary confirmation with countdown
-* Comprehensive remediation logging
+* Remediation logging
 
 #### 4. **Targeted Remediation** (Precision)
 
@@ -379,7 +419,7 @@ sudo python3 linux_security_audit.py -f Console --quiet
 **Scenario**: Annual NIST, STIG, or CIS compliance audit
 
 ```bash
-# Generate comprehensive compliance report
+# Generate the compliance report
 sudo python3 linux_security_audit.py -m NIST,STIG,CIS -f HTML --perf-profile
 ```
 
@@ -419,7 +459,7 @@ diff <(jq '.Results[] | .Status' baseline-202603.json | sort) \
 # Quick core security validation
 sudo python3 linux_security_audit.py -m Core -f JSON --verbose
 
-# Full comprehensive validation
+# Full validation
 sudo python3 linux_security_audit.py --parallel --perf-profile
 ```
 
@@ -444,7 +484,7 @@ sudo python3 linux_security_audit.py -m ENISA,ISO27001 -f HTML
 
 ## Documentation
 
-Comprehensive documentation is available in the [Project Wiki](https://github.com/Sandler73/Linux-Security-Audit-Project/wiki):
+Documentation is available in the [Project Wiki](https://github.com/Sandler73/Linux-Security-Audit-Project/wiki):
 
 ### Getting Started
 
@@ -571,7 +611,7 @@ Linux-Security-Audit-Project/
 
 ### Disclaimer
 
-This tool is provided for **security assessment and compliance auditing purposes**. Results should be reviewed by qualified security professionals and validated in the context of your environment. The tool identifies potential security issues but does not guarantee comprehensive security coverage. Always test in non-production environments before applying remediations to production systems.
+This tool is provided for **security assessment and compliance auditing purposes**. Results should be reviewed by qualified security professionals and validated in the context of your environment. The tool identifies potential security issues but does not guarantee complete security coverage. Always test in non-production environments before applying remediations to production systems.
 
 ## Contributing
 
@@ -707,7 +747,7 @@ This project is licensed under the **MIT License** - see [LICENSE.md](https://gi
 *Memory protection checks (NX/SMEP/SMAP/ASLR/KASLR/KPTI)
 *Crypto policy depth (update-crypto-policies, FIPS provider, TLS minimums)
 *Boot security depth (GRUB password, initramfs, kdump, UEFI)
-*Comprehensive PAM stack analysis (faillock, pwhistory, pwquality, MFA modules)
+*PAM stack analysis (faillock, pwhistory, pwquality, MFA modules)
 *Fixed PCI helper-naming compatibility, SOC2/GDPR missing return statements
 
 ### Version 3.0 - April 2026 - 16-module Multi-Framework Coverage
