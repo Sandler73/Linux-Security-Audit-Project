@@ -7,7 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.9.0] - 2026-06-13 (Scoring Bug Fix, PCI-DSS Rename, Remediation Consistency)
 
-### Fixed - code hygiene
+### Fixed - firewall detection
+
+- `host_facts._detect_firewall()` now detects **iptables** and treats any
+  active nftables/iptables ruleset as a firewall (previously it ignored
+  iptables entirely and only counted nftables when it had a default-drop
+  policy). A host firewalled with iptables - or with iptables active and
+  nftables installed-but-stopped - is now reported correctly instead of as
+  "none detected". Added a regression test covering that exact scenario.
+- The attack-surface report's firewall line now shows the full posture (each
+  installed tool with its active/inactive state) rather than a single tool
+  label.
+
+### Changed - orchestrator header and help
+
+- Bumped `SCRIPT_VERSION` from 2.0 to 3.9 so the banner and reports match the
+  release version.
+- Rewrote the `linux_security_audit.py` module header (synopsis, description,
+  features, parameters, examples, notes) to list all 16 frameworks and every
+  command-line option, and updated the argparse description. The header had
+  listed only 9 frameworks and ~20 of the ~33 flags.
+
+### Changed - report subtitles
+
+- The combined HTML report subtitle is now "Multi-Framework Security
+  Assessment" (dropped the leading "Comprehensive").
+- Each per-framework split report now carries a subtitle of the form
+  "<Framework>-Oriented Security Assessment" (e.g. "PCI-DSS-Oriented Security
+  Assessment"), so single-framework reports are self-identifying.
+
+### Documentation
+
+- Rewrote the README "Supported Frameworks" table with verified per-module
+  counts and complete focus areas for all 16 modules, and expanded the
+  attack-surface section (ten domains, host summary, and the AS-008/009/010
+  firewall-posture / executable-PATH / shared-object checks).
+- Updated `SECURITY.md` supported-versions to the 3.x scheme and noted the
+  zero-dependency/offline design and rollback capability.
+
+
 
 - Removed a dead reference to an undefined `read_sysctl_value` in
   `module_core.py` (the kernel-module-lockdown check already reads the value
