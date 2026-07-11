@@ -248,7 +248,16 @@ def _detect_pam_mfa(helpers) -> tuple:
 
 def _detect_firewall(helpers) -> tuple:
     """Returns (firewall_active, firewall_tool, ufw_active, firewalld_active,
-                 nftables_default_drop)."""
+                 nftables_default_drop).
+
+    Detects ufw, firewalld, nftables, and iptables. A tool counts as active
+    when it is running and enforcing a ruleset - not only when it has a
+    default-drop policy - so a host firewalled with iptables rules or an
+    nftables accept-based ruleset is correctly reported rather than shown as
+    having no firewall. Tool precedence for the single ``firewall_tool`` label
+    is ufw > firewalld > nftables > iptables; ``firewall_active`` is true if
+    any tool is active.
+    """
     ufw_active = helpers.systemd_active("ufw.service") == "active"
     if not ufw_active and helpers.command_available("ufw"):
         rc, out, _ = helpers.run_command(["ufw", "status"], timeout=3.0)
@@ -259,25 +268,42 @@ def _detect_firewall(helpers) -> tuple:
         rc, out, _ = helpers.run_command(["firewall-cmd", "--state"], timeout=3.0)
         firewalld_active = rc == 0 and "running" in (out or "")
 
+    nftables_active = False
     nftables_default_drop = False
     if helpers.command_available("nft"):
         rc, out, _ = helpers.run_command(["nft", "list", "ruleset"], timeout=5.0)
-        if rc == 0 and out:
+        if rc == 0 and out and out.strip():
+            # A non-empty ruleset with at least one table/chain means nftables
+            # is actively enforcing something.
+            nftables_active = ("table " in out) or ("chain " in out)
             nftables_default_drop = bool(re.search(
                 r"hook\s+input\s+priority\s+\S+;\s*policy\s+drop;",
                 out, re.MULTILINE,
             ))
 
+    iptables_active = False
+    if helpers.command_available("iptables"):
+        rc, out, _ = helpers.run_command(["iptables", "-S"], timeout=3.0)
+        if rc == 0 and out:
+            has_rules = any(l.startswith("-A") for l in out.splitlines())
+            has_drop_policy = any(
+                l.startswith("-P INPUT DROP") or l.startswith("-P FORWARD DROP")
+                for l in out.splitlines())
+            iptables_active = has_rules or has_drop_policy
+
     if ufw_active:
         tool = "ufw"
     elif firewalld_active:
         tool = "firewalld"
-    elif nftables_default_drop:
+    elif nftables_active:
         tool = "nftables"
+    elif iptables_active:
+        tool = "iptables"
     else:
         tool = ""
 
-    firewall_active = ufw_active or firewalld_active or nftables_default_drop
+    firewall_active = (ufw_active or firewalld_active or nftables_active
+                       or iptables_active)
     return (firewall_active, tool, ufw_active, firewalld_active,
              nftables_default_drop)
 
