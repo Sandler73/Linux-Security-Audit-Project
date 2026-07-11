@@ -2,7 +2,7 @@
 """
 module_core.py
 Core Security Baseline Module for Linux
-Version: 2.2
+Version: 2.0
 
 SYNOPSIS:
     Comprehensive baseline security assessment for Linux systems based on
@@ -145,7 +145,61 @@ except ImportError:
         HAS_COMMON_LIB = False
 
 MODULE_NAME = "CORE"
-MODULE_VERSION = "2.2"
+
+# v3.4 Remediation library wiring
+try:
+    from shared_components.remediation_library import get_remediation as _v34_get_remediation
+    from shared_components.remediation_library import get_removal_remediation as _v34_get_removal
+    from shared_components.remediation_library import get_patch_remediation as _v34_get_patch
+    from shared_components.os_detection import detect_os as _v34_detect_os
+    _v34_OSINFO_CACHE = None
+    def remediation_for(tool_id):
+        """Return distro-aware remediation text for a registered tool.
+
+        Falls back to a short "Install <tool>" string if the library
+        does not have an entry for the tool_id.
+        """
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        text = _v34_get_remediation(tool_id, _v34_OSINFO_CACHE)
+        return text if text else f"Install {tool_id} via your distribution\'s package manager"
+
+    def _v34_resolve_os():
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        return _v34_OSINFO_CACHE
+
+    def removal_for(canonical_token, extra_context=""):
+        """Return OS-aware package-removal remediation text."""
+        try:
+            return _v34_get_removal(canonical_token, _v34_resolve_os(),
+                                    extra_context=extra_context)
+        except Exception:
+            return f"Remove {canonical_token} via your distribution\'s package manager"
+
+    def patch_for(extra_context=""):
+        """Return OS-aware security-patch remediation text."""
+        try:
+            return _v34_get_patch(_v34_resolve_os(), extra_context=extra_context)
+        except Exception:
+            return "Apply available security updates via your distribution\'s package manager"
+except ImportError:  # pragma: no cover
+    def remediation_for(tool_id):
+        return f"Install {tool_id} via your distribution\'s package manager"
+    def removal_for(canonical_token, extra_context=""):
+        return f"Remove {canonical_token} via your distribution\'s package manager"
+    def patch_for(extra_context=""):
+        return "Apply available security updates via your distribution\'s package manager"
+
+MODULE_VERSION = "3.9"
 
 # Module logger (uses structured logging if audit_common is available)
 logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
@@ -540,7 +594,7 @@ def check_os_package_management(results: List[AuditResult], shared_data: Dict[st
             status="Pass" if auto_updates else "Warning",
             message=f"{get_core_id('PKG', 7)}: Automatic security updates (RedHat)",
             details="Installed" if auto_updates else "Not installed",
-            remediation="Install: yum install yum-cron || dnf install dnf-automatic"
+            remediation=remediation_for("dnf-automatic")
         ))
     
     # PKG-008: Available updates count
@@ -963,7 +1017,7 @@ def check_service_user_management(results: List[AuditResult], shared_data: Dict[
         status="Pass" if time_active else "Warning",
         message=f"{get_core_id('SVC', 6)}: Time synchronization active",
         details="Active" if time_active else "Not active",
-        remediation="Enable: systemctl enable chronyd"
+        remediation=remediation_for("chrony")
     ))
     
     # SVC-007: Cron service
@@ -987,7 +1041,7 @@ def check_service_user_management(results: List[AuditResult], shared_data: Dict[
         status="Pass" if audit_active else "Warning",
         message=f"{get_core_id('SVC', 8)}: Audit daemon (auditd) active",
         details="Active" if audit_active else "Not active",
-        remediation="Enable: systemctl enable auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # User Management Checks
@@ -1313,17 +1367,16 @@ def check_filesystem_network(results: List[AuditResult], shared_data: Dict[str, 
             remediation="Add nodev to /tmp in /etc/fstab"
         ))
     
-    # FS-006: World-writable files
-    result = run_command("find / -xdev -type f -perm -0002 2>/dev/null | head -20 | wc -l")
-    ww_files = safe_int_parse(result.stdout.strip())
-    
+    # FS-006: World-writable files (canonical shared assessment)
+    from shared_components.shared_assessments import get_world_writable_assessment as _ww_assess
+    _ww = _ww_assess("fail")
     results.append(AuditResult(
         module=MODULE_NAME,
         category="CORE - Filesystem",
-        status="Pass" if ww_files == 0 else "Warning",
+        status=_ww.status,
         message=f"{get_core_id('FS', 6)}: World-writable files",
-        details=f"{ww_files} world-writable files found",
-        remediation="Remove world-write: chmod o-w <file>"
+        details=_ww.details,
+        remediation=_ww.remediation
     ))
     
     # FS-007: SUID files inventory
@@ -1712,7 +1765,7 @@ def check_system_hardening_tools(results: List[AuditResult], shared_data: Dict[s
         status="Pass" if fim_installed else "Warning",
         message=f"{get_core_id('TOOL', 1)}: File integrity monitoring installed",
         details=f"Installed: {', '.join(fim_installed)}" if fim_installed else "Not installed",
-        remediation="Install AIDE: apt-get install aide || yum install aide"
+        remediation=remediation_for("aide")
     ))
     
     # TOOL-002: Intrusion detection
@@ -1737,7 +1790,7 @@ def check_system_hardening_tools(results: List[AuditResult], shared_data: Dict[s
         status="Pass" if av_installed else "Warning",
         message=f"{get_core_id('TOOL', 3)}: Anti-malware software installed",
         details="ClamAV installed" if av_installed else "Not installed",
-        remediation="Install: apt-get install clamav"
+        remediation=remediation_for("clamav")
     ))
     
     # TOOL-004: Rootkit detection
@@ -1750,7 +1803,7 @@ def check_system_hardening_tools(results: List[AuditResult], shared_data: Dict[s
         status="Pass" if rk_installed else "Warning",
         message=f"{get_core_id('TOOL', 4)}: Rootkit detection tools",
         details=f"Installed: {', '.join(rk_installed)}" if rk_installed else "Not installed",
-        remediation="Install: apt-get install rkhunter"
+        remediation=remediation_for("rkhunter")
     ))
     
     # TOOL-005: System monitoring
@@ -1776,7 +1829,7 @@ def check_system_hardening_tools(results: List[AuditResult], shared_data: Dict[s
         status="Info",
         message=f"{get_core_id('TOOL', 6)}: Log analysis tools",
         details=f"Installed: {', '.join(log_installed)}" if log_installed else "Not installed",
-        remediation="Install fail2ban for automated response"
+        remediation=remediation_for("fail2ban")
     ))
     
     # TOOL-007: Firewall management tools
@@ -1854,7 +1907,7 @@ def check_system_hardening_tools(results: List[AuditResult], shared_data: Dict[s
         status="Info",
         message=f"{get_core_id('HARD', 13)}: System activity reporting",
         details="sysstat installed" if sysstat else "Not installed",
-        remediation="Install: apt-get install sysstat"
+        remediation=remediation_for("sysstat")
     ))
     
     # HARD-014: Memory overcommit
@@ -3877,6 +3930,1416 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
 # Module Testing
 # ============================================================================
 
+
+
+# ============================================================================
+# v3.3 EXPANSION - Core Linux Security Baseline Deep Coverage
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across:
+#   - Per-service systemd hardening directives (sshd, journald, etc.)
+#   - SUSE family-specific hardening
+#   - Arch family-specific hardening
+#   - Advanced kernel security features
+#   - Container/namespace hardening at host level
+#   - Time synchronization NTS
+#   - Secure boot chain indicators
+# ============================================================================
+
+from shared_components.module_helpers import (
+    read_file_safe as _v33_read_file_safe,
+    file_exists as _v33_file_exists,
+    directory_exists as _v33_directory_exists,
+    command_available as _v33_command_available,
+    run_command as _v33_run_command,
+    read_sysctl as _v33_read_sysctl,
+    systemd_active as _v33_systemd_active,
+    file_mode as _v33_file_mode,
+    list_directory as _v33_list_directory,
+)
+
+
+def _v33_core_result(category, status, message, severity="Medium",
+                     details="", remediation="", cross_references=None):
+    """Build AuditResult for Core v3.3 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_core_v33_systemd_hardening(results, shared_data, os_info):
+    """Per-service systemd hardening directive coverage."""
+
+    if not _v33_command_available("systemctl"):
+        return
+
+    # Critical services with hardening expectation
+    critical_services = [
+        "sshd.service", "ssh.service",
+        "systemd-journald.service",
+        "auditd.service",
+        "rsyslog.service",
+        "chronyd.service", "chrony.service",
+        "cron.service", "crond.service",
+    ]
+
+    hardening_directives = {
+        "ProtectSystem": ["full", "strict"],
+        "ProtectHome": ["yes", "read-only", "tmpfs"],
+        "PrivateTmp": ["yes"],
+        "NoNewPrivileges": ["yes"],
+        "RestrictRealtime": ["yes"],
+        "MemoryDenyWriteExecute": ["yes"],
+        "RestrictSUIDSGID": ["yes"],
+        "LockPersonality": ["yes"],
+    }
+
+    inspected = 0
+    avg_score = 0
+    services_with_data = []
+
+    for svc in critical_services:
+        rc, out, _ = _v33_run_command(
+            ["systemctl", "show", svc, "--no-page"], timeout=3.0
+        )
+        if rc != 0 or not out:
+            continue
+        if "LoadState=not-found" in out or "LoadState=masked" in out:
+            continue
+        inspected += 1
+
+        score = 0
+        for directive, good_values in hardening_directives.items():
+            for line in out.splitlines():
+                if line.startswith(directive + "="):
+                    val = line.split("=", 1)[1].strip().lower()
+                    if val in good_values:
+                        score += 1
+                    break
+
+        if score >= 1:
+            avg_score += score
+            services_with_data.append(f"{svc}={score}")
+
+    if inspected > 0:
+        # Most services should have at least 2 hardening directives
+        ratio = avg_score / max(1, inspected)
+        results.append(_v33_core_result(
+            "Core systemd v3.3 - Hardening",
+            "Pass" if ratio >= 2.0 else "Warning",
+            f"Critical services systemd hardening "
+            f"(avg {ratio:.1f}/{len(hardening_directives)} directives)",
+            severity="Medium",
+            details=(
+                f"Inspected: {inspected}, services with hardening: "
+                f"{services_with_data[:5]}"
+            ),
+            remediation=(
+                "Use systemd-analyze security <unit> to score each service. "
+                "Add directives via systemctl edit <unit>: "
+                "ProtectSystem=full, ProtectHome=yes, PrivateTmp=yes, "
+                "NoNewPrivileges=yes"
+            ),
+            cross_references={
+                "NIST": "SI-7", "CIS": "5.1",
+            },
+        ))
+
+
+def _check_core_v33_advanced_kernel(results, shared_data, os_info):
+    """Advanced kernel security features."""
+
+    # Kernel lockdown
+    lockdown = _v33_read_file_safe("/sys/kernel/security/lockdown")
+    has_lockdown = lockdown and "[none]" not in lockdown
+    results.append(_v33_core_result(
+        "Core Kernel v3.3 - Lockdown",
+        "Pass" if has_lockdown else "Info",
+        f"Kernel lockdown active: {has_lockdown}",
+        severity="High",
+        details=f"lockdown: {lockdown.strip() if lockdown else 'unset'}",
+        remediation="Boot with lockdown=integrity on kernel cmdline",
+        cross_references={
+            "NIST": "CM-7",
+        },
+    ))
+
+    # IMA Integrity Measurement Architecture
+    ima_present = _v33_directory_exists("/sys/kernel/security/ima")
+    results.append(_v33_core_result(
+        "Core Kernel v3.3 - IMA",
+        "Pass" if ima_present else "Info",
+        f"Integrity Measurement Architecture: {ima_present}",
+        severity="Medium",
+        details=f"/sys/kernel/security/ima: {ima_present}",
+        remediation="Boot with ima_policy=tcb on kernel cmdline",
+        cross_references={
+            "NIST": "SI-7",
+        },
+    ))
+
+    # Module signing enforcement
+    sig_enforce = _v33_read_file_safe(
+        "/sys/module/module/parameters/sig_enforce"
+    ).strip()
+    results.append(_v33_core_result(
+        "Core Kernel v3.3 - Module Signing",
+        "Pass" if sig_enforce == "Y" else "Info",
+        f"Module sig_enforce: {sig_enforce or 'unset'}",
+        severity="High",
+        details=f"sig_enforce = {sig_enforce}",
+        remediation="Boot with module.sig_enforce=1 on kernel cmdline",
+        cross_references={
+            "NIST": "SI-7",
+        },
+    ))
+
+    # CPU Vulnerability Mitigations
+    vuln_dir = "/sys/devices/system/cpu/vulnerabilities"
+    if _v33_directory_exists(vuln_dir):
+        vulns = ["meltdown", "spectre_v1", "spectre_v2", "mds",
+                  "spec_store_bypass", "l1tf", "srbds", "tsx_async_abort"]
+        unmitigated = []
+        for v in vulns:
+            content = _v33_read_file_safe(os.path.join(vuln_dir, v)).strip()
+            if content and "Vulnerable" in content and "Mitigation" not in content:
+                unmitigated.append(v)
+        results.append(_v33_core_result(
+            "Core Kernel v3.3 - CPU Vulnerabilities",
+            "Pass" if not unmitigated else "Warning",
+            f"CPU vulnerabilities mitigated ({len(unmitigated)} unmitigated)",
+            severity="High",
+            details=f"Unmitigated: {unmitigated}",
+            remediation=(
+                "Update kernel and microcode: apt-get install -y "
+                "intel-microcode amd64-microcode; reboot"
+            ),
+            cross_references={
+                "NIST": "SI-2",
+            },
+        ))
+
+    # User namespaces (kernel.unprivileged_userns_clone)
+    userns = _v33_read_sysctl("kernel.unprivileged_userns_clone")
+    results.append(_v33_core_result(
+        "Core Kernel v3.3 - User Namespaces",
+        "Info",
+        f"Unprivileged user namespaces: "
+        f"{'disabled' if userns == '0' else 'enabled or unset'}",
+        severity="Informational",
+        details=f"kernel.unprivileged_userns_clone = {userns}",
+        remediation=(
+            "If not used by containers: echo 'kernel.unprivileged_userns_clone = 0' "
+            ">> /etc/sysctl.d/99-userns.conf"
+        ),
+        cross_references={
+            "NIST": "CM-7",
+        },
+    ))
+
+
+def _check_core_v33_secure_boot(results, shared_data, os_info):
+    """Secure boot chain indicators."""
+
+    # UEFI / EFI variables
+    efi_present = _v33_directory_exists("/sys/firmware/efi")
+    efi_vars_present = _v33_directory_exists("/sys/firmware/efi/efivars")
+    results.append(_v33_core_result(
+        "Core Boot v3.3 - UEFI/EFI",
+        "Pass" if efi_present else "Info",
+        f"UEFI firmware: {efi_present} (efivars: {efi_vars_present})",
+        severity="Medium",
+        details=f"/sys/firmware/efi: {efi_present}",
+        remediation=(
+            "If on UEFI: ensure Secure Boot enabled in firmware. "
+            "Run mokutil --sb-state to verify."
+        ),
+        cross_references={
+            "NIST": "SI-7", "CIS": "1.5.4",
+        },
+    ))
+
+    # mokutil for Secure Boot state
+    if _v33_command_available("mokutil"):
+        rc, out, _ = _v33_run_command(["mokutil", "--sb-state"], timeout=3.0)
+        sb_enabled = rc == 0 and "SecureBoot enabled" in out
+        results.append(_v33_core_result(
+            "Core Boot v3.3 - Secure Boot",
+            "Pass" if sb_enabled else "Info",
+            f"Secure Boot enabled: {sb_enabled}",
+            severity="High",
+            details=f"mokutil --sb-state output: {out.strip()[:80]}",
+            remediation="Enable Secure Boot in firmware/BIOS settings",
+            cross_references={
+                "NIST": "SI-7",
+            },
+        ))
+
+    # GRUB password protection (cross-ref via DistBaseline pattern)
+    grub_password = False
+    for f in ["/etc/grub.d/01_users", "/etc/grub.d/40_custom",
+               "/boot/grub2/user.cfg", "/boot/grub/grub.cfg"]:
+        c = _v33_read_file_safe(f)
+        if "password_pbkdf2" in c or "GRUB2_PASSWORD" in c:
+            grub_password = True
+            break
+    results.append(_v33_core_result(
+        "Core Boot v3.3 - GRUB Password",
+        "Pass" if grub_password else "Warning",
+        f"GRUB password protection: {grub_password}",
+        severity="High",
+        details=f"password_pbkdf2 in GRUB config: {grub_password}",
+        remediation=(
+            "RHEL: grub2-setpassword. "
+            "Debian: grub-mkpasswd-pbkdf2 then add to /etc/grub.d/40_custom"
+        ),
+        cross_references={
+            "NIST": "AC-3", "CIS": "1.5.2", "STIG": "V-230234",
+        },
+    ))
+
+
+def _check_core_v33_suse_specific(results, shared_data, os_info):
+    """SUSE family specific hardening."""
+    if not getattr(os_info, "is_suse_family", lambda: False)():
+        return
+
+    # Snapper for btrfs snapshots
+    snapper = _v33_command_available("snapper")
+    results.append(_v33_core_result(
+        "Core SUSE v3.3 - Snapper",
+        "Pass" if snapper else "Info",
+        f"snapper btrfs snapshots: {snapper}",
+        severity="Low",
+        details=f"snapper binary: {snapper}",
+        remediation="zypper install -y snapper",
+        cross_references={
+            "NIST": "CP-9",
+        },
+    ))
+
+    # AppArmor (SUSE default MAC)
+    aa_active = _v33_systemd_active("apparmor.service") == "active"
+    results.append(_v33_core_result(
+        "Core SUSE v3.3 - AppArmor",
+        "Pass" if aa_active else "Warning",
+        f"AppArmor active: {aa_active}",
+        severity="High",
+        details=f"apparmor.service: {aa_active}",
+        remediation=remediation_for("apparmor"),
+        cross_references={
+            "NIST": "AC-3",
+        },
+    ))
+
+    # zypper repository signing (SUSE)
+    zypper_repos = _v33_directory_exists("/etc/zypp/repos.d")
+    results.append(_v33_core_result(
+        "Core SUSE v3.3 - Zypper Repos",
+        "Pass" if zypper_repos else "Info",
+        f"zypper repos directory: {zypper_repos}",
+        severity="Medium",
+        details=f"/etc/zypp/repos.d: {zypper_repos}",
+        cross_references={
+            "NIST": "CM-5(3)",
+        },
+    ))
+
+
+def _check_core_v33_arch_specific(results, shared_data, os_info):
+    """Arch family specific hardening."""
+    if not getattr(os_info, "is_arch_family", lambda: False)():
+        return
+
+    # pacman keyring
+    pacman_keyring = _v33_directory_exists("/etc/pacman.d/gnupg")
+    results.append(_v33_core_result(
+        "Core Arch v3.3 - pacman keyring",
+        "Pass" if pacman_keyring else "Warning",
+        f"pacman keyring: {pacman_keyring}",
+        severity="High",
+        details=f"/etc/pacman.d/gnupg: {pacman_keyring}",
+        remediation="pacman-key --init && pacman-key --populate archlinux",
+        cross_references={
+            "NIST": "CM-5(3)",
+        },
+    ))
+
+    # pacman SigLevel strict
+    pacman_conf = _v33_read_file_safe("/etc/pacman.conf")
+    siglevel_match = re.search(
+        r"^\s*SigLevel\s*=\s*(\S.*)", pacman_conf, re.MULTILINE
+    )
+    siglevel = siglevel_match.group(1).strip() if siglevel_match else ""
+    siglevel_strict = "Required" in siglevel and "DatabaseRequired" in siglevel
+    results.append(_v33_core_result(
+        "Core Arch v3.3 - SigLevel",
+        "Pass" if siglevel_strict else "Warning",
+        f"pacman SigLevel strict: {siglevel_strict}",
+        severity="High",
+        details=f"SigLevel = {siglevel}",
+        remediation=(
+            "In /etc/pacman.conf: SigLevel = Required DatabaseRequired"
+        ),
+        cross_references={
+            "NIST": "CM-5(3)",
+        },
+    ))
+
+    # Reflector / mirrorlist freshness indicator
+    reflector_present = _v33_command_available("reflector")
+    results.append(_v33_core_result(
+        "Core Arch v3.3 - Reflector",
+        "Info",
+        f"reflector mirrorlist tool: {reflector_present}",
+        severity="Informational",
+        details=f"reflector: {reflector_present}",
+        cross_references={
+            "NIST": "CM-7",
+        },
+    ))
+
+
+def _check_core_v33_container_host(results, shared_data, os_info):
+    """Container hardening at host level."""
+
+    # Container runtimes detected
+    runtimes = {
+        "docker": (
+            _v33_command_available("docker") or
+            _v33_systemd_active("docker.service") == "active"
+        ),
+        "podman": _v33_command_available("podman"),
+        "containerd": (
+            _v33_command_available("containerd") or
+            _v33_systemd_active("containerd.service") == "active"
+        ),
+    }
+    detected_rt = [k for k, v in runtimes.items() if v]
+    if not detected_rt:
+        return
+
+    results.append(_v33_core_result(
+        "Core Container v3.3 - Runtimes",
+        "Info",
+        f"Container runtimes detected: {detected_rt}",
+        severity="Informational",
+        details=f"Runtimes: {detected_rt}",
+        cross_references={
+            "NIST": "SI-4",
+        },
+    ))
+
+    # cgroup v2 for better isolation
+    cgroup_v2 = _v33_file_exists("/sys/fs/cgroup/cgroup.controllers")
+    results.append(_v33_core_result(
+        "Core Container v3.3 - cgroup v2",
+        "Pass" if cgroup_v2 else "Info",
+        f"cgroup v2 unified hierarchy: {cgroup_v2}",
+        severity="Low",
+        details=f"/sys/fs/cgroup/cgroup.controllers: {cgroup_v2}",
+        remediation=(
+            "Boot with systemd.unified_cgroup_hierarchy=1 on kernel cmdline"
+        ),
+        cross_references={
+            "NIST": "SC-7(13)",
+        },
+    ))
+
+    # Docker daemon hardening
+    if runtimes["docker"]:
+        daemon_json = _v33_read_file_safe("/etc/docker/daemon.json")
+        hardening = sum([
+            "userns-remap" in daemon_json,
+            "no-new-privileges" in daemon_json,
+            '"icc": false' in daemon_json,
+            "live-restore" in daemon_json,
+        ])
+        results.append(_v33_core_result(
+            "Core Container v3.3 - Docker Hardening",
+            "Pass" if hardening >= 2 else "Warning",
+            f"Docker daemon hardening directives ({hardening}/4)",
+            severity="High",
+            details=f"Hardening directives present: {hardening}",
+            remediation=(
+                'In /etc/docker/daemon.json: '
+                '{"userns-remap":"default","no-new-privileges":true,'
+                '"icc":false,"live-restore":true}'
+            ),
+            cross_references={
+                "NIST": "CM-7", "CIS-Docker": "2.x",
+            },
+        ))
+
+
+def _check_core_v33_time_security(results, shared_data, os_info):
+    """Time synchronization with authentication (NTS)."""
+
+    chrony_active = (
+        _v33_systemd_active("chronyd.service") == "active" or
+        _v33_systemd_active("chrony.service") == "active"
+    )
+
+    if chrony_active:
+        chrony_conf = (
+            _v33_read_file_safe("/etc/chrony.conf") or
+            _v33_read_file_safe("/etc/chrony/chrony.conf")
+        )
+        nts_present = bool(re.search(
+            r"^\s*server\s+\S+.*nts", chrony_conf, re.MULTILINE
+        ))
+        results.append(_v33_core_result(
+            "Core Time v3.3 - NTS",
+            "Pass" if nts_present else "Info",
+            f"chrony NTS-authenticated time: {nts_present}",
+            severity="Medium",
+            details=f"NTS server directive: {nts_present}",
+            remediation=(
+                "Add to /etc/chrony.conf: server time.cloudflare.com nts iburst"
+            ),
+            cross_references={
+                "NIST": "AU-8(2)",
+            },
+        ))
+
+
+def _check_core_v33_filesystem_advanced(results, shared_data, os_info):
+    """Advanced filesystem security features."""
+
+    # Filesystem read-only / immutable indicators
+    rc, out, _ = _v33_run_command(["lsblk", "-f", "-J"], timeout=3.0)
+    has_btrfs_or_zfs = False
+    if rc == 0 and out:
+        if "btrfs" in out.lower() or "zfs" in out.lower():
+            has_btrfs_or_zfs = True
+    results.append(_v33_core_result(
+        "Core Filesystem v3.3 - Modern FS",
+        "Info",
+        f"Modern filesystem (btrfs/zfs) detected: {has_btrfs_or_zfs}",
+        severity="Informational",
+        details=f"btrfs/zfs in lsblk: {has_btrfs_or_zfs}",
+        cross_references={
+            "NIST": "SI-7",
+        },
+    ))
+
+    # /tmp on tmpfs (RAM-backed)
+    proc_mounts = _v33_read_file_safe("/proc/mounts")
+    tmp_on_tmpfs = bool(re.search(
+        r"^tmpfs\s+/tmp\s+tmpfs", proc_mounts, re.MULTILINE
+    ))
+    results.append(_v33_core_result(
+        "Core Filesystem v3.3 - /tmp tmpfs",
+        "Pass" if tmp_on_tmpfs else "Info",
+        f"/tmp on tmpfs (RAM-backed): {tmp_on_tmpfs}",
+        severity="Low",
+        details=f"/tmp tmpfs mount: {tmp_on_tmpfs}",
+        remediation=(
+            "systemctl enable tmp.mount  (uses tmpfs by default)"
+        ),
+        cross_references={
+            "NIST": "SI-12",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_core_v33 = run_checks
+
+
+def run_checks(shared_data):
+    """Execute the v3.3 expanded Core module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_core_v33(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_core_v33_systemd_hardening(results, shared_data, os_info)
+        _check_core_v33_advanced_kernel(results, shared_data, os_info)
+        _check_core_v33_secure_boot(results, shared_data, os_info)
+        _check_core_v33_suse_specific(results, shared_data, os_info)
+        _check_core_v33_arch_specific(results, shared_data, os_info)
+        _check_core_v33_container_host(results, shared_data, os_info)
+        _check_core_v33_time_security(results, shared_data, os_info)
+        _check_core_v33_filesystem_advanced(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="Core - Error",
+            status="Error",
+            message=f"Core v3.3 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
+
+
+# ============================================================================
+# v3.5 EXPANSION - Core Linux Baseline Additional Depth
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across Core baseline areas not yet covered:
+#     - Sudo hygiene depth (additional defaults, secure logging)
+#     - User/group hygiene (locked accounts, expired passwords)
+#     - Service inventory hygiene (no-shell system accounts)
+#     - Mount hygiene (additional restrictive options)
+#     - Cron file permissions
+#     - Boot loader hygiene depth (grub.cfg permissions, password)
+#     - Service banner hygiene
+#     - PAM faillock hygiene depth
+# ============================================================================
+
+# v3.5 helpers
+from shared_components.module_helpers import (
+    read_file_safe as _v35_read_file_safe,
+    file_exists as _v35_file_exists,
+    directory_exists as _v35_directory_exists,
+    command_available as _v35_command_available,
+    run_command as _v35_run_command,
+    read_sysctl as _v35_read_sysctl,
+    systemd_active as _v35_systemd_active,
+    list_directory as _v35_list_directory,
+)
+
+
+def _v35_core_result(category, status, message, severity="Medium",
+                    details="", remediation="", cross_references=None):
+    """Build AuditResult for Core v3.5 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_core_v35_sudo_hygiene(results, shared_data, os_info):
+    """Sudo hygiene depth - defaults and secure logging."""
+    cat = "Core v3.5 - Sudo"
+
+    sudoers_main = _v35_read_file_safe("/etc/sudoers")
+    sudoers_d = ""
+    if _v35_directory_exists("/etc/sudoers.d"):
+        for f in _v35_list_directory("/etc/sudoers.d"):
+            if f != "README":
+                sudoers_d += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/sudoers.d", f)
+                )
+    full_sudoers = sudoers_main + "\n" + sudoers_d
+
+    # Defaults use_pty (prevents privilege escalation via pty hijacking)
+    use_pty = bool(re.search(
+        r"^\s*Defaults\s+use_pty",
+        full_sudoers, re.MULTILINE,
+    ))
+    results.append(_v35_core_result(
+        f"{cat} - use_pty",
+        "Pass" if use_pty else "Warning",
+        f"Sudo Defaults use_pty: {use_pty}",
+        severity="Medium",
+        details=f"use_pty in sudoers: {use_pty}",
+        remediation=(
+            "In /etc/sudoers.d/00-defaults:\n"
+            "  Defaults use_pty\n"
+            "Mitigates io_uring-based PTY hijacking attacks against sudo."
+        ),
+        cross_references={
+            "NIST": "AC-6", "CIS": "5.2.5",
+        },
+    ))
+
+    # Defaults logfile (separate sudo log)
+    logfile_set = bool(re.search(
+        r"^\s*Defaults\s+logfile=",
+        full_sudoers, re.MULTILINE,
+    ))
+    results.append(_v35_core_result(
+        f"{cat} - Sudo Logfile",
+        "Pass" if logfile_set else "Info",
+        f"Sudo Defaults logfile set: {logfile_set}",
+        severity="Low",
+        details=f"logfile defined: {logfile_set}",
+        remediation=(
+            "In /etc/sudoers.d/00-defaults:\n"
+            "  Defaults logfile=\"/var/log/sudo.log\"\n"
+            "Aids incident response by aggregating sudo events."
+        ),
+        cross_references={
+            "NIST": "AU-2", "CIS": "5.2.3",
+        },
+    ))
+
+    # Wheel/sudo group has no NOPASSWD (review NOPASSWD count)
+    nopasswd_count = len([
+        line for line in full_sudoers.splitlines()
+        if "NOPASSWD" in line and not line.strip().startswith("#")
+    ])
+    nopasswd_minimal = nopasswd_count <= 2
+    results.append(_v35_core_result(
+        f"{cat} - NOPASSWD Minimal",
+        "Pass" if nopasswd_minimal else "Warning",
+        f"Sudo NOPASSWD entries: {nopasswd_count} (minimal threshold: 2)",
+        severity="High",
+        details=f"NOPASSWD count: {nopasswd_count}",
+        remediation=(
+            "Audit NOPASSWD entries:\n"
+            "  grep NOPASSWD /etc/sudoers /etc/sudoers.d/*\n"
+            "Each represents a privilege grant without re-authentication."
+        ),
+        cross_references={
+            "NIST": "AC-6(5)",
+            "PCI-DSS": "8.2.7",
+        },
+    ))
+
+
+def _check_core_v35_user_hygiene(results, shared_data, os_info):
+    """User/group hygiene - locked accounts, expired passwords."""
+    cat = "Core v3.5 - User Hygiene"
+
+    # System accounts (UID < 1000) should not have login shells
+    passwd = _v35_read_file_safe("/etc/passwd")
+    system_login_accounts = []
+    if passwd:
+        for line in passwd.splitlines():
+            parts = line.split(":")
+            if len(parts) < 7:
+                continue
+            try:
+                uid = int(parts[2])
+            except ValueError:
+                continue
+            shell = parts[6]
+            interactive = shell not in (
+                "/sbin/nologin", "/usr/sbin/nologin", "/bin/false",
+                "/usr/bin/false",
+            )
+            if 0 < uid < 1000 and interactive:
+                system_login_accounts.append(parts[0])
+    results.append(_v35_core_result(
+        f"{cat} - System Account Shells",
+        "Pass" if not system_login_accounts else "Warning",
+        f"System accounts (UID 1-999) with login shells: "
+        f"{len(system_login_accounts)}",
+        severity="High",
+        details=f"Accounts: {system_login_accounts[:5]}",
+        remediation=(
+            "For each system account:\n"
+            "  usermod -s /usr/sbin/nologin <user>\n"
+            "System accounts should not have interactive shells."
+        ),
+        cross_references={
+            "NIST": "AC-2", "STIG": "V-230373",
+            "CIS": "5.4.2.1",
+        },
+    ))
+
+    # Empty passwords in /etc/shadow
+    shadow = _v35_read_file_safe("/etc/shadow")
+    empty_pw_accounts = []
+    if shadow:
+        for line in shadow.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and parts[1] == "":
+                empty_pw_accounts.append(parts[0])
+    results.append(_v35_core_result(
+        f"{cat} - Empty Password Hashes",
+        "Pass" if not empty_pw_accounts else "Fail",
+        f"Accounts with empty password hash: {len(empty_pw_accounts)}",
+        severity="Critical",
+        details=f"Accounts: {empty_pw_accounts}",
+        remediation=(
+            "For each: passwd -l <user>  (lock the account)\n"
+            "Or set a strong password / SSH-key only login."
+        ),
+        cross_references={
+            "NIST": "IA-5",
+            "PCI-DSS": "8.3.1",
+        },
+    ))
+
+    # Default UMASK in /etc/login.defs
+    umask_match = re.search(
+        r"^\s*UMASK\s+(\d+)",
+        _v35_read_file_safe("/etc/login.defs"),
+        re.MULTILINE,
+    )
+    umask_value = umask_match.group(1) if umask_match else "022"
+    umask_secure = umask_value in ("027", "077")
+    results.append(_v35_core_result(
+        f"{cat} - UMASK Default",
+        "Pass" if umask_secure else "Info",
+        f"Default UMASK: {umask_value}",
+        severity="Low",
+        details=f"UMASK = {umask_value}",
+        remediation=(
+            "In /etc/login.defs:\n"
+            "  UMASK 027  (or 077 for stricter)"
+        ),
+        cross_references={
+            "CIS": "5.5.5", "NIST": "AC-3",
+        },
+    ))
+
+
+def _check_core_v35_mount_hygiene(results, shared_data, os_info):
+    """Mount hygiene - additional restrictive mount options."""
+    cat = "Core v3.5 - Mount Hygiene"
+
+    fstab = _v35_read_file_safe("/etc/fstab")
+
+    # /tmp with nodev/nosuid/noexec
+    tmp_secure = False
+    for line in fstab.splitlines():
+        if line.strip().startswith("#") or not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) >= 4 and parts[1] == "/tmp":
+            opts = parts[3]
+            tmp_secure = (
+                "nodev" in opts and "nosuid" in opts and "noexec" in opts
+            )
+            break
+    # Or systemd tmp.mount
+    if not tmp_secure:
+        tmp_mount_unit = _v35_read_file_safe(
+            "/usr/lib/systemd/system/tmp.mount"
+        )
+        if tmp_mount_unit and "nodev" in tmp_mount_unit and "nosuid" in tmp_mount_unit:
+            tmp_secure = True
+    results.append(_v35_core_result(
+        f"{cat} - /tmp Restrictive Mount",
+        "Pass" if tmp_secure else "Warning",
+        f"/tmp mounted with nodev/nosuid/noexec: {tmp_secure}",
+        severity="Medium",
+        details=f"/tmp restrictive: {tmp_secure}",
+        remediation=(
+            "In /etc/fstab:\n"
+            "  tmpfs /tmp tmpfs defaults,nodev,nosuid,noexec 0 0\n"
+            "Then: systemctl daemon-reload && mount -o remount /tmp"
+        ),
+        cross_references={
+            "CIS": "1.1.2", "NIST": "AC-3",
+        },
+    ))
+
+    # /dev/shm with nodev/nosuid/noexec
+    shm_secure = False
+    for line in fstab.splitlines():
+        if line.strip().startswith("#") or not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) >= 4 and parts[1] == "/dev/shm":
+            opts = parts[3]
+            shm_secure = (
+                "nodev" in opts and "nosuid" in opts and "noexec" in opts
+            )
+            break
+    results.append(_v35_core_result(
+        f"{cat} - /dev/shm Restrictive Mount",
+        "Pass" if shm_secure else "Info",
+        f"/dev/shm restrictive mount: {shm_secure}",
+        severity="Medium",
+        details=f"/dev/shm restrictive: {shm_secure}",
+        remediation=(
+            "In /etc/fstab:\n"
+            "  tmpfs /dev/shm tmpfs defaults,nodev,nosuid,noexec 0 0"
+        ),
+        cross_references={
+            "CIS": "1.1.7", "NIST": "AC-3",
+        },
+    ))
+
+
+def _check_core_v35_cron_hygiene(results, shared_data, os_info):
+    """Cron file permissions - root-owned and not world-readable."""
+    cat = "Core v3.5 - Cron"
+
+    cron_paths = [
+        "/etc/crontab",
+        "/etc/cron.hourly", "/etc/cron.daily",
+        "/etc/cron.weekly", "/etc/cron.monthly", "/etc/cron.d",
+    ]
+    issues = []
+    for path in cron_paths:
+        if not (_v35_file_exists(path) or _v35_directory_exists(path)):
+            continue
+        try:
+            st = os.stat(path)
+            mode = st.st_mode & 0o7777
+            # World-writable is the cardinal sin
+            if mode & 0o0002:
+                issues.append(f"{path}({oct(mode)})")
+        except OSError:
+            pass
+    results.append(_v35_core_result(
+        f"{cat} - Cron File Permissions",
+        "Pass" if not issues else "Fail",
+        f"Cron files not world-writable: {'OK' if not issues else 'issues'}",
+        severity="High",
+        details=f"Issues: {issues}",
+        remediation=(
+            "chmod o-w /etc/crontab /etc/cron.* (for any flagged paths)\n"
+            "chown root:root /etc/crontab /etc/cron.*"
+        ),
+        cross_references={
+            "CIS": "5.1.2", "NIST": "AC-3",
+            "STIG": "V-230380",
+        },
+    ))
+
+    # /etc/cron.allow exists (allowlist preferred over denylist)
+    cron_allow = _v35_file_exists("/etc/cron.allow")
+    cron_deny = _v35_file_exists("/etc/cron.deny")
+    cron_allowlist_active = cron_allow and not cron_deny
+    results.append(_v35_core_result(
+        f"{cat} - Allowlist Policy",
+        "Pass" if cron_allowlist_active else "Info",
+        f"cron.allow allowlist (no cron.deny): {cron_allowlist_active}",
+        severity="Medium",
+        details=(
+            f"/etc/cron.allow: {cron_allow}, /etc/cron.deny: {cron_deny}"
+        ),
+        remediation=(
+            "echo 'root' > /etc/cron.allow; chmod 0640 /etc/cron.allow\n"
+            "rm -f /etc/cron.deny"
+        ),
+        cross_references={
+            "CIS": "5.1.8", "NIST": "AC-3",
+        },
+    ))
+
+
+def _check_core_v35_grub_hygiene(results, shared_data, os_info):
+    """Boot loader hygiene depth - grub.cfg permissions."""
+    cat = "Core v3.5 - GRUB"
+
+    grub_paths = [
+        "/boot/grub/grub.cfg",
+        "/boot/grub2/grub.cfg",
+        "/boot/efi/EFI/redhat/grub.cfg",
+        "/boot/efi/EFI/ubuntu/grub.cfg",
+        "/boot/efi/EFI/debian/grub.cfg",
+    ]
+    grub_path_found = None
+    grub_mode = -1
+    for p in grub_paths:
+        if _v35_file_exists(p):
+            grub_path_found = p
+            try:
+                grub_mode = os.stat(p).st_mode & 0o7777
+            except OSError:
+                pass
+            break
+    grub_secure = grub_path_found and 0 <= grub_mode <= 0o0600
+    results.append(_v35_core_result(
+        f"{cat} - grub.cfg Mode <= 0600",
+        "Pass" if grub_secure else "Warning",
+        f"GRUB config mode <= 0600: {grub_secure}",
+        severity="High",
+        details=(
+            f"path: {grub_path_found}, mode: "
+            f"{oct(grub_mode) if grub_mode >= 0 else 'unknown'}"
+        ),
+        remediation=(
+            f"chmod 0600 {grub_path_found or '/boot/grub/grub.cfg'}\n"
+            "Prevents disclosure of boot parameters to non-root users."
+        ),
+        cross_references={
+            "CIS": "1.4.1", "NIST": "AC-3",
+            "STIG": "V-230275",
+        },
+    ))
+
+    # GRUB superuser/password (interactive boot menu protection)
+    grub_password = False
+    for grub_d in ["/etc/grub.d", "/etc/default/grub.d"]:
+        if not _v35_directory_exists(grub_d):
+            continue
+        for f in _v35_list_directory(grub_d):
+            content = _v35_read_file_safe(os.path.join(grub_d, f))
+            if "password_pbkdf2" in content or "set superusers" in content:
+                grub_password = True
+                break
+        if grub_password:
+            break
+    results.append(_v35_core_result(
+        f"{cat} - GRUB Password",
+        "Pass" if grub_password else "Info",
+        f"GRUB superuser password set: {grub_password}",
+        severity="Medium",
+        details=f"password_pbkdf2 in grub config: {grub_password}",
+        remediation=(
+            "Generate hash: grub-mkpasswd-pbkdf2\n"
+            "In /etc/grub.d/40_custom:\n"
+            "  set superusers=\"root\"\n"
+            "  password_pbkdf2 root grub.pbkdf2.sha512.10000.<HASH>\n"
+            "Then: update-grub  (Debian) or grub2-mkconfig  (RHEL)"
+        ),
+        cross_references={
+            "CIS": "1.4.2", "STIG": "V-230275",
+        },
+    ))
+
+
+def _check_core_v35_service_inventory(results, shared_data, os_info):
+    """Service inventory hygiene - no-shell system accounts, listening services."""
+    cat = "Core v3.5 - Service Inventory"
+
+    # Listening service inventory
+    rc, out, _ = _v35_run_command(["ss", "-tlnp"], timeout=5.0)
+    tcp_count = 0
+    if rc == 0 and out:
+        tcp_count = max(0, len(out.splitlines()) - 1)
+    rc, out, _ = _v35_run_command(["ss", "-ulnp"], timeout=5.0)
+    udp_count = 0
+    if rc == 0 and out:
+        udp_count = max(0, len(out.splitlines()) - 1)
+
+    results.append(_v35_core_result(
+        f"{cat} - Listening Sockets Count",
+        "Pass" if tcp_count + udp_count <= 20 else "Info",
+        f"TCP listeners: {tcp_count}, UDP listeners: {udp_count}",
+        severity="Informational",
+        details=f"Total listening sockets: {tcp_count + udp_count}",
+        remediation=(
+            "Audit with: ss -tlnp; ss -ulnp\n"
+            "For each non-essential listener, disable: "
+            "systemctl disable --now <unit>"
+        ),
+        cross_references={
+            "NIST": "CM-7", "CIS": "Multi",
+        },
+    ))
+
+    # Network services that should typically not be on a hardened host
+    legacy_services = []
+    for unit, label in [
+        ("rpcbind.service", "rpcbind"),
+        ("nfs-server.service", "nfs-server"),
+        ("avahi-daemon.service", "avahi-daemon"),
+        ("cups.service", "cups"),
+        ("isc-dhcp-server.service", "dhcp-server"),
+        ("dhcpd.service", "dhcpd"),
+        ("vsftpd.service", "vsftpd"),
+        ("xinetd.service", "xinetd"),
+        ("inetd.service", "inetd"),
+        ("ypserv.service", "ypserv"),
+        ("rsh.service", "rsh"),
+        ("telnet.service", "telnet"),
+    ]:
+        if _v35_systemd_active(unit) == "active":
+            legacy_services.append(label)
+    results.append(_v35_core_result(
+        f"{cat} - Legacy Services",
+        "Pass" if not legacy_services else "Warning",
+        f"Legacy/risky services active: {len(legacy_services)}",
+        severity="High",
+        details=f"Active: {legacy_services}",
+        remediation=(
+            "Disable each: systemctl disable --now <service>\n"
+            "Common targets: rpcbind, nfs-server (if not used), avahi-daemon, "
+            "cups (if not a print server), telnet, rsh, xinetd"
+        ),
+        cross_references={
+            "NIST": "CM-7", "CIS": "Multi",
+        },
+    ))
+
+
+def _check_core_v35_pam_hygiene(results, shared_data, os_info):
+    """PAM faillock hygiene depth."""
+    cat = "Core v3.5 - PAM"
+
+    # Look for pam_faillock or pam_tally2 configuration
+    pam_files = [
+        "/etc/pam.d/sshd",
+        "/etc/pam.d/system-auth",
+        "/etc/pam.d/password-auth",
+        "/etc/pam.d/common-auth",
+    ]
+    pam_content = ""
+    for pf in pam_files:
+        pam_content += "\n" + _v35_read_file_safe(pf)
+
+    # Check for deny<= 5
+    deny_match = re.search(
+        r"pam_faillock\.so.+?deny\s*=\s*(\d+)",
+        pam_content,
+    )
+    deny_strict = deny_match and int(deny_match.group(1)) <= 5
+    pam_lockout_present = (
+        "pam_faillock" in pam_content or "pam_tally2" in pam_content
+    )
+    results.append(_v35_core_result(
+        f"{cat} - faillock Configuration",
+        "Pass" if pam_lockout_present and deny_strict else "Warning",
+        f"PAM faillock active with deny<=5: {deny_strict}, "
+        f"present: {pam_lockout_present}",
+        severity="High",
+        details=(
+            f"deny = {deny_match.group(1) if deny_match else 'unset'}, "
+            f"module present: {pam_lockout_present}"
+        ),
+        remediation=(
+            "On RHEL: authselect select sssd with-faillock\n"
+            "On Debian: edit /etc/pam.d/common-auth - add:\n"
+            "  auth required pam_faillock.so preauth deny=5 unlock_time=900\n"
+            "  auth [default=die] pam_faillock.so authfail deny=5 unlock_time=900"
+        ),
+        cross_references={
+            "NIST": "AC-7", "CIS": "5.3.2",
+            "PCI-DSS": "8.3.4",
+        },
+    ))
+
+    # pwquality minlen >= 14 (modern alignment with NIST 800-63B)
+    pwquality = _v35_read_file_safe("/etc/security/pwquality.conf")
+    if _v35_directory_exists("/etc/security/pwquality.conf.d"):
+        for f in _v35_list_directory("/etc/security/pwquality.conf.d"):
+            if f.endswith(".conf"):
+                pwquality += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/security/pwquality.conf.d", f)
+                )
+    minlen_match = re.search(
+        r"^\s*minlen\s*=\s*(\d+)", pwquality, re.MULTILINE,
+    )
+    minlen = int(minlen_match.group(1)) if minlen_match else 0
+    minlen_strong = minlen >= 14
+    results.append(_v35_core_result(
+        f"{cat} - pwquality minlen",
+        "Pass" if minlen_strong else "Warning",
+        f"pwquality minlen >= 14: {minlen_strong} (current: {minlen})",
+        severity="High",
+        details=f"minlen = {minlen}",
+        remediation=(
+            "In /etc/security/pwquality.conf:\n"
+            "  minlen = 14"
+        ),
+        cross_references={
+            "NIST": "IA-5(1)", "CIS": "5.3.1",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_core_v35 = run_checks
+
+
+def _check_core_v38_attack_surface(results, shared_data, os_info):
+    """v3.8: Attack-surface enumeration checks (CORE - Attack Surface).
+
+    These checks explicitly enumerate exposure-relevant facts that feed the
+    attack-surface assessment report. They are tagged with the dedicated
+    'CORE - Attack Surface' category so the synthesis engine can pick them
+    up reliably. CORE is the only non-framework-tied module, so it is the
+    correct home for cross-cutting exposure enumeration.
+    """
+    import subprocess as _sp
+
+    def _run(cmd, timeout=6):
+        try:
+            p = _sp.run(cmd, shell=True, capture_output=True, text=True,
+                        timeout=timeout)
+            return p.returncode, p.stdout, p.stderr
+        except Exception:
+            return 1, "", ""
+
+    CAT = "CORE - Attack Surface"
+
+    # AS-001: External-facing listening TCP sockets
+    rc, out, _ = _run("ss -tlnH 2>/dev/null || ss -tln 2>/dev/null")
+    external = []
+    loopback = 0
+    if rc == 0 and out:
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            # ss columns: State Recv-Q Send-Q Local:Port Peer:Port
+            local = parts[3] if parts[0] in ("LISTEN", "UNCONN") else (
+                parts[3] if len(parts) >= 5 else "")
+            if not local:
+                # Some ss outputs omit State in -H; find host:port token
+                local = next((p for p in parts if ':' in p), "")
+            if local.startswith("127.") or local.startswith("[::1]") or \
+               local.startswith("[::ffff:127"):
+                loopback += 1
+            elif local:
+                external.append(local)
+    ext_count = len(external)
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status="Pass" if ext_count == 0 else ("Warning" if ext_count <= 3 else "Fail"),
+        message=f"{get_core_id('AS', 1)}: External-facing TCP listeners",
+        details=(f"{ext_count} external-facing listener(s): "
+                 f"{', '.join(sorted(set(external))[:12])}"
+                 if ext_count else "No external-facing TCP listeners detected")
+                + f" ({loopback} loopback-only)",
+        remediation=("Bind services to loopback where possible, or restrict "
+                     "with firewall rules. Review each external listener for "
+                     "necessity."),
+        severity="High" if ext_count > 3 else "Medium",
+    ))
+
+    # AS-002: External-facing UDP sockets
+    rc, out, _ = _run("ss -ulnH 2>/dev/null || ss -uln 2>/dev/null")
+    udp_external = 0
+    if rc == 0 and out:
+        for line in out.splitlines():
+            parts = line.split()
+            local = next((p for p in parts if ':' in p), "")
+            if local and not (local.startswith("127.") or
+                              local.startswith("[::1]")):
+                udp_external += 1
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status="Pass" if udp_external == 0 else "Warning",
+        message=f"{get_core_id('AS', 2)}: External-facing UDP listeners",
+        details=f"{udp_external} external-facing UDP socket(s)",
+        remediation=("Review UDP services (often amplification vectors). "
+                     "Disable or firewall unneeded UDP listeners."),
+        severity="Medium",
+    ))
+
+    # AS-003: Legacy / cleartext network services present
+    legacy_services = {
+        "telnet": "telnetd", "rsh": "rsh-server", "rlogin": "rlogin",
+        "ftp": "vsftpd", "tftp": "tftpd", "finger": "fingerd",
+        "talk": "talkd", "xinetd": "xinetd",
+    }
+    present_legacy = []
+    for svc, _pkg in legacy_services.items():
+        rc, out, _ = _run(f"command -v {svc} 2>/dev/null")
+        if rc == 0 and out.strip():
+            present_legacy.append(svc)
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status="Pass" if not present_legacy else "Fail",
+        message=f"{get_core_id('AS', 3)}: Legacy/cleartext service binaries",
+        details=(f"Legacy service binaries present: {', '.join(present_legacy)}"
+                 if present_legacy else "No legacy cleartext service binaries found"),
+        remediation=removal_for("telnet") if present_legacy else "",
+        severity="High" if present_legacy else "Low",
+    ))
+
+    # AS-004: SUID/SGID binary exposure summary (canonical assessment)
+    from shared_components.shared_assessments import get_suid_sgid_assessment as _suid_assess
+    _suid = _suid_assess()
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status=_suid.status,
+        message=f"{get_core_id('AS', 4)}: SUID/SGID binary exposure",
+        details=_suid.details,
+        remediation=_suid.remediation,
+        severity="Medium",
+    ))
+
+    # AS-005: World-writable file exposure summary (canonical assessment)
+    from shared_components.shared_assessments import get_world_writable_assessment as _ww_assess5
+    _ww5 = _ww_assess5("fail")
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status=_ww5.status,
+        message=f"{get_core_id('AS', 5)}: World-writable file exposure",
+        details=_ww5.details,
+        remediation=_ww5.remediation,
+        severity="High" if _ww5.count and _ww5.count > 0 else "Low",
+    ))
+
+    # AS-006: Container runtime socket exposure
+    docker_sock = os.path.exists("/var/run/docker.sock")
+    sock_mode = ""
+    if docker_sock:
+        try:
+            st = os.stat("/var/run/docker.sock")
+            sock_mode = oct(st.st_mode & 0o777)
+        except OSError:
+            pass
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status="Warning" if docker_sock else "Pass",
+        message=f"{get_core_id('AS', 6)}: Container runtime socket exposure",
+        details=(f"Docker socket present (/var/run/docker.sock, mode {sock_mode}) "
+                 " -  equivalent to root access if exposed"
+                 if docker_sock else "No Docker socket exposure detected"),
+        remediation=("Restrict access to the Docker socket; never mount it "
+                     "into untrusted containers. Consider rootless Docker or "
+                     "Podman."),
+        severity="High" if docker_sock else "Low",
+    ))
+
+    # AS-007: Kernel module loading exposure
+    rc, out, _ = _run("sysctl -n kernel.modules_disabled 2>/dev/null")
+    modules_locked = out.strip() == "1"
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status="Pass" if modules_locked else "Info",
+        message=f"{get_core_id('AS', 7)}: Kernel module loading lockdown",
+        details=("Kernel module loading is disabled (kernel.modules_disabled=1)"
+                 if modules_locked else
+                 "Kernel module loading is enabled (expands kernel attack "
+                 "surface; lock down on appliance/static systems)"),
+        remediation=("On systems with a fixed module set, set "
+                     "kernel.modules_disabled=1 after boot via sysctl."),
+        severity="Low",
+    ))
+
+    # AS-008: Firewall posture (installed vs active vs configured) across
+    # all variants (ufw / firewalld / nftables / iptables / ipset).
+    from shared_components.shared_assessments import get_firewall_posture
+    _fw = get_firewall_posture()
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status=_fw.status,
+        message=f"{get_core_id('AS', 8)}: Firewall posture",
+        details=_fw.details,
+        remediation=_fw.remediation,
+        severity="High" if _fw.status == "Fail" else (
+            "Medium" if _fw.status == "Warning" else "Low"),
+    ))
+
+    # AS-009: Writable directories on the executable PATH (a writable PATH
+    # entry lets an attacker plant a binary that runs with the caller's
+    # privileges - a classic privilege-escalation / persistence pathway).
+    path_env = os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:"
+                              "/usr/sbin:/usr/bin:/sbin:/bin")
+    writable_path_dirs = []
+    world_writable_path_dirs = []
+    for d in path_env.split(":"):
+        if not d or not os.path.isdir(d):
+            continue
+        try:
+            st = os.stat(d)
+            mode = st.st_mode
+            # world-writable without sticky bit is the dangerous case
+            if (mode & 0o002) and not (mode & 0o1000):
+                world_writable_path_dirs.append(d)
+            elif os.access(d, os.W_OK) and os.getuid() != 0:
+                writable_path_dirs.append(d)
+        except OSError:
+            continue
+    if world_writable_path_dirs:
+        as9_status, as9_sev = "Fail", "High"
+        as9_detail = ("World-writable directories on the executable PATH: "
+                      + ", ".join(world_writable_path_dirs))
+    elif writable_path_dirs:
+        as9_status, as9_sev = "Warning", "Medium"
+        as9_detail = ("User-writable directories on the executable PATH: "
+                      + ", ".join(writable_path_dirs))
+    else:
+        as9_status, as9_sev = "Pass", "Low"
+        as9_detail = "No writable directories on the executable PATH"
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status=as9_status,
+        message=f"{get_core_id('AS', 9)}: Executable PATH writability",
+        details=as9_detail,
+        remediation=("Remove world-write from PATH directories and never "
+                     "place user-writable directories on root's PATH:\n"
+                     "  chmod o-w <dir>\n"
+                     "Audit $PATH for entries under /home, /tmp, or current "
+                     "directory ('.')."),
+        severity=as9_sev,
+    ))
+
+    # AS-010: Insecure shared-object / linker controls. World-writable .so
+    # files or writable ld.so config let an attacker hijack code loaded into
+    # other processes (LD_PRELOAD-style persistence/escalation).
+    rc, out, _ = _run(
+        "find /lib /lib64 /usr/lib /usr/lib64 /usr/local/lib -xdev "
+        "-name '*.so*' -perm -0002 2>/dev/null | head -25")
+    ww_so = [l for l in out.splitlines() if l.strip()] if rc == 0 else []
+    ld_conf_writable = []
+    for p in ["/etc/ld.so.conf", "/etc/ld.so.preload"]:
+        try:
+            if os.path.exists(p):
+                st = os.stat(p)
+                if st.st_mode & 0o002:
+                    ld_conf_writable.append(p)
+        except OSError:
+            pass
+    # ld.so.preload existing at all is itself worth flagging
+    preload_present = os.path.exists("/etc/ld.so.preload")
+    if ww_so or ld_conf_writable:
+        as10_status, as10_sev = "Fail", "High"
+        parts = []
+        if ww_so:
+            parts.append(f"{len(ww_so)} world-writable shared object(s): "
+                         + "; ".join(ww_so[:10]))
+        if ld_conf_writable:
+            parts.append("world-writable linker config: "
+                         + ", ".join(ld_conf_writable))
+        as10_detail = " | ".join(parts)
+    elif preload_present:
+        as10_status, as10_sev = "Warning", "Medium"
+        as10_detail = ("/etc/ld.so.preload exists - verify its contents are "
+                       "expected (a common LD_PRELOAD persistence vector)")
+    else:
+        as10_status, as10_sev = "Pass", "Low"
+        as10_detail = ("No world-writable shared objects or writable linker "
+                       "configuration detected")
+    results.append(AuditResult(
+        module=MODULE_NAME, category=CAT,
+        status=as10_status,
+        message=f"{get_core_id('AS', 10)}: Shared object / linker controls",
+        details=as10_detail,
+        remediation=("Remove world-write from shared objects and linker "
+                     "configuration; review /etc/ld.so.preload:\n"
+                     "  chmod o-w <file>\n"
+                     "  cat /etc/ld.so.preload   # should normally be empty/absent"),
+        severity=as10_sev,
+    ))
+
+
+def run_checks(shared_data: Optional[Dict[str, Any]] = None) -> List[AuditResult]:
+    """Execute the v3.5 expanded Core module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_core_v35(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_core_v35_sudo_hygiene(results, shared_data, os_info)
+        _check_core_v35_user_hygiene(results, shared_data, os_info)
+        _check_core_v35_mount_hygiene(results, shared_data, os_info)
+        _check_core_v35_cron_hygiene(results, shared_data, os_info)
+        _check_core_v35_grub_hygiene(results, shared_data, os_info)
+        _check_core_v35_service_inventory(results, shared_data, os_info)
+        _check_core_v35_pam_hygiene(results, shared_data, os_info)
+        _check_core_v38_attack_surface(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="Core - Error",
+            status="Error",
+            message=f"Core v3.5 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
 if __name__ == "__main__":
     """
     Standalone testing capability for the CORE module
@@ -3943,7 +5406,3 @@ if __name__ == "__main__":
     print(f"CORE module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
-
-# ============================================================================
-# End of module_core.py
-# ============================================================================
