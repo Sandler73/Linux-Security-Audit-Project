@@ -299,10 +299,27 @@ def build_attack_surface(all_results, host_facts=None) -> AttackSurface:
 
     host_summary = {}
     if host_facts is not None:
+        # Full firewall posture (installed vs active) so a host with, e.g.,
+        # iptables active and nftables installed-but-inactive is reported
+        # accurately rather than as "none".
+        fw_summary = getattr(host_facts, "firewall_tool", "") or "none detected"
+        try:
+            from shared_components.shared_assessments import get_firewall_posture
+            _fw = get_firewall_posture()
+            if _fw.installed:
+                parts = []
+                for t in _fw.installed:
+                    state = "active" if t in _fw.active else "inactive"
+                    parts.append(f"{t} ({state})")
+                fw_summary = ", ".join(parts)
+            else:
+                fw_summary = "none installed"
+        except Exception:
+            pass
         host_summary = {
             "Distribution": f"{getattr(host_facts, 'distro_id', '')} "
                             f"{getattr(host_facts, 'distro_version', '')}".strip(),
-            "Firewall": getattr(host_facts, "firewall_tool", "") or "none detected",
+            "Firewall": fw_summary,
             "External TCP listeners": str(
                 getattr(host_facts, "listening_external_count", "n/a")),
             "MAC framework": (
