@@ -2,7 +2,7 @@
 """
 module_nsa.py
 NSA Cybersecurity Guidance Module for Linux
-Version: 2.2
+Version: 2.1
 
 SYNOPSIS:
     Comprehensive NSA (National Security Agency) cybersecurity guidance
@@ -157,7 +157,61 @@ except ImportError:
         HAS_COMMON_LIB = False
 
 MODULE_NAME = "NSA"
-MODULE_VERSION = "2.2"
+
+# v3.4 Remediation library wiring
+try:
+    from shared_components.remediation_library import get_remediation as _v34_get_remediation
+    from shared_components.remediation_library import get_removal_remediation as _v34_get_removal
+    from shared_components.remediation_library import get_patch_remediation as _v34_get_patch
+    from shared_components.os_detection import detect_os as _v34_detect_os
+    _v34_OSINFO_CACHE = None
+    def remediation_for(tool_id):
+        """Return distro-aware remediation text for a registered tool.
+
+        Falls back to a short "Install <tool>" string if the library
+        does not have an entry for the tool_id.
+        """
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        text = _v34_get_remediation(tool_id, _v34_OSINFO_CACHE)
+        return text if text else f"Install {tool_id} via your distribution\'s package manager"
+
+    def _v34_resolve_os():
+        global _v34_OSINFO_CACHE
+        if _v34_OSINFO_CACHE is None:
+            try:
+                _v34_OSINFO_CACHE = _v34_detect_os()
+            except Exception:
+                _v34_OSINFO_CACHE = None
+        return _v34_OSINFO_CACHE
+
+    def removal_for(canonical_token, extra_context=""):
+        """Return OS-aware package-removal remediation text."""
+        try:
+            return _v34_get_removal(canonical_token, _v34_resolve_os(),
+                                    extra_context=extra_context)
+        except Exception:
+            return f"Remove {canonical_token} via your distribution\'s package manager"
+
+    def patch_for(extra_context=""):
+        """Return OS-aware security-patch remediation text."""
+        try:
+            return _v34_get_patch(_v34_resolve_os(), extra_context=extra_context)
+        except Exception:
+            return "Apply available security updates via your distribution\'s package manager"
+except ImportError:  # pragma: no cover
+    def remediation_for(tool_id):
+        return f"Install {tool_id} via your distribution\'s package manager"
+    def removal_for(canonical_token, extra_context=""):
+        return f"Remove {canonical_token} via your distribution\'s package manager"
+    def patch_for(extra_context=""):
+        return "Apply available security updates via your distribution\'s package manager"
+
+MODULE_VERSION = "3.9"
 
 # Module logger (uses structured logging if audit_common is available)
 logger = get_module_logger(MODULE_NAME) if HAS_COMMON_LIB else logging.getLogger(MODULE_NAME)
@@ -197,7 +251,7 @@ def check_selinux_mac_controls(results: List[AuditResult], shared_data: Dict[str
         status="Pass" if mac_installed else "Fail",
         message=f"{get_nsa_id('MAC', 1)}: Mandatory Access Control system installed",
         details=f"SELinux: {selinux_status['installed']}, AppArmor: {apparmor_status['installed']}",
-        remediation="Install SELinux: yum install selinux-policy-targeted || apt-get install selinux"
+        remediation=remediation_for("selinux")
     ))
     
     # MAC-002: SELinux enabled (if installed)
@@ -1110,7 +1164,7 @@ def check_network_hardening(results: List[AuditResult], shared_data: Dict[str, A
         status="Pass" if ntp_active else "Warning",
         message=f"{get_nsa_id('NET', 38)}: Network time synchronization active",
         details="NTP service running" if ntp_active else "No NTP",
-        remediation="Enable time sync: systemctl enable chronyd"
+        remediation=remediation_for("chrony")
     ))
     
     # NET-039: ICMP rate limiting
@@ -1515,7 +1569,7 @@ def check_kernel_hardening(results: List[AuditResult], shared_data: Dict[str, An
         status="Pass" if audit_enabled else "Fail",
         message=f"{get_nsa_id('KERN', 27)}: Kernel audit system enabled",
         details="auditd running" if audit_enabled else "Not running",
-        remediation="Enable: systemctl enable auditd && systemctl start auditd"
+        remediation=remediation_for("auditd")
     ))
     
     # KERN-028: Loaded kernel modules count
@@ -1753,7 +1807,7 @@ def check_system_hardening(results: List[AuditResult], shared_data: Dict[str, An
         status="Pass" if sudo_installed else "Fail",
         message=f"{get_nsa_id('SYS', 9)}: sudo installed",
         details="sudo available" if sudo_installed else "Not installed",
-        remediation="Install sudo: apt-get install sudo || yum install sudo"
+        remediation=remediation_for("sudo")
     ))
     
     # SYS-010: sudoers file permissions
@@ -1997,7 +2051,7 @@ def check_system_hardening(results: List[AuditResult], shared_data: Dict[str, An
         status="Pass" if fim_installed else "Warning",
         message=f"{get_nsa_id('SYS', 26)}: File integrity monitoring installed",
         details="AIDE/Tripwire installed" if fim_installed else "Not installed",
-        remediation="Install AIDE: apt-get install aide"
+        remediation=remediation_for("aide")
     ))
     
     # SYS-027: Separate partitions for critical dirs
@@ -2134,7 +2188,7 @@ def check_cryptography_services(results: List[AuditResult], shared_data: Dict[st
         status="Pass" if gpg_installed else "Warning",
         message=f"{get_nsa_id('CRYPTO', 5)}: GnuPG encryption available",
         details="GPG installed" if gpg_installed else "Not installed",
-        remediation="Install GnuPG: apt-get install gnupg"
+        remediation=remediation_for("gnupg")
     ))
     
     # CRYPTO-006: Disk encryption capability
@@ -2146,7 +2200,7 @@ def check_cryptography_services(results: List[AuditResult], shared_data: Dict[st
         status="Pass" if luks_installed else "Warning",
         message=f"{get_nsa_id('CRYPTO', 6)}: Disk encryption tools available",
         details="cryptsetup installed" if luks_installed else "Not installed",
-        remediation="Install cryptsetup for LUKS encryption"
+        remediation=remediation_for("cryptsetup")
     ))
     
     # CRYPTO-007: Encrypted volumes present
@@ -2510,7 +2564,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
         status="Pass" if time_sync else "Fail",
         message=f"{get_nsa_id('ADD', 1)}: Time synchronization active",
         details="Time sync running" if time_sync else "Not configured",
-        remediation="Enable: systemctl enable chronyd"
+        remediation=remediation_for("chrony")
     ))
     
     # ADD-002: NTP servers configured
@@ -2594,7 +2648,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
         status="Pass" if sysstat_installed else "Info",
         message=f"{get_nsa_id('ADD', 7)}: System activity reporting available",
         details="sysstat installed" if sysstat_installed else "Not installed",
-        remediation="Install: apt-get install sysstat"
+        remediation=remediation_for("sysstat")
     ))
     
     # ADD-008: Intrusion detection system
@@ -2606,7 +2660,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
         status="Pass" if ids_installed else "Warning",
         message=f"{get_nsa_id('ADD', 8)}: Intrusion detection system installed",
         details="IDS present" if ids_installed else "Not installed",
-        remediation="Install IDS: apt-get install aide"
+        remediation=remediation_for("aide")
     ))
     
     # ADD-009: Malware scanner available
@@ -2618,7 +2672,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
         status="Pass" if av_installed else "Warning",
         message=f"{get_nsa_id('ADD', 9)}: Anti-malware software installed",
         details="ClamAV installed" if av_installed else "Not installed",
-        remediation="Install: apt-get install clamav clamav-daemon"
+        remediation=remediation_for("clamav")
     ))
     
     # ADD-010: Rootkit detection tools
@@ -2630,7 +2684,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
         status="Pass" if rkhunter_installed else "Warning",
         message=f"{get_nsa_id('ADD', 10)}: Rootkit detection available",
         details="rkhunter/chkrootkit installed" if rkhunter_installed else "Not installed",
-        remediation="Install: apt-get install rkhunter"
+        remediation=remediation_for("rkhunter")
     ))
     
     # ADD-011: Security updates automatic
@@ -2642,7 +2696,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
         status="Pass" if auto_updates else "Warning",
         message=f"{get_nsa_id('ADD', 11)}: Automatic security updates configured",
         details="Auto-updates enabled" if auto_updates else "Not configured",
-        remediation="Install: apt-get install unattended-upgrades"
+        remediation=remediation_for("unattended-upgrades")
     ))
     
     # ADD-012: Packet capture tools restricted
@@ -2733,7 +2787,7 @@ def check_additional_security(results: List[AuditResult], shared_data: Dict[str,
         status="Pass" if not x_installed else "Info",
         message=f"{get_nsa_id('ADD', 18)}: X Window System status",
         details="X11 installed" if x_installed else "Not installed",
-        remediation="Remove X11 on servers: apt-get purge xserver-xorg*"
+        remediation=removal_for("xserver")
     ))
     
     # ADD-019: System rescue capability
@@ -2999,6 +3053,1545 @@ def run_checks(shared_data: Dict[str, Any]) -> List[AuditResult]:
 # Module Testing
 # ============================================================================
 
+
+
+# ============================================================================
+# v3.3 EXPANSION - NSA Deep Coverage
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across:
+#   - SELinux boolean enforcement (~30+ critical booleans)
+#   - FIPS 140-3 validated cryptography depth
+#   - NSA Commercial Solutions for Classified (CSfC) indicators
+#   - NSA Cybersecurity Advisories technical indicators
+#   - Kernel hardening depth (NSA recommendations)
+#   - Network protocol restrictions per NSA guidance
+# ============================================================================
+
+from shared_components.module_helpers import (
+    read_file_safe as _v33_read_file_safe,
+    file_exists as _v33_file_exists,
+    directory_exists as _v33_directory_exists,
+    command_available as _v33_command_available,
+    run_command as _v33_run_command,
+    read_sysctl as _v33_read_sysctl,
+    systemd_active as _v33_systemd_active,
+    file_mode as _v33_file_mode,
+    list_directory as _v33_list_directory,
+)
+
+
+def _v33_nsa_result(category, status, message, severity="Medium",
+                    details="", remediation="", cross_references=None):
+    """Build AuditResult for NSA v3.3 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_nsa_v33_selinux_booleans(results, shared_data, os_info):
+    """NSA SELinux boolean enforcement - critical booleans for hardening."""
+
+    # First check if SELinux is even running
+    selinux_enforcing = False
+    if _v33_file_exists("/sys/fs/selinux/enforce"):
+        try:
+            with open("/sys/fs/selinux/enforce") as f:
+                selinux_enforcing = f.read().strip() == "1"
+        except OSError:
+            pass
+
+    if not selinux_enforcing:
+        results.append(_v33_nsa_result(
+            "NSA SELinux v3.3 - State",
+            "Info",
+            "SELinux not enforcing - boolean checks skipped",
+            severity="Informational",
+            details=f"SELinux enforcing: {selinux_enforcing}",
+            remediation=(
+                "Enable SELinux: setenforce 1 (or edit /etc/selinux/config)"
+            ),
+            cross_references={
+                "NSA": "SELinux Hardening", "NIST": "AC-3", "CIS": "1.7.1",
+            },
+        ))
+        return
+
+    # Critical NSA-recommended SELinux booleans (off = secure)
+    booleans_should_be_off = [
+        "allow_execheap",
+        "allow_execmem",
+        "allow_execmod",
+        "allow_execstack",
+        "allow_ftpd_anon_write",
+        "allow_ftpd_full_access",
+        "allow_httpd_anon_write",
+        "allow_httpd_sys_script_anon_write",
+        "ftp_home_dir",
+        "httpd_can_network_connect",
+        "httpd_enable_cgi",
+        "httpd_enable_homedirs",
+        "secure_mode_insmod",
+        "ssh_chroot_rw_homedirs",
+        "ssh_sysadm_login",
+        "use_lpd_server",
+        "user_ttyfile_stat",
+    ]
+
+    if not _v33_command_available("getsebool"):
+        results.append(_v33_nsa_result(
+            "NSA SELinux v3.3 - Tools",
+            "Info",
+            "getsebool not available",
+            severity="Informational",
+            details="policycoreutils not installed",
+            remediation="dnf install -y policycoreutils",
+            cross_references={
+                "NSA": "SELinux Hardening", "NIST": "AC-3",
+            },
+        ))
+        return
+
+    # Check each boolean
+    rc, out, _ = _v33_run_command(["getsebool", "-a"], timeout=10.0)
+    boolean_states = {}
+    if rc == 0 and out:
+        for line in out.splitlines():
+            parts = line.split(" --> ")
+            if len(parts) == 2:
+                boolean_states[parts[0].strip()] = parts[1].strip()
+
+    for bool_name in booleans_should_be_off:
+        state = boolean_states.get(bool_name, "unknown")
+        ok = state == "off"
+        if state == "unknown":
+            severity_level = "Informational"
+            status = "Info"
+        else:
+            severity_level = "Medium"
+            status = "Pass" if ok else "Warning"
+        results.append(_v33_nsa_result(
+            f"NSA SELinux v3.3 - {bool_name}",
+            status,
+            f"SELinux boolean {bool_name} should be off",
+            severity=severity_level,
+            details=f"{bool_name} = {state}",
+            remediation=f"setsebool -P {bool_name} off",
+            cross_references={
+                "NSA": "SELinux Hardening", "NIST": "AC-3", "CSF": "PR.AC-4",
+            },
+        ))
+
+    # NSA-recommended booleans that should be ON
+    booleans_should_be_on = [
+        "deny_execmem",
+        "deny_ptrace",
+        "fips_mode",
+    ]
+    for bool_name in booleans_should_be_on:
+        state = boolean_states.get(bool_name, "unknown")
+        ok = state == "on"
+        if state == "unknown":
+            continue  # don't pollute results with unknown booleans
+        results.append(_v33_nsa_result(
+            f"NSA SELinux v3.3 - {bool_name}",
+            "Pass" if ok else "Info",
+            f"SELinux boolean {bool_name} should be on",
+            severity="Medium",
+            details=f"{bool_name} = {state}",
+            remediation=f"setsebool -P {bool_name} on",
+            cross_references={
+                "NSA": "SELinux Hardening", "NIST": "AC-3",
+            },
+        ))
+
+
+def _check_nsa_v33_fips_depth(results, shared_data, os_info):
+    """NSA FIPS 140-3 validated cryptography depth."""
+
+    # Kernel FIPS mode
+    fips_kernel = "0"
+    if _v33_file_exists("/proc/sys/crypto/fips_enabled"):
+        fips_kernel = _v33_read_file_safe("/proc/sys/crypto/fips_enabled").strip()
+    fips_kernel_active = fips_kernel == "1"
+    results.append(_v33_nsa_result(
+        "NSA FIPS v3.3 - Kernel",
+        "Pass" if fips_kernel_active else "Info",
+        f"Kernel FIPS mode: {fips_kernel}",
+        severity="High",
+        details=f"/proc/sys/crypto/fips_enabled = {fips_kernel}",
+        remediation=(
+            "RHEL/CentOS: fips-mode-setup --enable; reboot. "
+            "Ubuntu Pro: pro enable fips"
+        ),
+        cross_references={
+            "NSA": "FIPS 140-3", "NIST": "SC-13", "FIPS": "140-3",
+        },
+    ))
+
+    # OpenSSL FIPS provider
+    if _v33_command_available("openssl"):
+        rc, out, _ = _v33_run_command(
+            ["openssl", "list", "-providers"], timeout=5.0
+        )
+        fips_provider = rc == 0 and "fips" in out.lower()
+        results.append(_v33_nsa_result(
+            "NSA FIPS v3.3 - OpenSSL",
+            "Pass" if fips_provider else "Info",
+            f"OpenSSL FIPS provider loadable: {fips_provider}",
+            severity="Medium",
+            details=f"openssl list rc={rc}",
+            remediation=(
+                "Enable: update-crypto-policies --set FIPS (RHEL family)"
+            ),
+            cross_references={
+                "NSA": "FIPS 140-3", "FIPS": "140-3",
+            },
+        ))
+
+    # System-wide crypto-policies set to FIPS
+    if _v33_file_exists("/etc/crypto-policies/config"):
+        policy = _v33_read_file_safe("/etc/crypto-policies/config").strip()
+        results.append(_v33_nsa_result(
+            "NSA FIPS v3.3 - Crypto Policy",
+            "Pass" if policy == "FIPS" else "Info",
+            f"System crypto policy: {policy or 'unset'}",
+            severity="High",
+            details=f"crypto-policies = {policy}",
+            remediation="update-crypto-policies --set FIPS",
+            cross_references={
+                "NSA": "FIPS 140-3", "NIST": "SC-13", "FIPS": "140-3",
+            },
+        ))
+
+    # Kernel keyring usage indicator (FIPS-validated key storage)
+    keyutils = _v33_command_available("keyctl")
+    results.append(_v33_nsa_result(
+        "NSA FIPS v3.3 - Keyring",
+        "Pass" if keyutils else "Info",
+        f"Linux kernel keyring tools available: {keyutils}",
+        severity="Low",
+        details=f"keyctl: {keyutils}",
+        remediation="apt-get install -y keyutils",
+        cross_references={
+            "NSA": "Key Management", "NIST": "SC-12",
+        },
+    ))
+
+
+def _check_nsa_v33_kernel_hardening(results, shared_data, os_info):
+    """NSA kernel hardening recommendations."""
+
+    # Kernel lockdown mode
+    lockdown_state = _v33_read_file_safe("/sys/kernel/security/lockdown")
+    has_lockdown = lockdown_state and ("integrity" in lockdown_state or
+                                         "confidentiality" in lockdown_state) and \
+                  "[none]" not in lockdown_state
+    results.append(_v33_nsa_result(
+        "NSA Kernel v3.3 - Lockdown",
+        "Pass" if has_lockdown else "Info",
+        f"Kernel lockdown mode active: {has_lockdown}",
+        severity="High",
+        details=f"lockdown: {lockdown_state.strip() if lockdown_state else 'not present'}",
+        remediation=(
+            "Boot kernel with lockdown=integrity (or =confidentiality) on cmdline; "
+            "or echo 'integrity' > /sys/kernel/security/lockdown"
+        ),
+        cross_references={
+            "NSA": "Kernel Hardening", "NIST": "CM-7",
+        },
+    ))
+
+    # IMA (Integrity Measurement Architecture)
+    ima_present = _v33_directory_exists("/sys/kernel/security/ima")
+    results.append(_v33_nsa_result(
+        "NSA Kernel v3.3 - IMA",
+        "Pass" if ima_present else "Info",
+        f"Integrity Measurement Architecture: {ima_present}",
+        severity="Medium",
+        details=f"/sys/kernel/security/ima: {ima_present}",
+        remediation=(
+            "Boot kernel with ima_policy=tcb on cmdline for IMA enforcement"
+        ),
+        cross_references={
+            "NSA": "Integrity", "NIST": "SI-7",
+        },
+    ))
+
+    # Kernel module signing enforcement
+    sig_enforce = _v33_read_file_safe(
+        "/sys/module/module/parameters/sig_enforce"
+    ).strip()
+    results.append(_v33_nsa_result(
+        "NSA Kernel v3.3 - Module Signing",
+        "Pass" if sig_enforce == "Y" else "Info",
+        f"Kernel module signature enforcement: {sig_enforce or 'unset'}",
+        severity="High",
+        details=f"sig_enforce = {sig_enforce}",
+        remediation=(
+            "Boot with module.sig_enforce=1 on kernel cmdline. "
+            "Required for FIPS-validated kernel."
+        ),
+        cross_references={
+            "NSA": "Kernel Hardening", "NIST": "SI-7", "FIPS": "140-3",
+        },
+    ))
+
+    # ASLR full
+    aslr = _v33_read_sysctl("kernel.randomize_va_space")
+    results.append(_v33_nsa_result(
+        "NSA Kernel v3.3 - ASLR",
+        "Pass" if aslr == "2" else "Fail",
+        f"Full ASLR enabled (randomize_va_space=2): {aslr == '2'}",
+        severity="High",
+        details=f"kernel.randomize_va_space = {aslr}",
+        remediation=(
+            "echo 'kernel.randomize_va_space = 2' >> /etc/sysctl.d/99-aslr.conf"
+        ),
+        cross_references={
+            "NSA": "Kernel Hardening", "NIST": "SI-16", "STIG": "V-230280",
+        },
+    ))
+
+    # Yama ptrace_scope
+    yama = _v33_read_sysctl("kernel.yama.ptrace_scope")
+    yama_ok = yama in ("1", "2", "3")
+    results.append(_v33_nsa_result(
+        "NSA Kernel v3.3 - Yama",
+        "Pass" if yama_ok else "Warning",
+        f"Yama ptrace_scope: {yama or 'unset'}",
+        severity="Medium",
+        details=f"kernel.yama.ptrace_scope = {yama}",
+        remediation=(
+            "echo 'kernel.yama.ptrace_scope = 1' >> /etc/sysctl.d/99-yama.conf"
+        ),
+        cross_references={
+            "NSA": "Kernel Hardening", "NIST": "SI-16", "CIS": "1.6.4",
+        },
+    ))
+
+    # KASLR not disabled
+    cmdline = _v33_read_file_safe("/proc/cmdline")
+    nokaslr = "nokaslr" in cmdline
+    results.append(_v33_nsa_result(
+        "NSA Kernel v3.3 - KASLR",
+        "Pass" if not nokaslr else "Fail",
+        f"KASLR not disabled in kernel cmdline",
+        severity="High",
+        details=f"nokaslr in cmdline: {nokaslr}",
+        remediation="Remove 'nokaslr' from GRUB cmdline; rebuild grub config",
+        cross_references={
+            "NSA": "Kernel Hardening", "NIST": "SI-16",
+        },
+    ))
+
+    # MELTDOWN/SPECTRE mitigations
+    vuln_dir = "/sys/devices/system/cpu/vulnerabilities"
+    if _v33_directory_exists(vuln_dir):
+        vulns_to_check = ["meltdown", "spectre_v1", "spectre_v2",
+                           "mds", "spec_store_bypass", "l1tf"]
+        unmitigated = []
+        for v in vulns_to_check:
+            content = _v33_read_file_safe(os.path.join(vuln_dir, v)).strip()
+            if content and "Vulnerable" in content and "Mitigation" not in content:
+                unmitigated.append(f"{v}: {content[:50]}")
+        results.append(_v33_nsa_result(
+            "NSA Kernel v3.3 - CPU Vulnerabilities",
+            "Pass" if not unmitigated else "Warning",
+            f"CPU vulnerabilities mitigated ({len(unmitigated)} unmitigated)",
+            severity="High",
+            details=f"Unmitigated: {unmitigated[:3]}",
+            remediation=(
+                "Update kernel and microcode: apt-get update && "
+                "apt-get install -y intel-microcode amd64-microcode"
+            ),
+            cross_references={
+                "NSA": "Kernel Hardening", "NIST": "SI-2",
+            },
+        ))
+
+
+def _check_nsa_v33_network_protocols(results, shared_data, os_info):
+    """NSA network protocol restrictions."""
+
+    # NSA recommends disabling IPv6 if not used; check if hardened
+    ipv6_disabled = (
+        _v33_read_sysctl("net.ipv6.conf.all.disable_ipv6") == "1"
+    )
+    results.append(_v33_nsa_result(
+        "NSA Network v3.3 - IPv6",
+        "Info",
+        f"IPv6 disabled: {ipv6_disabled} (informational)",
+        severity="Informational",
+        details=f"disable_ipv6 = {_v33_read_sysctl('net.ipv6.conf.all.disable_ipv6')}",
+        remediation=(
+            "If IPv6 is not used: echo 'net.ipv6.conf.all.disable_ipv6 = 1' "
+            ">> /etc/sysctl.d/99-disable-ipv6.conf. Otherwise, keep IPv6 enabled."
+        ),
+        cross_references={
+            "NSA": "Network Hardening", "NIST": "CM-7",
+        },
+    ))
+
+    # Disable uncommon network protocols (CIS 3.4)
+    protocols = ["dccp", "sctp", "rds", "tipc"]
+    blacklist_d = "/etc/modprobe.d"
+    blacklisted = set()
+    if _v33_directory_exists(blacklist_d):
+        for f in _v33_list_directory(blacklist_d):
+            c = _v33_read_file_safe(os.path.join(blacklist_d, f))
+            for p in protocols:
+                if re.search(rf"^\s*(blacklist|install)\s+{p}", c, re.MULTILINE):
+                    blacklisted.add(p)
+
+    for p in protocols:
+        results.append(_v33_nsa_result(
+            f"NSA Network v3.3 - {p}",
+            "Pass" if p in blacklisted else "Warning",
+            f"Uncommon protocol {p} disabled: {p in blacklisted}",
+            severity="Medium",
+            details=f"{p} blacklisted: {p in blacklisted}",
+            remediation=f"echo 'install {p} /bin/true' > /etc/modprobe.d/{p}.conf",
+            cross_references={
+                "NSA": "Network Hardening", "NIST": "CM-7", "CIS": "3.4",
+            },
+        ))
+
+    # ICMP redirects
+    icmp_redirects = (
+        _v33_read_sysctl("net.ipv4.conf.all.accept_redirects") == "0" and
+        _v33_read_sysctl("net.ipv4.conf.all.send_redirects") == "0"
+    )
+    results.append(_v33_nsa_result(
+        "NSA Network v3.3 - ICMP Redirects",
+        "Pass" if icmp_redirects else "Fail",
+        f"ICMP redirects disabled: {icmp_redirects}",
+        severity="High",
+        details=(
+            f"accept_redirects = {_v33_read_sysctl('net.ipv4.conf.all.accept_redirects')}, "
+            f"send_redirects = {_v33_read_sysctl('net.ipv4.conf.all.send_redirects')}"
+        ),
+        remediation=(
+            "echo 'net.ipv4.conf.all.accept_redirects = 0' >> /etc/sysctl.d/99-net.conf; "
+            "echo 'net.ipv4.conf.all.send_redirects = 0' >> /etc/sysctl.d/99-net.conf"
+        ),
+        cross_references={
+            "NSA": "Network Hardening", "NIST": "SC-7", "CIS": "3.3",
+        },
+    ))
+
+    # Source routing
+    source_routing_disabled = (
+        _v33_read_sysctl("net.ipv4.conf.all.accept_source_route") == "0"
+    )
+    results.append(_v33_nsa_result(
+        "NSA Network v3.3 - Source Routing",
+        "Pass" if source_routing_disabled else "Fail",
+        f"Source routing disabled: {source_routing_disabled}",
+        severity="High",
+        details=(
+            f"accept_source_route = "
+            f"{_v33_read_sysctl('net.ipv4.conf.all.accept_source_route')}"
+        ),
+        remediation=(
+            "echo 'net.ipv4.conf.all.accept_source_route = 0' "
+            ">> /etc/sysctl.d/99-net.conf"
+        ),
+        cross_references={
+            "NSA": "Network Hardening", "NIST": "SC-7", "CIS": "3.3.1",
+        },
+    ))
+
+    # log_martians
+    log_martians = _v33_read_sysctl("net.ipv4.conf.all.log_martians") == "1"
+    results.append(_v33_nsa_result(
+        "NSA Network v3.3 - log_martians",
+        "Pass" if log_martians else "Warning",
+        f"log_martians enabled: {log_martians}",
+        severity="Medium",
+        details=(
+            f"log_martians = "
+            f"{_v33_read_sysctl('net.ipv4.conf.all.log_martians')}"
+        ),
+        remediation=(
+            "echo 'net.ipv4.conf.all.log_martians = 1' "
+            ">> /etc/sysctl.d/99-net.conf"
+        ),
+        cross_references={
+            "NSA": "Network Hardening", "NIST": "AU-12", "CIS": "3.3.6",
+        },
+    ))
+
+
+def _check_nsa_v33_advisories(results, shared_data, os_info):
+    """NSA Cybersecurity Advisories - technical indicators."""
+
+    # CSA "Detect and Prevent Web Shell Malware" - WAF/IDS indicators
+    waf_active = (
+        _v33_file_exists("/etc/modsecurity/modsecurity.conf") or
+        _v33_directory_exists("/etc/modsecurity") or
+        _v33_directory_exists("/usr/share/modsecurity-crs") or
+        _v33_file_exists("/etc/nginx/naxsi_core.rules")
+    )
+    results.append(_v33_nsa_result(
+        "NSA CSA v3.3 - WebShell Defense",
+        "Pass" if waf_active else "Info",
+        f"Web Application Firewall present: {waf_active}",
+        severity="Medium",
+        details=f"WAF indicator: {waf_active}",
+        remediation=(
+            "Install ModSecurity v3 + OWASP CRS for web shell prevention"
+        ),
+        cross_references={
+            "NSA": "CSA Web Shell", "NIST": "SC-7(8)",
+        },
+    ))
+
+    # CSA "Cisco Routers" / network device hardening - host firewall
+    fw_active = (
+        _v33_systemd_active("ufw.service") == "active" or
+        _v33_systemd_active("firewalld.service") == "active" or
+        _v33_systemd_active("nftables.service") == "active"
+    )
+    results.append(_v33_nsa_result(
+        "NSA CSA v3.3 - Host Firewall",
+        "Pass" if fw_active else "Fail",
+        f"Host firewall active: {fw_active}",
+        severity="Critical",
+        details=f"Firewall service: {fw_active}",
+        cross_references={
+            "NSA": "CSA Network Hardening", "NIST": "SC-7", "CIS": "3.5",
+        },
+    ))
+
+    # CSA "Hardening Microsoft Active Directory" parallel - system access boundaries
+    sshd = _v33_read_file_safe("/etc/ssh/sshd_config")
+    permit_root_match = re.search(
+        r"^\s*PermitRootLogin\s+(\S+)", sshd, re.MULTILINE
+    )
+    permit_root = permit_root_match.group(1) if permit_root_match else "yes"
+    root_secure = permit_root.lower() in ("no", "prohibit-password",
+                                            "without-password")
+    results.append(_v33_nsa_result(
+        "NSA CSA v3.3 - Privileged Access",
+        "Pass" if root_secure else "Fail",
+        f"SSH root login restricted: {permit_root}",
+        severity="High",
+        details=f"PermitRootLogin = {permit_root}",
+        remediation=(
+            "In /etc/ssh/sshd_config: PermitRootLogin no; systemctl reload sshd"
+        ),
+        cross_references={
+            "NSA": "CSA Privileged Access", "NIST": "AC-6", "STIG": "V-230336",
+        },
+    ))
+
+    # CSA "Mitigate Living-Off-The-Land" - monitor common LOLBin paths
+    audit_rules = ""
+    if _v33_directory_exists(rules_d := "/etc/audit/rules.d"):
+        for f in _v33_list_directory(rules_d):
+            if f.endswith(".rules"):
+                audit_rules += "\n" + _v33_read_file_safe(
+                    os.path.join(rules_d, f)
+                )
+    has_execve = "execve" in audit_rules
+    results.append(_v33_nsa_result(
+        "NSA CSA v3.3 - LOTL Detection",
+        "Pass" if has_execve else "Warning",
+        f"Living-off-the-Land detection (execve audit): {has_execve}",
+        severity="High",
+        details=f"execve audit rules: {has_execve}",
+        remediation=(
+            "Add audit rule: -a always,exit -F arch=b64 -S execve -k execution"
+        ),
+        cross_references={
+            "NSA": "CSA LOTL", "NIST": "AU-2", "CSF": "DE.CM-3",
+        },
+    ))
+
+    # CSA "Detect AD Replication Attacks" parallel - auth event logging
+    audit_login = "/var/log/lastlog" in audit_rules or "logins" in audit_rules
+    results.append(_v33_nsa_result(
+        "NSA CSA v3.3 - Auth Logging",
+        "Pass" if audit_login else "Warning",
+        f"Authentication event logging: {audit_login}",
+        severity="High",
+        details=f"login audit indicators: {audit_login}",
+        remediation=(
+            "-w /var/log/lastlog -p wa -k logins; "
+            "-w /var/run/faillock -p wa -k logins"
+        ),
+        cross_references={
+            "NSA": "CSA Auth Defense", "NIST": "AU-2",
+        },
+    ))
+
+
+def _check_nsa_v33_csfc_indicators(results, shared_data, os_info):
+    """NSA Commercial Solutions for Classified - technical indicators."""
+
+    # CSfC requires defense-in-depth: 2 independent layers
+    # Layer 1 + Layer 2 indicators
+    mac_active = False
+    selinux = _v33_file_exists("/sys/fs/selinux/enforce")
+    if selinux:
+        try:
+            with open("/sys/fs/selinux/enforce") as f:
+                mac_active = f.read().strip() == "1"
+        except OSError:
+            pass
+    if not mac_active:
+        rc, _, _ = _v33_run_command(["aa-status", "--enabled"], timeout=3.0)
+        mac_active = rc == 0
+
+    fips_active = False
+    if _v33_file_exists("/proc/sys/crypto/fips_enabled"):
+        fips_active = _v33_read_file_safe(
+            "/proc/sys/crypto/fips_enabled"
+        ).strip() == "1"
+
+    layers = sum([mac_active, fips_active])
+    results.append(_v33_nsa_result(
+        "NSA CSfC v3.3 - Defense in Depth",
+        "Pass" if layers >= 2 else "Info",
+        f"CSfC defense-in-depth layers ({layers}/2)",
+        severity="High",
+        details=f"MAC enforcing: {mac_active}, FIPS active: {fips_active}",
+        remediation=(
+            "CSfC requires multiple independent crypto layers: "
+            "enable both MAC and FIPS for compliant baseline"
+        ),
+        cross_references={
+            "NSA": "CSfC", "NIST": "SC-7(13)", "FIPS": "140-3",
+        },
+    ))
+
+    # CSfC requires audit
+    auditd_active = _v33_systemd_active("auditd.service") == "active"
+    audit_log = _v33_file_exists("/var/log/audit/audit.log")
+    audit_ok = auditd_active and audit_log
+    results.append(_v33_nsa_result(
+        "NSA CSfC v3.3 - Audit",
+        "Pass" if audit_ok else "Fail",
+        f"CSfC audit requirements: {audit_ok}",
+        severity="Critical",
+        details=f"auditd: {auditd_active}, audit.log: {audit_log}",
+        cross_references={
+            "NSA": "CSfC", "NIST": "AU-2",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_nsa_v33 = run_checks
+
+
+def run_checks(shared_data):
+    """Execute the v3.3 expanded NSA module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_nsa_v33(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_nsa_v33_selinux_booleans(results, shared_data, os_info)
+        _check_nsa_v33_fips_depth(results, shared_data, os_info)
+        _check_nsa_v33_kernel_hardening(results, shared_data, os_info)
+        _check_nsa_v33_network_protocols(results, shared_data, os_info)
+        _check_nsa_v33_advisories(results, shared_data, os_info)
+        _check_nsa_v33_csfc_indicators(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="NSA - Error",
+            status="Error",
+            message=f"NSA v3.3 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
+
+
+# ============================================================================
+# v3.5 EXPANSION - NSA Modern Guidance Areas
+# ----------------------------------------------------------------------------
+# Synopsis:
+#   Adds depth across NSA cybersecurity guidance topics not yet covered:
+#     - CNSA 2.0 (quantum-resistant cryptography readiness)
+#     - NSA Kubernetes Hardening Guide (V1.2)
+#     - NSA Encrypted DNS Implementation (DoH/DoT/DNSSEC)
+#     - NSA VPN Configuration Guidance depth
+#     - NSA Memory Safety guidance (ASAN, MSAN, kernel mitigations)
+#     - NSA eBPF Security guidance
+#     - NSA Software Supply Chain (SBOM, attestation)
+#     - NSA Secure/Measured Boot depth
+#     - NSA Identity-based access (RBAC depth, PKI)
+#     - NSA Active Cybersecurity Monitoring integration
+# ============================================================================
+
+# v3.5 helpers
+from shared_components.module_helpers import (
+    read_file_safe as _v35_read_file_safe,
+    file_exists as _v35_file_exists,
+    directory_exists as _v35_directory_exists,
+    command_available as _v35_command_available,
+    run_command as _v35_run_command,
+    read_sysctl as _v35_read_sysctl,
+    systemd_active as _v35_systemd_active,
+    list_directory as _v35_list_directory,
+)
+
+
+def _v35_nsa_result(category, status, message, severity="Medium",
+                   details="", remediation="", cross_references=None):
+    """Build AuditResult for NSA v3.5 expansion."""
+    return AuditResult(
+        module=MODULE_NAME,
+        category=category,
+        status=status,
+        message=message,
+        details=details,
+        remediation=remediation,
+        severity=severity,
+        cross_references=cross_references or {},
+    )
+
+
+def _check_nsa_v35_cnsa2_quantum_resistant(results, shared_data, os_info):
+    """CNSA 2.0 - Commercial National Security Algorithm Suite v2.0
+    quantum-resistant cryptography readiness."""
+    cat = "NSA v3.5 - CNSA 2.0 PQC"
+
+    # 1. OpenSSL 3.x detection (CNSA 2.0 requires modern OpenSSL)
+    rc, out, _ = _v35_run_command(["openssl", "version"], timeout=5.0)
+    openssl_version = ""
+    openssl_3x = False
+    if rc == 0 and out:
+        openssl_version = out.strip().split("\n")[0]
+        openssl_3x = "OpenSSL 3." in openssl_version
+    results.append(_v35_nsa_result(
+        f"{cat} - OpenSSL 3.x",
+        "Pass" if openssl_3x else "Info",
+        f"NSA CNSA 2.0 OpenSSL 3.x present: {openssl_3x}",
+        severity="Medium",
+        details=f"openssl version: {openssl_version}",
+        remediation=(
+            "OpenSSL 3.0+ adds Provider API and CNSA 2.0 algorithm support. "
+            "Check distribution upgrade path. Ubuntu 22.04+, Debian 12+, "
+            "RHEL 9+ ship with OpenSSL 3.x."
+        ),
+        cross_references={
+            "NSA": "CNSA 2.0",
+            "NIST": "SC-13", "FIPS": "203, 204, 205",
+        },
+    ))
+
+    # 2. AES-256 in active SSH ciphers (CNSA 2.0 minimum symmetric)
+    sshd = _v35_read_file_safe("/etc/ssh/sshd_config")
+    sshd_d = ""
+    if _v35_directory_exists("/etc/ssh/sshd_config.d"):
+        for f in _v35_list_directory("/etc/ssh/sshd_config.d"):
+            if f.endswith(".conf"):
+                sshd_d += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/ssh/sshd_config.d", f)
+                )
+    full_sshd = sshd + "\n" + sshd_d
+    ciphers_match = re.search(
+        r"^\s*Ciphers\s+(\S+)", full_sshd, re.MULTILINE,
+    )
+    aes256_only = (
+        ciphers_match and
+        "aes256" in ciphers_match.group(1).lower() and
+        "aes128" not in ciphers_match.group(1).lower()
+    )
+    aes256_present = (
+        ciphers_match and "aes256" in ciphers_match.group(1).lower()
+    )
+    results.append(_v35_nsa_result(
+        f"{cat} - SSH AES-256",
+        "Pass" if aes256_present else "Warning",
+        f"NSA CNSA 2.0 SSH AES-256 present: {aes256_present}, "
+        f"AES-256 only: {aes256_only}",
+        severity="High",
+        details=f"Ciphers = {ciphers_match.group(1) if ciphers_match else 'default'}",
+        remediation=(
+            "In /etc/ssh/sshd_config.d/50-cnsa2.conf:\n"
+            "  Ciphers aes256-gcm@openssh.com,aes256-ctr\n"
+            "CNSA 2.0 requires AES-256 minimum for symmetric encryption."
+        ),
+        cross_references={
+            "NSA": "CNSA 2.0",
+            "NIST": "SC-13", "FIPS": "197",
+        },
+    ))
+
+    # 3. SHA-384 (or SHA-512) in active SSH MACs (CNSA 2.0 hash minimum)
+    macs_match = re.search(r"^\s*MACs\s+(\S+)", full_sshd, re.MULTILINE)
+    sha384_or_512 = (
+        macs_match and (
+            "sha2-384" in macs_match.group(1).lower() or
+            "sha2-512" in macs_match.group(1).lower()
+        )
+    )
+    results.append(_v35_nsa_result(
+        f"{cat} - SSH SHA-384/512",
+        "Pass" if sha384_or_512 else "Warning",
+        f"NSA CNSA 2.0 SSH SHA-384/512 MACs: {sha384_or_512}",
+        severity="High",
+        details=f"MACs = {macs_match.group(1) if macs_match else 'default'}",
+        remediation=(
+            "In /etc/ssh/sshd_config.d/50-cnsa2.conf:\n"
+            "  MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-512,"
+            "hmac-sha2-256-etm@openssh.com"
+        ),
+        cross_references={
+            "NSA": "CNSA 2.0",
+            "FIPS": "180-4",
+        },
+    ))
+
+    # 4. RSA-3072+ or ECDSA P-384+ keys (CNSA 2.0 asymmetric minimum)
+    # Check SSH host keys
+    host_key_strong = False
+    host_keys_dir = "/etc/ssh"
+    if _v35_directory_exists(host_keys_dir):
+        for f in _v35_list_directory(host_keys_dir):
+            if not f.startswith("ssh_host_") or not f.endswith("_key.pub"):
+                continue
+            key_path = os.path.join(host_keys_dir, f)
+            try:
+                content = _v35_read_file_safe(key_path)
+                if content:
+                    # ED25519 is acceptable (256-bit edwards curve)
+                    if "ed25519" in content:
+                        host_key_strong = True
+                        break
+                    # ECDSA P-384/P-521 acceptable
+                    if "ecdsa-sha2-nistp384" in content or "ecdsa-sha2-nistp521" in content:
+                        host_key_strong = True
+                        break
+                    # RSA: check via ssh-keygen -lf
+                    if "ssh-rsa" in content:
+                        rc, out, _ = _v35_run_command(
+                            ["ssh-keygen", "-lf", key_path], timeout=3.0,
+                        )
+                        if rc == 0 and out:
+                            m = re.match(r"^(\d+)\s+", out)
+                            if m and int(m.group(1)) >= 3072:
+                                host_key_strong = True
+                                break
+            except OSError:
+                pass
+    results.append(_v35_nsa_result(
+        f"{cat} - Host Key Strength",
+        "Pass" if host_key_strong else "Warning",
+        f"NSA CNSA 2.0 Asymmetric host key strength: {host_key_strong}",
+        severity="High",
+        details=f"Strong host key (ED25519 / ECDSA P-384+ / RSA-3072+): "
+                f"{host_key_strong}",
+        remediation=(
+            "Generate ED25519 (preferred): \n"
+            "  ssh-keygen -t ed25519 -f /etc/ssh/ssh_host_ed25519_key -N ''\n"
+            "Or ECDSA P-384:\n"
+            "  ssh-keygen -t ecdsa -b 384 -f /etc/ssh/ssh_host_ecdsa_key -N ''\n"
+            "Then: systemctl restart sshd\n"
+            "Remove deprecated keys: rm -f /etc/ssh/ssh_host_dsa_key*"
+        ),
+        cross_references={
+            "NSA": "CNSA 2.0",
+            "FIPS": "186-5",
+        },
+    ))
+
+
+def _check_nsa_v35_kubernetes_hardening(results, shared_data, os_info):
+    """NSA Kubernetes Hardening Guide V1.2."""
+    cat = "NSA v3.5 - K8s Hardening"
+
+    # K8s presence indicators
+    k8s_present = (
+        _v35_command_available("kubectl") or
+        _v35_command_available("kubelet") or
+        _v35_directory_exists("/etc/kubernetes") or
+        _v35_systemd_active("kubelet.service") == "active" or
+        _v35_command_available("k3s") or
+        _v35_command_available("microk8s")
+    )
+
+    if not k8s_present:
+        results.append(_v35_nsa_result(
+            f"{cat} - K8s Status",
+            "Info",
+            "Kubernetes not detected on host",
+            severity="Informational",
+            details="No kubectl/kubelet/etc-kubernetes/k3s/microk8s",
+            cross_references={"NSA": "K8s Hardening Guide V1.2"},
+        ))
+        return
+
+    # NSA recommends rootless containers, dropping capabilities, RuntimeDefault seccomp
+    # Surrogate: kubelet config presence and audit
+    kubelet_config = ""
+    for path in [
+        "/var/lib/kubelet/config.yaml",
+        "/etc/kubernetes/kubelet/kubelet-config.yaml",
+        "/etc/kubernetes/kubelet/kubelet.conf",
+    ]:
+        if _v35_file_exists(path):
+            kubelet_config += "\n" + _v35_read_file_safe(path)
+
+    if kubelet_config:
+        # NSA: anonymous-auth must be false
+        anon_auth = bool(re.search(
+            r"anonymous-auth:\s*true",
+            kubelet_config, re.IGNORECASE,
+        ))
+        results.append(_v35_nsa_result(
+            f"{cat} - Anonymous Auth Disabled",
+            "Pass" if not anon_auth else "Fail",
+            f"NSA K8s anonymous-auth disabled: {not anon_auth}",
+            severity="Critical",
+            details=f"anonymous-auth: true detected: {anon_auth}",
+            remediation=(
+                "In kubelet config: anonymous-auth: false\n"
+                "Anonymous authentication exposes the kubelet API."
+            ),
+            cross_references={
+                "NSA": "K8s Hardening Guide",
+                "CIS": "Kubernetes Benchmark 4.2.1",
+            },
+        ))
+
+        # NSA: read-only port disabled
+        read_only_port = re.search(
+            r"readOnlyPort:\s*(\d+)", kubelet_config,
+        )
+        readonly_disabled = (
+            read_only_port is None or read_only_port.group(1) == "0"
+        )
+        results.append(_v35_nsa_result(
+            f"{cat} - readOnlyPort Disabled",
+            "Pass" if readonly_disabled else "Fail",
+            f"NSA K8s readOnlyPort=0: {readonly_disabled}",
+            severity="High",
+            details=(
+                f"readOnlyPort = "
+                f"{read_only_port.group(1) if read_only_port else '0 (default)'}"
+            ),
+            remediation=(
+                "In kubelet config: readOnlyPort: 0\n"
+                "The read-only port (10255) provides unauthenticated access."
+            ),
+            cross_references={
+                "NSA": "K8s Hardening Guide",
+                "CIS": "Kubernetes Benchmark 4.2.4",
+            },
+        ))
+
+    # Container runtime audit
+    runtime_active = (
+        _v35_systemd_active("containerd.service") == "active" or
+        _v35_systemd_active("crio.service") == "active" or
+        _v35_systemd_active("docker.service") == "active"
+    )
+    results.append(_v35_nsa_result(
+        f"{cat} - Container Runtime",
+        "Pass" if runtime_active else "Info",
+        f"NSA K8s Container runtime active: {runtime_active}",
+        severity="Medium",
+        details=f"containerd/crio/docker active: {runtime_active}",
+        cross_references={"NSA": "K8s Hardening Guide"},
+    ))
+
+    # NSA: pod-level audit logging via auditd/journald
+    audit_rules_text = ""
+    if _v35_directory_exists("/etc/audit/rules.d"):
+        for f in _v35_list_directory("/etc/audit/rules.d"):
+            if f.endswith(".rules"):
+                audit_rules_text += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/audit/rules.d", f)
+                )
+    k8s_audited = (
+        "/etc/kubernetes" in audit_rules_text or
+        "kubelet" in audit_rules_text or
+        "/var/lib/kubelet" in audit_rules_text
+    )
+    results.append(_v35_nsa_result(
+        f"{cat} - K8s Config Audit",
+        "Pass" if k8s_audited else "Warning",
+        f"NSA K8s configuration audit: {k8s_audited}",
+        severity="High",
+        details=f"K8s paths in audit rules: {k8s_audited}",
+        remediation=(
+            "Add to /etc/audit/rules.d/41-nsa-k8s.rules:\n"
+            "  -w /etc/kubernetes -p wa -k k8s-config\n"
+            "  -w /var/lib/kubelet -p wa -k k8s-state"
+        ),
+        cross_references={
+            "NSA": "K8s Hardening Guide",
+            "NIST": "AU-2",
+        },
+    ))
+
+
+def _check_nsa_v35_encrypted_dns(results, shared_data, os_info):
+    """NSA Encrypted DNS Implementation Guidance."""
+    cat = "NSA v3.5 - Encrypted DNS"
+
+    # systemd-resolved configuration
+    resolved_conf = _v35_read_file_safe("/etc/systemd/resolved.conf")
+    resolved_d_text = ""
+    resolved_d = "/etc/systemd/resolved.conf.d"
+    if _v35_directory_exists(resolved_d):
+        for f in _v35_list_directory(resolved_d):
+            if f.endswith(".conf"):
+                resolved_d_text += "\n" + _v35_read_file_safe(
+                    os.path.join(resolved_d, f)
+                )
+    full_resolved = resolved_conf + "\n" + resolved_d_text
+
+    # DNSOverTLS=yes (DoT)
+    dot_match = re.search(
+        r"^\s*DNSOverTLS\s*=\s*(\w+)", full_resolved, re.MULTILINE,
+    )
+    dot_enabled = bool(
+        dot_match and dot_match.group(1).lower() in ("yes", "opportunistic")
+    )
+
+    # DNSSEC=yes
+    dnssec_match = re.search(
+        r"^\s*DNSSEC\s*=\s*(\w+)", full_resolved, re.MULTILINE,
+    )
+    dnssec_enabled = bool(
+        dnssec_match and dnssec_match.group(1).lower() in ("yes", "allow-downgrade")
+    )
+
+    # systemd-resolved active
+    resolved_active = _v35_systemd_active("systemd-resolved.service") == "active"
+
+    encrypted_dns_layers = sum([
+        bool(dot_enabled), bool(dnssec_enabled), bool(resolved_active),
+    ])
+    results.append(_v35_nsa_result(
+        f"{cat} - DNS Security Posture",
+        "Pass" if encrypted_dns_layers >= 2 else "Warning",
+        f"NSA Encrypted DNS layers: {encrypted_dns_layers}/3 "
+        f"(DoT={dot_enabled}, DNSSEC={dnssec_enabled}, "
+        f"resolved={resolved_active})",
+        severity="Medium",
+        details=(
+            f"systemd-resolved active: {resolved_active}, "
+            f"DoT: {dot_enabled}, DNSSEC: {dnssec_enabled}"
+        ),
+        remediation=(
+            "In /etc/systemd/resolved.conf.d/dns-security.conf:\n"
+            "  [Resolve]\n"
+            "  DNSOverTLS=yes\n"
+            "  DNSSEC=allow-downgrade\n"
+            "  DNS=1.1.1.1#cloudflare-dns.com 9.9.9.9#dns.quad9.net\n"
+            "Then: systemctl restart systemd-resolved"
+        ),
+        cross_references={
+            "NSA": "Encrypted DNS Implementation",
+            "NIST": "SC-8(1), SC-23",
+        },
+    ))
+
+    # /etc/resolv.conf points to systemd-resolved
+    resolv_conf = _v35_read_file_safe("/etc/resolv.conf")
+    points_to_resolved = (
+        "127.0.0.53" in resolv_conf or "127.0.0.1" in resolv_conf
+    )
+    if resolved_active:
+        results.append(_v35_nsa_result(
+            f"{cat} - resolv.conf Points to Resolver",
+            "Pass" if points_to_resolved else "Warning",
+            f"NSA Encrypted DNS /etc/resolv.conf via local resolver: "
+            f"{points_to_resolved}",
+            severity="Medium",
+            details=f"127.0.0.53/127.0.0.1 in resolv.conf: {points_to_resolved}",
+            remediation=(
+                "Symlink /etc/resolv.conf to /run/systemd/resolve/stub-resolv.conf:\n"
+                "  ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf"
+            ),
+            cross_references={"NSA": "Encrypted DNS Implementation"},
+        ))
+
+
+def _check_nsa_v35_vpn_depth(results, shared_data, os_info):
+    """NSA VPN Configuration Guidance depth."""
+    cat = "NSA v3.5 - VPN"
+
+    # WireGuard / strongSwan / OpenVPN presence
+    vpn_tools = {
+        "WireGuard": _v35_command_available("wg"),
+        "strongSwan": (
+            _v35_command_available("ipsec") or
+            _v35_systemd_active("strongswan.service") == "active" or
+            _v35_systemd_active("strongswan-starter.service") == "active"
+        ),
+        "Libreswan": _v35_systemd_active("libreswan.service") == "active",
+        "OpenVPN": _v35_command_available("openvpn"),
+    }
+    vpn_available = [k for k, v in vpn_tools.items() if v]
+    results.append(_v35_nsa_result(
+        f"{cat} - VPN Tooling",
+        "Pass" if vpn_available else "Info",
+        f"NSA VPN configuration tooling: {vpn_available}",
+        severity="Medium",
+        details=f"Available: {vpn_available}",
+        remediation=remediation_for("wireguard"),
+        cross_references={
+            "NSA": "Configuring IPsec VPNs",
+            "NIST": "SC-8(1), AC-17",
+        },
+    ))
+
+    # NSA recommends IKEv2 over IKEv1 for IPsec; check ipsec.conf
+    ipsec_conf = _v35_read_file_safe("/etc/ipsec.conf")
+    ipsec_d_text = ""
+    if _v35_directory_exists("/etc/ipsec.d"):
+        for f in _v35_list_directory("/etc/ipsec.d"):
+            if f.endswith(".conf"):
+                ipsec_d_text += "\n" + _v35_read_file_safe(
+                    os.path.join("/etc/ipsec.d", f)
+                )
+    full_ipsec = ipsec_conf + "\n" + ipsec_d_text
+    if full_ipsec.strip():
+        ikev2_present = "keyexchange=ikev2" in full_ipsec.lower()
+        results.append(_v35_nsa_result(
+            f"{cat} - IKEv2",
+            "Pass" if ikev2_present else "Warning",
+            f"NSA IPsec IKEv2 configured: {ikev2_present}",
+            severity="High",
+            details=f"keyexchange=ikev2 detected: {ikev2_present}",
+            remediation=(
+                "In /etc/ipsec.conf or /etc/ipsec.d/*.conf:\n"
+                "  conn <name>\n"
+                "    keyexchange=ikev2\n"
+                "    ike=aes256-sha384-modp3072\n"
+                "    esp=aes256gcm16-sha384"
+            ),
+            cross_references={
+                "NSA": "Configuring IPsec VPNs",
+                "NIST": "SC-13",
+            },
+        ))
+
+
+def _check_nsa_v35_memory_safety(results, shared_data, os_info):
+    """NSA Memory Safety guidance - kernel-level mitigations and ASAN/MSAN."""
+    cat = "NSA v3.5 - Memory Safety"
+
+    # Stack protector / ASLR
+    aslr = _v35_read_sysctl("kernel.randomize_va_space")
+    aslr_full = aslr == "2"
+    results.append(_v35_nsa_result(
+        f"{cat} - ASLR Full",
+        "Pass" if aslr_full else "Fail",
+        f"NSA Memory Safety ASLR randomize_va_space=2: {aslr_full}",
+        severity="High",
+        details=f"randomize_va_space = {aslr}",
+        remediation=(
+            "In /etc/sysctl.d/99-nsa-memsafety.conf:\n"
+            "  kernel.randomize_va_space = 2\n"
+            "Then: sysctl --system"
+        ),
+        cross_references={
+            "NSA": "Memory Safety",
+            "NIST": "SI-16", "STIG": "V-230280",
+        },
+    ))
+
+    # KASLR (kernel ASLR via cmdline)
+    cmdline = _v35_read_file_safe("/proc/cmdline")
+    kaslr_off = "nokaslr" in cmdline
+    results.append(_v35_nsa_result(
+        f"{cat} - KASLR",
+        "Pass" if not kaslr_off else "Warning",
+        f"NSA Memory Safety KASLR enabled: {not kaslr_off}",
+        severity="Medium",
+        details=f"nokaslr in cmdline: {kaslr_off}",
+        remediation=(
+            "Remove 'nokaslr' from kernel cmdline (GRUB).\n"
+            "KASLR randomizes the kernel base address and is essential against "
+            "kernel exploitation."
+        ),
+        cross_references={
+            "NSA": "Memory Safety",
+            "NIST": "SI-16",
+        },
+    ))
+
+    # Heap protections (glibc / malloc tunables)
+    glibc_hardening = False
+    try:
+        # Detect glibc version
+        rc, out, _ = _v35_run_command(["ldd", "--version"], timeout=3.0)
+        if rc == 0 and out:
+            m = re.search(r"GLIBC\s+(\d+)\.(\d+)", out)
+            if m and (int(m.group(1)), int(m.group(2))) >= (2, 31):
+                glibc_hardening = True  # malloc tunables modern
+    except OSError:
+        pass
+    results.append(_v35_nsa_result(
+        f"{cat} - glibc Hardening",
+        "Pass" if glibc_hardening else "Info",
+        f"NSA Memory Safety glibc 2.31+: {glibc_hardening}",
+        severity="Low",
+        details=f"Modern glibc with hardened malloc: {glibc_hardening}",
+        cross_references={"NSA": "Memory Safety"},
+    ))
+
+    # ASan / sanitizer tooling for development
+    sanitizer_tools = {
+        "AddressSanitizer (gcc)": (
+            _v35_command_available("gcc") and
+            os.path.exists("/usr/lib/x86_64-linux-gnu/libasan.so.8") or
+            os.path.exists("/usr/lib64/libasan.so.8") or
+            os.path.exists("/usr/lib/x86_64-linux-gnu/libasan.so.6") or
+            os.path.exists("/usr/lib64/libasan.so.6")
+        ),
+        "Valgrind": _v35_command_available("valgrind"),
+    }
+    sanitizers = [k for k, v in sanitizer_tools.items() if v]
+    if _v35_command_available("gcc") or _v35_command_available("clang"):
+        results.append(_v35_nsa_result(
+            f"{cat} - Sanitizer Tooling",
+            "Pass" if sanitizers else "Info",
+            f"NSA Memory Safety sanitizer tooling: {sanitizers}",
+            severity="Informational",
+            details=f"Available: {sanitizers}",
+            cross_references={"NSA": "Memory Safety"},
+        ))
+
+
+def _check_nsa_v35_ebpf_security(results, shared_data, os_info):
+    """NSA eBPF Security guidance."""
+    cat = "NSA v3.5 - eBPF Security"
+
+    # Unprivileged BPF disabled
+    bpf_unpriv = _v35_read_sysctl("kernel.unprivileged_bpf_disabled")
+    bpf_locked = bpf_unpriv in ("1", "2")
+    results.append(_v35_nsa_result(
+        f"{cat} - Unprivileged BPF",
+        "Pass" if bpf_locked else "Warning",
+        f"NSA eBPF unprivileged disabled: {bpf_locked}",
+        severity="High",
+        details=f"kernel.unprivileged_bpf_disabled = {bpf_unpriv}",
+        remediation=(
+            "In /etc/sysctl.d/99-nsa-ebpf.conf:\n"
+            "  kernel.unprivileged_bpf_disabled = 1\n"
+            "Then: sysctl --system\n"
+            "Prevents unprivileged users from loading BPF programs."
+        ),
+        cross_references={
+            "NSA": "eBPF Security",
+            "NIST": "AC-3, SI-7",
+        },
+    ))
+
+    # BPF JIT hardened
+    bpf_harden = _v35_read_sysctl("net.core.bpf_jit_harden")
+    jit_hardened = bpf_harden in ("1", "2")
+    results.append(_v35_nsa_result(
+        f"{cat} - BPF JIT Hardening",
+        "Pass" if jit_hardened else "Info",
+        f"NSA eBPF JIT hardening: {jit_hardened}",
+        severity="Medium",
+        details=f"net.core.bpf_jit_harden = {bpf_harden}",
+        remediation=(
+            "In /etc/sysctl.d/99-nsa-ebpf.conf:\n"
+            "  net.core.bpf_jit_harden = 2\n"
+            "Mitigates BPF JIT spraying attacks."
+        ),
+        cross_references={"NSA": "eBPF Security"},
+    ))
+
+    # eBPF LSM availability (kernel 5.7+)
+    lsm_path = "/sys/kernel/security/lsm"
+    active_lsms = _v35_read_file_safe(lsm_path).strip() if _v35_file_exists(lsm_path) else ""
+    bpf_lsm = "bpf" in active_lsms.lower()
+    results.append(_v35_nsa_result(
+        f"{cat} - eBPF LSM",
+        "Info",
+        f"NSA eBPF LSM active: {bpf_lsm}",
+        severity="Informational",
+        details=f"bpf in active LSMs: {bpf_lsm}",
+        cross_references={"NSA": "eBPF Security"},
+    ))
+
+
+def _check_nsa_v35_supply_chain(results, shared_data, os_info):
+    """NSA Software Supply Chain - SBOM, attestation, signing."""
+    cat = "NSA v3.5 - Supply Chain"
+
+    # SBOM tooling
+    sbom_tools = {
+        "syft": _v35_command_available("syft"),
+        "trivy": _v35_command_available("trivy"),
+        "cyclonedx-cli": _v35_command_available("cyclonedx"),
+    }
+    sbom_available = [k for k, v in sbom_tools.items() if v]
+    results.append(_v35_nsa_result(
+        f"{cat} - SBOM Generation",
+        "Pass" if sbom_available else "Info",
+        f"NSA Supply Chain SBOM tools: {sbom_available}",
+        severity="High",
+        details=f"Available: {sbom_available}",
+        remediation=remediation_for("syft"),
+        cross_references={
+            "NSA": "Software Supply Chain",
+            "CISA-SbD": "1.0",
+            "NIST": "SR-3, SR-4, SR-11",
+        },
+    ))
+
+    # Image / artifact signing
+    signing_tools = {
+        "cosign": _v35_command_available("cosign"),
+        "minisign": _v35_command_available("minisign"),
+        "gpg": _v35_command_available("gpg") or _v35_command_available("gpg2"),
+    }
+    signing_available = [k for k, v in signing_tools.items() if v]
+    results.append(_v35_nsa_result(
+        f"{cat} - Artifact Signing",
+        "Pass" if signing_available else "Warning",
+        f"NSA Supply Chain signing tools: {signing_available}",
+        severity="High",
+        details=f"Available: {signing_available}",
+        remediation=(
+            "Install: apt-get install -y gnupg2\n"
+            "For container signing: install cosign:\n"
+            "  curl -O -L https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64"
+        ),
+        cross_references={
+            "NSA": "Software Supply Chain",
+            "NIST": "SR-4, SI-7",
+        },
+    ))
+
+    # Verify package GPG signatures (apt/dnf)
+    apt_keyrings = (
+        _v35_directory_exists("/etc/apt/keyrings") or
+        _v35_directory_exists("/etc/apt/trusted.gpg.d")
+    )
+    rpm_gpgcheck = False
+    rc, out, _ = _v35_run_command(
+        ["rpm", "--eval", "%_gpgcheck"], timeout=3.0,
+    )
+    if rc == 0 and out and out.strip() == "1":
+        rpm_gpgcheck = True
+    pkg_signing_active = apt_keyrings or rpm_gpgcheck
+    results.append(_v35_nsa_result(
+        f"{cat} - Package Signature Verification",
+        "Pass" if pkg_signing_active else "Warning",
+        f"NSA Supply Chain package signature verification: {pkg_signing_active}",
+        severity="High",
+        details=(
+            f"apt keyrings: {apt_keyrings}, rpm gpgcheck: {rpm_gpgcheck}"
+        ),
+        cross_references={
+            "NSA": "Software Supply Chain",
+            "NIST": "SR-3, SR-11",
+            "PCI-DSS": "6.3.3",
+        },
+    ))
+
+
+def _check_nsa_v35_secure_boot_depth(results, shared_data, os_info):
+    """NSA Secure/Measured Boot guidance depth."""
+    cat = "NSA v3.5 - Secure Boot"
+
+    # Secure Boot detection (UEFI)
+    sb_efi = _v35_directory_exists("/sys/firmware/efi/efivars")
+    sb_state = "<unknown>"
+    sb_enabled = False
+    if sb_efi and _v35_command_available("mokutil"):
+        rc, out, _ = _v35_run_command(["mokutil", "--sb-state"], timeout=5.0)
+        if rc == 0 and out:
+            sb_state = out.strip().split("\n")[0]
+            sb_enabled = "enabled" in sb_state.lower()
+    elif sb_efi:
+        # Fallback: check via efivars
+        for f in _v35_list_directory("/sys/firmware/efi/efivars") or []:
+            if "SecureBoot" in f and "8be4df61" in f:
+                # File exists; can't easily read raw bytes here, but presence
+                # suggests UEFI Secure Boot variable is exposed.
+                sb_state = "var present"
+                break
+
+    results.append(_v35_nsa_result(
+        f"{cat} - UEFI Secure Boot",
+        "Pass" if sb_enabled else "Info",
+        f"NSA Secure Boot enabled: {sb_enabled}, state: {sb_state}",
+        severity="High",
+        details=f"UEFI: {sb_efi}, sb_state: {sb_state}",
+        remediation=(
+            "Enable Secure Boot in UEFI firmware setup.\n"
+            "On Linux, ensure shim and signed kernel/modules are in use:\n"
+            "  apt-get install -y shim-signed grub-efi-amd64-signed"
+        ),
+        cross_references={
+            "NSA": "UEFI Secure Boot Customization",
+            "NIST": "SI-7", "STIG": "V-230275",
+        },
+    ))
+
+    # TPM 2.0 presence (measured boot)
+    tpm_present = (
+        _v35_directory_exists("/sys/class/tpm/tpm0") or
+        _v35_file_exists("/dev/tpm0") or
+        _v35_file_exists("/dev/tpmrm0")
+    )
+    tpm_tools = (
+        _v35_command_available("tpm2_pcrread") or
+        _v35_command_available("tpm2_quote")
+    )
+    measured_boot_capable = tpm_present and tpm_tools
+    results.append(_v35_nsa_result(
+        f"{cat} - TPM 2.0 / Measured Boot",
+        "Pass" if measured_boot_capable else "Info",
+        f"NSA Measured Boot capable: {measured_boot_capable}",
+        severity="Medium",
+        details=f"TPM device: {tpm_present}, tpm2-tools: {tpm_tools}",
+        remediation=(
+            "apt-get install -y tpm2-tools\n"
+            "Verify boot integrity: tpm2_pcrread sha256:0,1,2,3,4,5,6,7"
+        ),
+        cross_references={
+            "NSA": "Measured Boot",
+            "NIST": "SI-7", "FIPS": "140-3",
+        },
+    ))
+
+
+def _check_nsa_v35_active_monitoring(results, shared_data, os_info):
+    """NSA Active Cybersecurity Monitoring integration."""
+    cat = "NSA v3.5 - Active Monitoring"
+
+    # SIEM agent / forwarder
+    siem_agents = {
+        "rsyslog forwarding": False,
+        "syslog-ng forwarding": False,
+        "auditd remote": False,
+        "OSSEC/Wazuh agent": _v35_file_exists("/var/ossec/etc/ossec.conf"),
+        "Splunk forwarder": _v35_file_exists("/opt/splunkforwarder/bin/splunk"),
+        "Filebeat": _v35_systemd_active("filebeat.service") == "active",
+        "Vector": _v35_systemd_active("vector.service") == "active",
+        "Fluentd / Fluent Bit": (
+            _v35_systemd_active("fluentd.service") == "active" or
+            _v35_systemd_active("fluent-bit.service") == "active" or
+            _v35_systemd_active("td-agent.service") == "active"
+        ),
+    }
+    rsy = _v35_read_file_safe("/etc/rsyslog.conf")
+    if "@@" in rsy or "omfwd" in rsy:
+        siem_agents["rsyslog forwarding"] = True
+    if not siem_agents["rsyslog forwarding"] and _v35_directory_exists(
+            "/etc/rsyslog.d"):
+        for f in _v35_list_directory("/etc/rsyslog.d"):
+            c = _v35_read_file_safe(os.path.join("/etc/rsyslog.d", f))
+            if "@@" in c or "omfwd" in c:
+                siem_agents["rsyslog forwarding"] = True
+                break
+    audisp = (
+        _v35_read_file_safe("/etc/audit/audisp-remote.conf") or
+        _v35_read_file_safe("/etc/audisp/audisp-remote.conf")
+    )
+    if audisp and "remote_server" in audisp:
+        siem_agents["auditd remote"] = True
+
+    active = [k for k, v in siem_agents.items() if v]
+    results.append(_v35_nsa_result(
+        f"{cat} - SIEM Forwarders",
+        "Pass" if active else "Warning",
+        f"NSA Active Monitoring SIEM forwarders: {active}",
+        severity="High",
+        details=f"Active: {active}",
+        remediation=(
+            "Configure rsyslog remote forwarding (TLS):\n"
+            "  /etc/rsyslog.d/50-siem.conf:\n"
+            "  *.* action(type=\"omfwd\" target=\"siem.example.com\" "
+            "port=\"6514\" protocol=\"tcp\" StreamDriver=\"gtls\")"
+        ),
+        cross_references={
+            "NSA": "Active Cybersecurity Monitoring",
+            "NIST": "AU-6, SI-4",
+            "PCI-DSS": "10.5.3",
+        },
+    ))
+
+    # Continuous monitoring tools
+    monitoring_active = (
+        _v35_systemd_active("auditd.service") == "active" and
+        (_v35_command_available("aide") or _v35_file_exists(
+            "/var/lib/aide/aide.db"
+        )) and
+        _v35_systemd_active("fail2ban.service") == "active"
+    )
+    results.append(_v35_nsa_result(
+        f"{cat} - Continuous Monitoring Stack",
+        "Pass" if monitoring_active else "Info",
+        f"NSA Continuous monitoring stack (auditd+AIDE+fail2ban): "
+        f"{monitoring_active}",
+        severity="Medium",
+        details=f"All three active: {monitoring_active}",
+        cross_references={
+            "NSA": "Active Cybersecurity Monitoring",
+            "NIST": "CA-7",
+        },
+    ))
+
+
+# Save reference to existing run_checks
+_original_run_checks_nsa_v35 = run_checks
+
+
+def run_checks(shared_data: Optional[Dict[str, Any]] = None) -> List[AuditResult]:
+    """Execute the v3.5 expanded NSA module."""
+    if shared_data is None:
+        shared_data = {}
+
+    results = _original_run_checks_nsa_v35(shared_data)
+
+    os_info = shared_data.get("os_info") or shared_data.get("v3_os_info")
+    if os_info is None:
+        from shared_components import os_detection as _os_det
+        os_info = _os_det.detect_os()
+        shared_data["v3_os_info"] = os_info
+
+    try:
+        _check_nsa_v35_cnsa2_quantum_resistant(results, shared_data, os_info)
+        _check_nsa_v35_kubernetes_hardening(results, shared_data, os_info)
+        _check_nsa_v35_encrypted_dns(results, shared_data, os_info)
+        _check_nsa_v35_vpn_depth(results, shared_data, os_info)
+        _check_nsa_v35_memory_safety(results, shared_data, os_info)
+        _check_nsa_v35_ebpf_security(results, shared_data, os_info)
+        _check_nsa_v35_supply_chain(results, shared_data, os_info)
+        _check_nsa_v35_secure_boot_depth(results, shared_data, os_info)
+        _check_nsa_v35_active_monitoring(results, shared_data, os_info)
+    except Exception as exc:  # noqa: BLE001
+        results.append(AuditResult(
+            module=MODULE_NAME, category="NSA - Error",
+            status="Error",
+            message=f"NSA v3.5 expansion exception: {exc!r}",
+            details=str(exc), severity="Medium",
+        ))
+
+    return results
 if __name__ == "__main__":
     """
     Standalone testing capability for the NSA module
@@ -3077,7 +4670,3 @@ if __name__ == "__main__":
     print(f"NSA module comprehensive test complete")
     print(f"All {len(test_results)} checks executed successfully")
     print(f"{'='*80}\n")
-
-# ============================================================================
-# End of module_nsa.py
-# ============================================================================
