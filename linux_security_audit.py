@@ -2,7 +2,7 @@
 """
 linux_security_audit.py
 Comprehensive Linux Security Audit Script
-Version: 2.2
+Version: 2.0
 GitHub: https://github.com/Sandler73/Linux-Security-Audit-Project.git
 
 SYNOPSIS:
@@ -18,6 +18,7 @@ DESCRIPTION:
     - ISO/IEC 27001 Information Security Management
     - NIST Cybersecurity Framework
     - NSA Cybersecurity Guidance
+  - PCI DSS v4.0.1
     
     Features:
     - Multi-format output (HTML, CSV, JSON, XML, Console)
@@ -32,7 +33,7 @@ DESCRIPTION:
     - Severity levels and cross-framework control mapping
 
 PARAMETERS:
-    --modules, -m          : Comma-separated list of modules (Core,CIS,NIST,STIG,NSA,CISA,All)
+    --modules, -m          : Comma-separated list of modules (Core,CIS,NIST,STIG,NSA,CISA,PCIDSS,...,All)
     --output-format, -f    : Output format (HTML,CSV,JSON,XML,Console)
     --output-path, -o      : Path for output file
     --remediate            : Interactively remediate failed checks
@@ -44,7 +45,9 @@ PARAMETERS:
     --parallel             : Execute modules in parallel for faster completion
     --workers N            : Number of parallel workers (default: 4, max: 16)
     --no-cache             : Disable shared data caching (for debugging)
-    --profile              : Show detailed timing/performance breakdown
+    --perf-profile         : Show detailed timing/performance breakdown
+    --profile NAME         : Apply per-distribution audit profile (rhel9, ubuntu24, etc.)
+    --list-profiles        : List all available --profile values
     --log-level LEVEL      : Logging verbosity (DEBUG, INFO, WARNING, ERROR)
     --log-file PATH        : Write detailed log to file
     --json-log             : Use JSON format for log file (for SIEM)
@@ -61,7 +64,7 @@ EXAMPLES:
     python3 linux_security_audit.py --parallel --workers 8
         Run all modules in parallel with 8 workers
     
-    python3 linux_security_audit.py --profile -v
+    python3 linux_security_audit.py --perf-profile -v
         Run with verbose output and performance profiling
     
     python3 linux_security_audit.py -f XML
@@ -142,7 +145,7 @@ except ImportError:
 # ============================================================================
 # Configuration
 # ============================================================================
-SCRIPT_VERSION = "2.2"
+SCRIPT_VERSION = "2.0"
 SCRIPT_PATH = Path(__file__).parent.absolute()
 LOG_DIR = SCRIPT_PATH / "logs"
 REPORT_DIR = SCRIPT_PATH / "reports"
@@ -182,7 +185,7 @@ def get_system_ip_addresses() -> List[str]:
     (169.254.x.x, fe80::) addresses. Uses socket-based methods with
     subprocess fallback for maximum compatibility across distributions.
 
-    Provides paired identification (hostname + OS + IPs)
+    Enhancement 2 - provides paired identification (hostname + OS + IPs)
     for accurate attribution in SIEMs and multi-host environments.
 
     Returns:
@@ -323,14 +326,14 @@ class ExecutionInfo:
 @dataclass
 class ComplianceScore:
     """
-    Compliance scoring for a module or overall audit.
+    Compliance scoring for a module or overall audit (Phase 3.5).
 
     Scoring methods:
-      - simple_pct:           Pass / Applicable * 100
-      - weighted_pct:         (Pass*1.0 + Warn*0.5) / Applicable * 100
-      - (overall instance)    Aggregated across all modules
-      - severity_weighted_pct: Adjusted by severity impact factors
-      - threshold_result:      PASS/FAIL against configurable threshold
+      3.5.1 - simple_pct:           Pass / Applicable * 100
+      3.5.2 - weighted_pct:         (Pass*1.0 + Warn*0.5) / Applicable * 100
+      3.5.3 - (overall instance)    Aggregated across all modules
+      3.5.4 - severity_weighted_pct: Adjusted by severity impact factors
+      3.5.5 - threshold_result:      PASS/FAIL against configurable threshold
 
     Severity impact factors: Critical=5.0, High=3.0, Medium=1.5, Low=0.5
     Info checks excluded from applicable count (informational-only).
@@ -356,21 +359,21 @@ class ComplianceScore:
             severity_distribution: Dict of {severity_name: count} for
                 severity-weighted scoring.
         """
-        # Simple pass percentage (exclude Info)
+        # 3.5.1: Simple pass percentage (exclude Info)
         applicable = self.total_checks - self.info
         if applicable > 0:
             self.simple_pct = round(self.passed / applicable * 100, 2)
         else:
             self.simple_pct = 100.0
 
-        # Weighted scoring (Pass=1.0, Warn=0.5, Fail=0, Error=0)
+        # 3.5.2: Weighted scoring (Pass=1.0, Warn=0.5, Fail=0, Error=0)
         if applicable > 0:
             weighted_sum = (self.passed * 1.0) + (self.warnings * 0.5)
             self.weighted_pct = round(weighted_sum / applicable * 100, 2)
         else:
             self.weighted_pct = 100.0
 
-        # Severity-weighted compliance score
+        # 3.5.4: Severity-weighted compliance score
         if severity_distribution and applicable > 0:
             severity_weights = {
                 'Critical': 5.0, 'High': 3.0, 'Medium': 1.5,
@@ -396,7 +399,7 @@ class ComplianceScore:
         else:
             self.severity_weighted_pct = self.weighted_pct
 
-        # Threshold determination
+        # 3.5.5: Threshold determination
         self.threshold_result = "PASS" if self.weighted_pct >= self.threshold else "FAIL"
 
     def to_dict(self) -> Dict[str, Any]:
@@ -511,6 +514,14 @@ def print_banner():
     print_colored("  - ISO/IEC 27001 Information Security Management", Colors.GRAY)
     print_colored("  - NIST Cybersecurity Framework", Colors.GRAY)
     print_colored("  - NSA Cybersecurity Guidance", Colors.GRAY)
+    print_colored("  - PCI DSS v4.0.1", Colors.GRAY)
+    print_colored("  - ACSC Essential Eight + ISM (Australia)", Colors.GRAY)
+    print_colored("  - CMMC 2.0 + DFARS (US DoD)", Colors.GRAY)
+    print_colored("  - GDPR Article 32 + ePrivacy (EU)", Colors.GRAY)
+    print_colored("  - HIPAA Security Rule + 405(d) HICP (US)", Colors.GRAY)
+    print_colored("  - SOC 2 Type II Trust Services", Colors.GRAY)
+    print_colored("  - Distribution Hardening Baseline (Ubuntu USG/RHEL/SUSE/Arch)", Colors.GRAY)
+    print_colored("  - Linux EDR Equivalent (Falco/Wazuh/Auditbeat/CS/S1/MDE)", Colors.GRAY)
     if HAS_COMMON_LIB:
         print_colored(f"\n  Shared Library: v{COMMON_LIB_VERSION} (caching, parallel execution enabled)", Colors.GREEN)
     print_colored("\n" + "=" * 100 + "\n", Colors.CYAN)
@@ -551,9 +562,24 @@ def check_prerequisites(require_root: bool = False) -> Tuple[bool, bool]:
         log_and_print("[+] Running with root privileges", Colors.GREEN)
         print_colored("    All checks and remediation available", Colors.GREEN)
     
-    # Check OS
-    os_info = f"{platform.system()} {platform.release()}"
-    log_and_print(f"[+] Operating System: {os_info}", Colors.GREEN)
+    # Check OS - use os_detection for accurate distribution identification
+    # rather than platform.system()/release() which yields "Linux X-generic".
+    try:
+        from shared_components.os_detection import detect_os as _detect_os
+        _os_info = _detect_os()
+        os_info = _os_info.pretty_name or str(_os_info)
+        if _os_info.detection_source:
+            log_and_print(
+                f"[+] Operating System: {os_info} "
+                f"(family: {_os_info.family}, kernel: {_os_info.kernel.raw or 'n/a'})",
+                Colors.GREEN,
+            )
+        else:
+            log_and_print(f"[+] Operating System: {os_info}", Colors.GREEN)
+    except Exception:
+        # Fallback only if os_detection fails entirely
+        os_info = f"{platform.system()} {platform.release()}"
+        log_and_print(f"[+] Operating System: {os_info}", Colors.GREEN)
     
     # Check for required commands
     required_commands = ['grep', 'awk']  # Basic commands
@@ -704,14 +730,32 @@ def get_available_modules() -> Dict[str, Path]:
     for module_file in module_files:
         # Extract module name from filename (e.g., module_core.py -> Core)
         module_name_raw = module_file.stem.replace("module_", "")
-        module_name = module_name_raw.title()  # Capitalize first letter
-        
-        # Special case for acronyms/uppercase module names
-        if module_name_raw.upper() in ['CIS', 'NIST', 'STIG', 'NSA', 'CISA', 'ENISA']:
-            module_name = module_name_raw.upper()
-        elif module_name_raw.lower() == 'iso27001':
-            module_name = 'ISO27001'
-        
+        module_name = module_name_raw.title()  # Fallback capitalization
+
+        # Authoritative source: read the module's declared MODULE_NAME so the
+        # discovery key EXACTLY matches the `module` field on every AuditResult
+        # the module emits. This is critical: per-module compliance scoring and
+        # report grouping match results by `r.module == discovery_name`. A
+        # mismatch (e.g. discovery "Pci" vs result.module "PCI") silently
+        # yields 0 checks and a vacuous 100% score for that module.
+        try:
+            with open(module_file, 'r', encoding='utf-8') as f:
+                head = f.read()
+            import re as _re
+            m = _re.search(r'^MODULE_NAME\s*=\s*["\']([^"\']+)["\']',
+                           head, _re.MULTILINE)
+            if m:
+                module_name = m.group(1)
+            else:
+                # Legacy fallback: special-case known acronyms
+                if module_name_raw.upper() in ['CIS', 'NIST', 'STIG', 'NSA',
+                                               'CISA', 'ENISA']:
+                    module_name = module_name_raw.upper()
+                elif module_name_raw.lower() == 'iso27001':
+                    module_name = 'ISO27001'
+        except Exception:
+            pass
+
         # Validate module has required structure
         try:
             # Quick validation: check if file contains required elements
@@ -1100,25 +1144,25 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
     """
     Generate comprehensive interactive HTML security audit report.
 
-    Features:
-      - Executive summary dashboard with SVG donut chart
-      - Per-module compliance score (percentage pass)
-      - Severity distribution (Critical/High/Medium/Low/Informational)
-      - Cross-framework compliance matrix
-      - Remediation priority ranking (by severity)
-      - Print-friendly CSS (@media print)
-      - Table of contents with anchor links
-      - Category-level statistics per module
-      - Global search/filter with include/exclude modes
-      - Column visibility toggles per module
-      - Row selection with selection-based export
-      - CSV/JSON/XML export per module AND globally
-      - Proper Unicode collapse/expand icons (chevrons)
-      - Dark blue gradient for both light and dark themes
-      - Full page width header/banner
-      - Garamond default font throughout
-      - Column resizing via drag handles
-      - In-column filtering inputs in every column header
+    Features (Phase 3.2 complete):
+      - 3.2.1:  Executive summary dashboard with SVG donut chart
+      - 3.2.2:  Per-module compliance score (percentage pass)
+      - 3.2.3:  Severity distribution (Critical/High/Medium/Low/Informational)
+      - 3.2.5:  Cross-framework compliance matrix
+      - 3.2.6:  Remediation priority ranking (by severity)
+      - 3.2.7:  Print-friendly CSS (@media print)
+      - 3.2.8:  Table of contents with anchor links
+      - 3.2.9:  Category-level statistics per module
+      - 3.2.10: Global search/filter with include/exclude modes
+      - 3.2.11: Column visibility toggles per module
+      - 3.2.12: Row selection with selection-based export
+      - 3.2.13: CSV/JSON/XML export per module AND globally
+      - 3.2.15: Proper Unicode collapse/expand icons (chevrons)
+      - 3.2.16: Dark blue gradient for both light and dark themes
+      - 3.2.17: Full page width header/banner
+      - 3.2.18: Garamond default font throughout
+      - 3.2.19: Column resizing via drag handles
+      - 3.2.20: In-column filtering inputs in every column header
 
     Args:
         all_results: List of all AuditResult objects from all modules
@@ -1182,7 +1226,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         ('Error', execution_info.error_count, '#6f42c1'),
     ]
 
-    # Build SVG donut with stroke-dasharray - clickable segments
+    # Build SVG donut with stroke-dasharray - clickable segments (Enhancement 1)
     circumference = 2 * 3.14159 * 45  # radius=45
     donut_svg_parts = []
     offset = 0
@@ -1199,7 +1243,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
             offset += segment_len
     donut_svg = '\n'.join(donut_svg_parts)
 
-    # Build donut legend - clickable items
+    # Build donut legend - clickable items (Enhancement 1)
     donut_legend = []
     for label, count, color in donut_segments:
         pct = (count / total * 100) if total > 0 else 0
@@ -1212,7 +1256,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         )
     donut_legend_html = '\n'.join(donut_legend)
 
-    # Module compliance bars - use weighted scores from ComplianceScore
+    # Module compliance bars - use weighted scores from ComplianceScore (3.5)
     module_bars = []
     compliance_data = execution_info.compliance_scores.get('modules', {})
     for mod_name in sorted(module_scores.keys()):
@@ -1235,7 +1279,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         )
     module_bars_html = '\n'.join(module_bars)
 
-    # Cross-framework compliance matrix - use weighted scores + threshold
+    # Cross-framework compliance matrix - use weighted scores + threshold (3.5)
     matrix_rows = []
     status_types = ['Pass', 'Fail', 'Warning', 'Info', 'Error']
     for mod_name in sorted(modules_data.keys()):
@@ -1263,10 +1307,140 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         )
     matrix_html = '\n'.join(matrix_rows)
 
+    # ----------------------------------------------------------------
+    # v3.7: Per-module summary tiles
+    # ----------------------------------------------------------------
+    # A grid of compact "tiles" - one per module - showing at a glance:
+    #   - module name
+    #   - total checks
+    #   - pass/fail/warn/info/error split as colored numbers
+    #   - compliance score percentage
+    #   - top severity present (Critical > High > Medium > Low > Info)
+    #   - top-N findings link
+    # Tiles are color-banded by health: green (>=90% pass), yellow (70-90),
+    # orange (50-70), red (<50). This complements the numeric matrix below
+    # by giving a visual "at-a-glance" summary that's faster to scan.
+    severity_rank = {
+        "Critical": 5, "High": 4, "Medium": 3,
+        "Low": 2, "Informational": 1, "": 0,
+    }
+    rollup_tiles = []
+    for mod_name in sorted(modules_data.keys()):
+        sc = module_scores[mod_name]
+        s = sc["stats"]
+        score_value = sc["score"]
+        if mod_name in compliance_data:
+            score_value = compliance_data[mod_name].get(
+                "weighted_pct", score_value,
+            )
+        # Find top severity among non-pass results in this module
+        top_sev = ""
+        top_rank = 0
+        for r in modules_data[mod_name]:
+            if r.status == "Pass":
+                continue
+            sev_norm = (r.severity or "").strip().capitalize()
+            if sev_norm == "Informational":
+                pass  # already capitalized
+            r_rank = severity_rank.get(sev_norm, 0)
+            if r_rank > top_rank:
+                top_rank = r_rank
+                top_sev = sev_norm
+        # Health band class (CSS-driven coloring)
+        if score_value >= 90:
+            health_class = "tile-health-green"
+        elif score_value >= 70:
+            health_class = "tile-health-yellow"
+        elif score_value >= 50:
+            health_class = "tile-health-orange"
+        else:
+            health_class = "tile-health-red"
+        sev_badge = ""
+        if top_sev:
+            sev_class = f"tile-sev-{top_sev.lower()}"
+            sev_badge = (
+                f'<span class="tile-sev {sev_class}">'
+                f'{html.escape(top_sev)}</span>'
+            )
+        # Anchor link to module section
+        anchor = f"module-{mod_name.lower().replace(' ', '-')}"
+        rollup_tiles.append(
+            f'<a href="#{anchor}" class="rollup-tile {health_class}" '
+            f'data-module="{html.escape(mod_name)}">'
+            f'  <div class="tile-header">'
+            f'    <span class="tile-name">{html.escape(mod_name)}</span>'
+            f'    {sev_badge}'
+            f'  </div>'
+            f'  <div class="tile-score">{score_value:.0f}%</div>'
+            f'  <div class="tile-counts">'
+            f'    <span class="count-pass">{s.passed}P</span> '
+            f'    <span class="count-fail">{s.failed}F</span> '
+            f'    <span class="count-warn">{s.warnings}W</span> '
+            f'    <span class="count-info">{s.info}I</span>'
+            f'    {f"<span class=\"count-err\">{s.errors}E</span>" if s.errors else ""}'
+            f'  </div>'
+            f'  <div class="tile-total">{s.total} checks</div>'
+            f'</a>'
+        )
+    rollup_tiles_html = '\n'.join(rollup_tiles)
+
+    # ----------------------------------------------------------------
+    # v3.7: Priority-driven executive summary
+    # ----------------------------------------------------------------
+    # The top 10 findings sorted by:
+    #   1. Severity rank (Critical > High > Medium > Low > Informational)
+    #   2. Status priority (Fail > Warning > Info)
+    #   3. Module name (stable order for ties)
+    # Each entry shows the severity badge, module, category, and message.
+    # This sits ABOVE the per-module detail tables so report consumers
+    # see the most important findings first without scanning everything.
+    status_rank = {"Fail": 3, "Critical": 3, "Warning": 2, "Info": 1}
+    priority_findings = []
+    for idx, r in enumerate(all_results):
+        if r.status == "Pass":
+            continue
+        sev_norm = (r.severity or "Medium").strip().capitalize()
+        if sev_norm not in severity_rank:
+            sev_norm = "Medium"
+        priority_findings.append((
+            -severity_rank.get(sev_norm, 0),
+            -status_rank.get(r.status, 0),
+            r.module,
+            r.category,
+            idx,  # tie-breaker (stable, hashable, orderable); never compared to objects
+            r,
+        ))
+    priority_findings.sort()
+    top_priority = priority_findings[:10]
+    priority_rows = []
+    if top_priority:
+        for _, _, _, _, _, r in top_priority:
+            sev_norm = (r.severity or "Medium").strip().capitalize()
+            sev_class = f"prio-sev-{sev_norm.lower()}"
+            status_class = f"prio-status-{r.status.lower()}"
+            msg_truncated = r.message
+            if len(msg_truncated) > 140:
+                msg_truncated = msg_truncated[:137] + "..."
+            priority_rows.append(
+                f'<tr>'
+                f'<td><span class="prio-sev {sev_class}">'
+                f'{html.escape(sev_norm)}</span></td>'
+                f'<td><span class="prio-status {status_class}">'
+                f'{html.escape(r.status)}</span></td>'
+                f'<td>{html.escape(r.module)}</td>'
+                f'<td>{html.escape(r.category)}</td>'
+                f'<td>{html.escape(msg_truncated)}</td>'
+                f'</tr>'
+            )
+    priority_findings_html = '\n'.join(priority_rows)
+    priority_findings_count = len(top_priority)
+
     # Table of contents entries
     toc_entries = []
     toc_entries.append('<a href="#dashboard">Executive Dashboard</a>')
     toc_entries.append('<a href="#compliance-matrix">Compliance Matrix</a>')
+    toc_entries.append('<a href="#module-rollup">Module Summary</a>')
+    toc_entries.append('<a href="#priority-findings">Top Priority Findings</a>')
     for mod_name in sorted(modules_data.keys()):
         safe_id = mod_name.lower().replace(' ', '-')
         toc_entries.append(f'<a href="#module-{safe_id}">{html.escape(mod_name)}</a>')
@@ -1291,7 +1465,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         )
     remediation_table_html = '\n'.join(remediation_rows)
 
-    # Overall compliance score display
+    # Overall compliance score display (Phase 3.5)
     overall_data = execution_info.compliance_scores.get('overall', {})
     o_weighted = overall_data.get('weighted_pct', 0)
     o_simple = overall_data.get('simple_pct', 0)
@@ -1427,8 +1601,8 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
     <style>
         /* ============================================================
            CSS RESET & VARIABLES
-           Dark blue gradient for both themes
-           Garamond as default font
+           3.2.16: Dark blue gradient for both themes
+           3.2.18: Garamond as default font
            ============================================================ */
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 
@@ -1487,7 +1661,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         a:hover {{ text-decoration: underline; }}
 
         /* ============================================================
-           FULL-WIDTH HEADER/BANNER
+           3.2.17: FULL-WIDTH HEADER/BANNER
            ============================================================ */
         .page-header {{
             background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-mid) 50%, var(--gradient-end) 100%);
@@ -1539,7 +1713,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
 
         /* ============================================================
-           TABLE OF CONTENTS
+           3.2.8: TABLE OF CONTENTS
            ============================================================ */
         .toc {{
             background: var(--bg-primary);
@@ -1600,7 +1774,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
 
         /* ============================================================
-           EXECUTIVE DASHBOARD
+           3.2.1: EXECUTIVE DASHBOARD
            ============================================================ */
         .dashboard {{
             display: grid;
@@ -1670,7 +1844,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         [data-theme="dark"] .sc-info  {{ background: #164e63; color: #67e8f9; }}
         [data-theme="dark"] .sc-err   {{ background: #2e1065; color: #c4b5fd; }}
 
-        /* Module compliance bars */
+        /* 3.2.2: Module compliance bars */
         .compliance-bars {{
             background: var(--bg-primary);
             border-radius: 10px;
@@ -1685,7 +1859,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         .bar-value {{ width: 55px; font-size: 0.9em; font-weight: 700; }}
 
         /* ============================================================
-           COMPLIANCE MATRIX
+           3.2.5: COMPLIANCE MATRIX
            ============================================================ */
         .matrix-section {{
             background: var(--bg-primary);
@@ -1723,7 +1897,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         .matrix-threshold-pass {{ color: #28a745; font-weight: 700; font-size: 0.85em; }}
         .matrix-threshold-fail {{ color: #dc3545; font-weight: 700; font-size: 0.85em; }}
 
-        /* Clickable dashboard filters */
+        /* Enhancement 1: Clickable dashboard filters */
         .clickable-filter {{ cursor: pointer; transition: all 0.2s; position: relative; }}
         .clickable-filter:hover {{ transform: translateY(-2px); box-shadow: 0 4px 16px var(--card-shadow); }}
         .clickable-filter.active-filter {{
@@ -1753,7 +1927,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
         .filter-notification button:hover {{ background: rgba(255,255,255,0.3); }}
 
-        /* Compliance score overview */
+        /* Phase 3.5: Compliance score overview */
         .compliance-overview {{
             background: var(--bg-primary); border-radius: 10px; padding: 20px 24px;
             margin: 24px 0; box-shadow: 0 2px 12px var(--card-shadow);
@@ -1779,7 +1953,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         [data-theme="dark"] .compliance-threshold-badge.badge-fail {{ background: #450a0a; color: #fca5a5; }}
 
         /* ============================================================
-           SEVERITY DISTRIBUTION
+           3.2.3: SEVERITY DISTRIBUTION
            ============================================================ */
         .severity-dist {{
             display: flex;
@@ -1810,7 +1984,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
 
         /* ============================================================
            GLOBAL CONTROLS
-           Global search with include/exclude
+           3.2.10: Global search with include/exclude
            ============================================================ */
         .global-controls {{
             background: var(--bg-primary);
@@ -1863,7 +2037,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
 
         /* ============================================================
            MODULE SECTIONS
-           Proper collapse/expand icons (Unicode chevrons)
+           3.2.15: Proper collapse/expand icons (Unicode chevrons)
            ============================================================ */
         .module-section {{
             margin-bottom: 20px;
@@ -1914,7 +2088,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
         .module-content {{ padding: 20px 24px; }}
 
-        /* Category-level statistics */
+        /* 3.2.9: Category-level statistics */
         .category-stats {{
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -1957,8 +2131,8 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
 
         /* ============================================================
            TABLE STYLES
-           Column resizing
-           In-column filtering
+           3.2.19: Column resizing
+           3.2.20: In-column filtering
            ============================================================ */
         .table-wrapper {{
             overflow-x: auto;
@@ -1986,7 +2160,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         .audit-table th.desc::after {{ content: ' \\25BC'; font-size: 0.7em; }}
         .col-check {{ width: 40px; cursor: default; }}
 
-        /* Resize handle */
+        /* 3.2.19: Resize handle */
         .resize-handle {{
             position: absolute;
             right: 0;
@@ -2000,7 +2174,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
             background: rgba(255,255,255,0.3);
         }}
 
-        /* In-column filter inputs */
+        /* 3.2.20: In-column filter inputs */
         .filter-row td {{
             padding: 4px 6px;
             background: var(--bg-tertiary);
@@ -2092,7 +2266,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
 
         /* ============================================================
-           REMEDIATION PRIORITY RANKING
+           3.2.6: REMEDIATION PRIORITY RANKING
            ============================================================ */
         .remediation-section {{
             background: var(--bg-primary);
@@ -2212,7 +2386,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
 
         /* ============================================================
-           PRINT-FRIENDLY CSS
+           3.2.7: PRINT-FRIENDLY CSS
            ============================================================ */
         @media print {{
             body {{ background: #fff; color: #000; font-size: 10pt; }}
@@ -2244,12 +2418,153 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
             .dashboard {{ grid-template-columns: 1fr; }}
             .module-header {{ flex-direction: column; gap: 8px; }}
         }}
+
+        /* ============================================================
+           v3.7 PER-MODULE SUMMARY TILES + PRIORITY FINDINGS
+           ============================================================ */
+
+        /* Section wrappers - same visual weight as matrix-section */
+        .rollup-section, .priority-section {{
+            margin: 24px 0;
+            padding: 18px;
+            background: var(--card-bg);
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+        }}
+        .rollup-section h2, .priority-section h2 {{
+            margin: 0 0 14px 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--accent);
+            color: var(--accent);
+            font-size: 1.25em;
+        }}
+
+        /* Tile grid */
+        .rollup-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+        }}
+        .rollup-tile {{
+            display: block;
+            text-decoration: none;
+            color: inherit;
+            padding: 12px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            transition: transform 0.1s, box-shadow 0.15s;
+            position: relative;
+        }}
+        .rollup-tile:hover {{
+            transform: translateY(-1px);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+        }}
+        .rollup-tile.tile-health-green   {{ border-left: 5px solid #2e7d32; }}
+        .rollup-tile.tile-health-yellow  {{ border-left: 5px solid #fbc02d; }}
+        .rollup-tile.tile-health-orange  {{ border-left: 5px solid #ef6c00; }}
+        .rollup-tile.tile-health-red     {{ border-left: 5px solid #c62828; }}
+
+        .tile-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }}
+        .tile-name {{
+            font-weight: 700;
+            font-size: 0.95em;
+        }}
+        .tile-sev {{
+            font-size: 0.72em;
+            padding: 1px 6px;
+            border-radius: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }}
+        .tile-sev-critical      {{ background: #c62828; color: white; }}
+        .tile-sev-high          {{ background: #ef6c00; color: white; }}
+        .tile-sev-medium        {{ background: #fbc02d; color: #333; }}
+        .tile-sev-low           {{ background: #66bb6a; color: white; }}
+        .tile-sev-informational {{ background: #90a4ae; color: white; }}
+
+        .tile-score {{
+            font-size: 1.85em;
+            font-weight: 800;
+            line-height: 1.0;
+            margin: 4px 0;
+            color: var(--accent);
+        }}
+        .tile-counts {{
+            font-size: 0.82em;
+            font-family: 'Courier New', monospace;
+            margin: 4px 0;
+        }}
+        .tile-counts .count-pass {{ color: #2e7d32; font-weight: 700; }}
+        .tile-counts .count-fail {{ color: #c62828; font-weight: 700; }}
+        .tile-counts .count-warn {{ color: #ef6c00; font-weight: 700; }}
+        .tile-counts .count-info {{ color: #1565c0; font-weight: 700; }}
+        .tile-counts .count-err  {{ color: #6a1b9a; font-weight: 700; }}
+        .tile-total {{
+            font-size: 0.78em;
+            color: var(--text-muted, #666);
+            margin-top: 2px;
+        }}
+
+        /* Priority findings table */
+        .priority-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.93em;
+        }}
+        .priority-table th {{
+            background: var(--accent);
+            color: white;
+            padding: 8px 10px;
+            text-align: left;
+            font-weight: 700;
+        }}
+        .priority-table td {{
+            padding: 7px 10px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }}
+        .priority-table tr:hover td {{
+            background: rgba(0, 0, 0, 0.02);
+        }}
+        .prio-sev, .prio-status {{
+            font-size: 0.78em;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }}
+        .prio-sev-critical      {{ background: #c62828; color: white; }}
+        .prio-sev-high          {{ background: #ef6c00; color: white; }}
+        .prio-sev-medium        {{ background: #fbc02d; color: #333; }}
+        .prio-sev-low           {{ background: #66bb6a; color: white; }}
+        .prio-sev-informational {{ background: #90a4ae; color: white; }}
+        .prio-status-fail       {{ background: #c62828; color: white; }}
+        .prio-status-warning    {{ background: #ef6c00; color: white; }}
+        .prio-status-info       {{ background: #1565c0; color: white; }}
+        .prio-status-error      {{ background: #6a1b9a; color: white; }}
+
+        .priority-empty {{
+            font-style: italic;
+            color: var(--text-muted, #666);
+            text-align: center;
+            padding: 20px;
+        }}
     </style>
 </head>
 <body>
     <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode">&#9790; Theme</button>
 
-    <!-- Full-width header -->
+    <!-- 3.2.17: Full-width header -->
     <div class="page-header">
         <h1>Linux Security Audit Report</h1>
         <div class="subtitle">Comprehensive Multi-Framework Security Assessment</div>
@@ -2257,7 +2572,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
 
     <div class="container">
 
-        <!-- Table of Contents -->
+        <!-- 3.2.8: Table of Contents -->
         <div class="toc">
             <h2>Table of Contents</h2>
             <div class="toc-links">
@@ -2265,7 +2580,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
             </div>
         </div>
 
-        <!-- System Info (IP Address identification) -->
+        <!-- System Info (Enhancement 2: IP Address identification) -->
         <div class="info-section">
             <div class="info-card"><h3>Hostname</h3><p>{html.escape(execution_info.hostname)}</p></div>
             <div class="info-card"><h3>IP Address(es)</h3><p>{html.escape(', '.join(execution_info.ip_addresses))}</p></div>
@@ -2276,7 +2591,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
             <div class="info-card"><h3>Modules</h3><p>{html.escape(', '.join(execution_info.modules_run))}</p></div>
         </div>
 
-        <!-- Executive Dashboard -->
+        <!-- 3.2.1: Executive Dashboard -->
         <div class="dashboard" id="dashboard">
             <div class="donut-container">
                 <h3>Result Distribution</h3>
@@ -2290,7 +2605,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
                 </div>
             </div>
             <div class="dashboard-right">
-                <!-- Summary cards - clickable for filtering -->
+                <!-- Summary cards - clickable for filtering (Enhancement 1) -->
                 <div class="summary-grid">
                     <div class="summary-card sc-total clickable-filter" onclick="dashboardFilter('status','all')" data-filter-value="all"><h3>{execution_info.total_checks}</h3><p>Total</p></div>
                     <div class="summary-card sc-pass clickable-filter" onclick="dashboardFilter('status','Pass')" data-filter-value="Pass"><h3>{execution_info.pass_count}</h3><p>Passed</p></div>
@@ -2299,7 +2614,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
                     <div class="summary-card sc-info clickable-filter" onclick="dashboardFilter('status','Info')" data-filter-value="Info"><h3>{execution_info.info_count}</h3><p>Info</p></div>
                     <div class="summary-card sc-err clickable-filter" onclick="dashboardFilter('status','Error')" data-filter-value="Error"><h3>{execution_info.error_count}</h3><p>Errors</p></div>
                 </div>
-                <!-- Severity distribution - clickable for filtering -->
+                <!-- 3.2.3: Severity distribution - clickable for filtering (Enhancement 1) -->
                 <div class="severity-dist">
                     <div class="sev-card critical clickable-filter" onclick="dashboardFilter('severity','Critical')" data-filter-value="Critical"><div class="sev-count">{severity_counts['Critical']}</div><div class="sev-label">Critical</div></div>
                     <div class="sev-card high clickable-filter" onclick="dashboardFilter('severity','High')" data-filter-value="High"><div class="sev-count">{severity_counts['High']}</div><div class="sev-label">High</div></div>
@@ -2307,7 +2622,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
                     <div class="sev-card low clickable-filter" onclick="dashboardFilter('severity','Low')" data-filter-value="Low"><div class="sev-count">{severity_counts['Low']}</div><div class="sev-label">Low</div></div>
                     <div class="sev-card informational clickable-filter" onclick="dashboardFilter('severity','Informational')" data-filter-value="Informational"><div class="sev-count">{severity_counts['Informational']}</div><div class="sev-label">Informational</div></div>
                 </div>
-                <!-- Module compliance bars -->
+                <!-- 3.2.2: Module compliance bars -->
                 <div class="compliance-bars">
                     <h3>Module Compliance Scores</h3>
                     {module_bars_html}
@@ -2315,7 +2630,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
             </div>
         </div>
 
-        <!-- Cross-framework Compliance Matrix -->
+        <!-- 3.2.5: Cross-framework Compliance Matrix -->
         <div class="matrix-section" id="compliance-matrix">
             <h2>Cross-Framework Compliance Matrix</h2>
             <table class="matrix-table">
@@ -2331,16 +2646,30 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
             </table>
         </div>
 
-        <!-- Overall Compliance Score -->
+        <!-- v3.7: Per-module Summary Tiles (rollup metrics) -->
+        <div class="rollup-section" id="module-rollup">
+            <h2>Module Summary (At-a-Glance)</h2>
+            <div class="rollup-grid">
+                {rollup_tiles_html}
+            </div>
+        </div>
+
+        <!-- v3.7: Priority-Driven Top Findings -->
+        <div class="priority-section" id="priority-findings">
+            <h2>Top Priority Findings ({priority_findings_count})</h2>
+            {f'<table class="priority-table"><thead><tr><th>Severity</th><th>Status</th><th>Module</th><th>Category</th><th>Finding</th></tr></thead><tbody>{priority_findings_html}</tbody></table>' if priority_findings_count > 0 else '<div class="priority-empty">No non-Pass findings &#x2014; all checks succeeded.</div>'}
+        </div>
+
+        <!-- Phase 3.5: Overall Compliance Score -->
         {compliance_overview_html}
 
-        <!-- Dashboard filter notification -->
+        <!-- Enhancement 1: Dashboard filter notification -->
         <div class="filter-notification" id="filterNotification">
             <span id="filterNotificationText">Filtered by: &#8212;</span>
             <button onclick="clearDashboardFilter()">Clear Filter</button>
         </div>
 
-        <!-- Global controls -->
+        <!-- 3.2.10: Global controls -->
         <div class="global-controls">
             <h3>Search &amp; Export</h3>
             <div class="search-group">
@@ -2360,7 +2689,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         <!-- Module Sections -->
         {modules_html}
 
-        <!-- Remediation Priority Ranking -->
+        <!-- 3.2.6: Remediation Priority Ranking -->
         {"" if not remediation_items else f"""
         <div class="remediation-section" id="remediation-priority">
             <h2>Remediation Priority Ranking (Top {min(len(remediation_items), 50)})</h2>
@@ -2416,7 +2745,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }});
 
         /* ==============================================================
-           MODULE COLLAPSE/EXPAND (proper icons)
+           3.2.15: MODULE COLLAPSE/EXPAND (proper icons)
            ============================================================== */
         function toggleModule(header) {{
             header.closest('.module-section').classList.toggle('collapsed');
@@ -2454,7 +2783,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
 
         /* ==============================================================
-           IN-COLUMN FILTERING
+           3.2.20: IN-COLUMN FILTERING
            ============================================================== */
         function filterColumn(input) {{
             const table = input.closest('table');
@@ -2486,7 +2815,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
                         show = mode === 'include' ? match : !match;
                     }}
                 }}
-                // Also respect dashboard filter
+                // Also respect dashboard filter (Enhancement 1)
                 if (show && window._dashFilterType && window._dashFilterValue) {{
                     const colIdx = window._dashFilterType === 'status' ? 1 : 2;
                     const cellText = (row.cells[colIdx]?.textContent || '').trim();
@@ -2497,7 +2826,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
 
         /* ==============================================================
-           GLOBAL SEARCH / FILTER
+           3.2.10: GLOBAL SEARCH / FILTER
            ============================================================== */
         window._globalFilterActive = false;
         window._globalFilterValue = '';
@@ -2520,7 +2849,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
 
         /* ==============================================================
-           DASHBOARD FILTER (donut/cards/severity)
+           ENHANCEMENT 1: DASHBOARD FILTER (donut/cards/severity)
            ============================================================== */
         // Track current dashboard filter state
         window._dashFilterType = null;  // 'status' or 'severity'
@@ -2599,7 +2928,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
 
         /* ==============================================================
-           COLUMN VISIBILITY
+           3.2.11: COLUMN VISIBILITY
            ============================================================== */
         function initColumnVisibility() {{
             document.querySelectorAll('.audit-table').forEach(table => {{
@@ -2631,7 +2960,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
         }}
 
         /* ==============================================================
-           COLUMN RESIZING
+           3.2.19: COLUMN RESIZING
            ============================================================== */
         function initResizeHandles() {{
             document.querySelectorAll('.resize-handle').forEach(handle => {{
@@ -2973,6 +3302,103 @@ def export_to_xml(results: List[AuditResult], execution_info: ExecutionInfo, fil
     
     log_and_print(f"\n[+] XML report saved to: {filepath}", Colors.GREEN)
 
+def export_split_reports(all_results: List[AuditResult],
+                         base_execution_info: ExecutionInfo,
+                         output_format: str,
+                         module_compliance: Dict[str, Any] = None) -> List:
+    """Generate a separate report per framework/module.
+
+    v3.8: When many frameworks are audited together, the combined report is
+    comprehensive but can be cumbersome. This produces one focused report per
+    module so each audience (e.g. the PCI team, the HIPAA team) receives only
+    the data relevant to them, alongside the combined all-in-one report.
+
+    Args:
+        all_results: Every AuditResult from the run.
+        base_execution_info: The combined ExecutionInfo (host/timing reused).
+        output_format: HTML/CSV/JSON/XML (Console is skipped).
+        module_compliance: Optional per-module compliance score dict.
+
+    Returns:
+        List of Paths to the per-framework reports written.
+    """
+    if output_format == "Console":
+        return []
+
+    # Group results by module, preserving first-seen order
+    modules_in_order = []
+    by_module: Dict[str, List[AuditResult]] = {}
+    for r in all_results:
+        if r.module not in by_module:
+            by_module[r.module] = []
+            modules_in_order.append(r.module)
+        by_module[r.module].append(r)
+
+    if len(modules_in_order) <= 1:
+        # Nothing to split - a single module's combined report already
+        # is its per-framework report.
+        return []
+
+    hostname = get_safe_hostname()
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    split_dir = REPORT_DIR / "by-framework"
+    split_dir.mkdir(mode=0o755, parents=True, exist_ok=True)
+    extension = {
+        "HTML": "html", "CSV": "csv", "JSON": "json", "XML": "xml",
+    }.get(output_format, "txt")
+
+    written = []
+    for mod_name in modules_in_order:
+        mod_results = by_module[mod_name]
+        # Build the per-module compliance score in the SAME structure the
+        # HTML generator expects: {"overall": {...}, "modules": {name: {...}}}.
+        # For a split report the module's own score IS the overall score.
+        mod_compliance = {}
+        if module_compliance and mod_name in module_compliance:
+            sc = module_compliance[mod_name]
+            sc_dict = sc.to_dict() if hasattr(sc, "to_dict") else sc
+            mod_compliance = {
+                "overall": sc_dict,
+                "modules": {mod_name: sc_dict},
+            }
+        mod_info = ExecutionInfo(
+            hostname=base_execution_info.hostname,
+            os_version=base_execution_info.os_version,
+            ip_addresses=base_execution_info.ip_addresses,
+            scan_date=base_execution_info.scan_date,
+            duration=base_execution_info.duration,
+            modules_run=[mod_name],
+            total_checks=len(mod_results),
+            pass_count=sum(1 for r in mod_results if r.status == "Pass"),
+            fail_count=sum(1 for r in mod_results if r.status == "Fail"),
+            warning_count=sum(1 for r in mod_results if r.status == "Warning"),
+            info_count=sum(1 for r in mod_results if r.status == "Info"),
+            error_count=sum(1 for r in mod_results if r.status == "Error"),
+            compliance_scores=mod_compliance,
+        )
+        safe_mod = re.sub(r'[^A-Za-z0-9_-]', '_', mod_name)
+        out_path = split_dir / (
+            f"{safe_mod}-Audit-{hostname}-{timestamp}.{extension}"
+        )
+        if output_format == "HTML":
+            content = generate_html_report(mod_results, mod_info)
+            with open(out_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+        elif output_format == "CSV":
+            export_to_csv(mod_results, out_path)
+        elif output_format == "JSON":
+            export_to_json(mod_results, mod_info, out_path, silent=True)
+        elif output_format == "XML":
+            export_to_xml(mod_results, mod_info, out_path)
+        try:
+            os.chmod(out_path, 0o644)
+        except OSError:
+            pass
+        written.append(out_path)
+
+    return written
+
+
 def export_results(results: List[AuditResult], execution_info: ExecutionInfo, 
                   output_format: str, output_path: str = ""):
     """
@@ -3061,6 +3487,16 @@ def export_results(results: List[AuditResult], execution_info: ExecutionInfo,
 # ============================================================================
 def main():
     """Main execution function"""
+    # v3.6: Clear helper caches at the start of each audit run. This is
+    # a no-op for one-shot CLI invocations (the process exits anyway), but
+    # matters for long-running supervisors that call main() in a loop and
+    # need to observe state changes between iterations.
+    try:
+        from shared_components.module_helpers import clear_caches
+        clear_caches()
+    except ImportError:
+        pass  # Older module_helpers without v3.6 caches; harmless.
+
     parser = argparse.ArgumentParser(
         description='Comprehensive Linux Security Audit Script',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -3094,17 +3530,42 @@ def main():
     parser.add_argument('--remediation-file', type=str, default='',
                        help='JSON file with specific issues to remediate')
     
-    # Performance options
+    # Performance options (NEW in v2.0)
     parser.add_argument('--parallel', action='store_true',
                        help='Execute modules in parallel for faster audit completion')
     parser.add_argument('--workers', type=int, default=DEFAULT_PARALLEL_WORKERS,
                        help=f'Number of parallel workers (default: {DEFAULT_PARALLEL_WORKERS}, max: {MAX_PARALLEL_WORKERS})')
     parser.add_argument('--no-cache', action='store_true',
                        help='Disable shared data caching (slower, for debugging)')
-    parser.add_argument('--profile', action='store_true',
+    parser.add_argument('--perf-profile', '--profile-perf', action='store_true',
                        help='Show detailed timing/performance breakdown')
+
+    # v3.7: Per-distribution audit profiles. Filters which modules and
+    # categories run based on the target distribution. SUBTRACTIVE only
+    # (never adds checks). See shared_components/profiles.py for design.
+    parser.add_argument('--profile', type=str, default='',
+                       metavar='NAME',
+                       help='Apply a per-distribution audit profile '
+                            '(e.g., rhel9, ubuntu24, debian12). Use '
+                            '--list-profiles to see all options.')
+    parser.add_argument('--list-profiles', action='store_true',
+                       help='List all available --profile values and exit')
+
+    # v3.8: Per-framework split reports + attack surface report
+    parser.add_argument('--split-reports', action='store_true',
+                       help='Generate a separate report per framework/module '
+                            'in reports/by-framework/, in addition to the '
+                            'combined all-in-one report')
+    parser.add_argument('--split-only', action='store_true',
+                       help='Generate only the per-framework split reports '
+                            '(implies --split-reports; skips the combined '
+                            'report)')
+    parser.add_argument('--attack-surface', action='store_true',
+                       help='Generate an attack-surface assessment report '
+                            '(HTML + JSON) synthesizing exposure-relevant '
+                            'findings across all selected frameworks')
     
-    # Logging options
+    # Logging options (NEW in v2.0)
     parser.add_argument('--log-level', type=str, default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        help='Logging verbosity level (default: INFO)')
@@ -3117,6 +3578,29 @@ def main():
     parser.add_argument('-q', '--quiet', action='store_true',
                        help='Suppress informational output (sets log level to WARNING)')
     
+    # ================================================================
+    # v3.0 Pipeline Flags
+    # ================================================================
+    parser.add_argument('--baseline', type=str, default='',
+                       help='Compare current results against a previous baseline JSON file')
+    parser.add_argument('--rollback-path', type=str, default='',
+                       help='Generate a rollback bash script at the given path during remediation')
+    parser.add_argument('--remediation-bundle', type=str, default='',
+                       help='Apply a named remediation bundle (e.g. HardenSSH, HardenKernel)')
+    parser.add_argument('--asset-criticality', type=int, default=5, choices=range(1, 11),
+                       metavar='1-10',
+                       help='Asset criticality 1-10 for risk priority scoring (default: 5)')
+    parser.add_argument('--show-risk-priority', action='store_true',
+                       help='Display risk priority scores for failed/warning findings')
+    parser.add_argument('--show-correlations', action='store_true',
+                       help='Display cross-framework control correlations for each result')
+    parser.add_argument('--validate-results', action='store_true',
+                       help='Run strict result validation and report defects')
+    parser.add_argument('--list-bundles', action='store_true',
+                       help='List available remediation bundles and exit')
+    parser.add_argument('--threshold', type=float, default=70.0,
+                       help='Compliance score pass/fail threshold (default: 70.0)')
+    
     args = parser.parse_args()
     
     # If just listing modules, do that and exit
@@ -3124,11 +3608,70 @@ def main():
         print_banner()
         list_available_modules()
         return
+
+    # v3.7: --list-profiles enumerates all built-in distribution profiles
+    if getattr(args, 'list_profiles', False):
+        try:
+            from shared_components import profiles as _profiles
+            print_banner()
+            print("\nAvailable Distribution Profiles:\n")
+            for prof_name in _profiles.list_profiles():
+                prof = _profiles.get_profile(prof_name)
+                print(_profiles.describe_profile(prof))
+                print()
+            print(
+                "Usage: --profile NAME (e.g., --profile rhel9)\n"
+                "Profiles are SUBTRACTIVE filters: they may exclude modules "
+                "or category prefixes that\n"
+                "are not applicable to the target distribution. They never "
+                "add or modify checks."
+            )
+        except Exception as exc:  # noqa: BLE001
+            print_colored(
+                f"[!] Error listing profiles: {exc!r}", Colors.RED,
+            )
+            return
+        return
+
+    # v3.7: Validate --profile NAME if supplied. Strict input validation
+    # is enforced in shared_components/profiles.py (regex ^[a-z][a-z0-9_-]{0,30}$).
+    selected_profile = None
+    if args.profile:
+        try:
+            from shared_components import profiles as _profiles
+            selected_profile = _profiles.get_profile(args.profile)
+        except (ValueError, ImportError) as exc:
+            print_colored(
+                f"[!] Invalid --profile value: {exc}", Colors.RED, bold=True,
+            )
+            print_colored(
+                "    Use --list-profiles to see valid profile names.",
+                Colors.YELLOW,
+            )
+            sys.exit(2)
+    
+    # If just listing remediation bundles, do that and exit
+    if getattr(args, 'list_bundles', False):
+        try:
+            from shared_components.remediation_bundles import (
+                list_bundles as v3_list_bundles, get_bundle, format_bundle_summary,
+            )
+            print_banner()
+            print("\nAvailable Remediation Bundles:\n")
+            for bundle_name in v3_list_bundles():
+                bundle = get_bundle(bundle_name)
+                if bundle:
+                    print(format_bundle_summary(bundle))
+                    print()
+            return
+        except ImportError as exc:
+            print(f"[!] Bundle listing requires v3.0 components: {exc}")
+            return
     
     start_time = datetime.datetime.now()
     
     # ================================================================
-    # Initialize Logging
+    # Initialize Logging (NEW in v2.0)
     # ================================================================
     log_level_str = args.log_level
     if args.verbose:
@@ -3174,7 +3717,7 @@ def main():
         return
     
     # ================================================================
-    # Initialize SharedDataCache
+    # Initialize SharedDataCache (NEW in v2.0)
     # ================================================================
     cache = None
     cache_timing = {}
@@ -3221,17 +3764,34 @@ def main():
     else:
         requested_modules = [m.strip() for m in args.modules.split(',')]
         modules_to_run = []
-        
+
+        # Module name aliases: map user-friendly/legacy selectors to the
+        # canonical MODULE_NAME used by discovery. Comparison is
+        # case-insensitive and ignores hyphens, so "PCIDSS", "pci-dss", and
+        # "PCI" all resolve to the canonical "PCI-DSS".
+        module_aliases = {
+            'pcidss': 'PCI-DSS',
+            'pci': 'PCI-DSS',
+        }
+
+        def _normalize(name):
+            return name.lower().replace('-', '').replace('_', '')
+
         # Validate requested modules exist
         for module in requested_modules:
-            # Try case-insensitive matching
+            # Try alias resolution first, then case-insensitive matching
             matched = False
+            alias_target = module_aliases.get(_normalize(module))
             for available_module in available_modules.keys():
-                if module.lower() == available_module.lower():
-                    modules_to_run.append(available_module)
+                if (module.lower() == available_module.lower() or
+                        _normalize(module) == _normalize(available_module) or
+                        (alias_target and alias_target.lower() ==
+                         available_module.lower())):
+                    if available_module not in modules_to_run:
+                        modules_to_run.append(available_module)
                     matched = True
                     break
-            
+
             if not matched:
                 print_colored(f"[!] WARNING: Module '{module}' not found", Colors.YELLOW)
         
@@ -3239,7 +3799,34 @@ def main():
             print_colored("[!] No valid modules specified. Use --list-modules to see available modules.", Colors.RED)
             return
     
+    # v3.7: Apply distribution profile module filter (subtractive only).
+    if selected_profile is not None:
+        original_count = len(modules_to_run)
+        modules_to_run = _profiles.apply_profile(
+            selected_profile, modules_to_run,
+        )
+        excluded = original_count - len(modules_to_run)
+        if excluded > 0:
+            print_colored(
+                f"[*] Profile '{selected_profile.name}' excluded "
+                f"{excluded} module(s) from execution",
+                Colors.CYAN,
+            )
+        if not modules_to_run:
+            print_colored(
+                f"[!] Profile '{selected_profile.name}' excluded all "
+                f"selected modules. Nothing to run.",
+                Colors.RED,
+            )
+            return
+
     print_colored(f"\n[*] Modules to execute: {', '.join(modules_to_run)}", Colors.CYAN)
+    if selected_profile is not None:
+        print_colored(
+            f"[*] Distribution profile: {selected_profile.name} "
+            f"({selected_profile.description.split('.')[0]})",
+            Colors.CYAN,
+        )
     
     # Validate parallel worker count
     workers = min(args.workers, MAX_PARALLEL_WORKERS)
@@ -3250,15 +3837,52 @@ def main():
     # ================================================================
     # Prepare Shared Data (passed to all modules)
     # ================================================================
+    # Determine OS version display string from os_detection (pretty_name) so
+    # downstream reports show "Ubuntu 24.04.4 LTS" rather than the kernel-
+    # derived "Linux 6.x.x-generic" string.
+    try:
+        from shared_components.os_detection import detect_os as _detect_os
+        _detected_os = _detect_os()
+        _os_version_str = (
+            _detected_os.pretty_name or str(_detected_os)
+            or f"{platform.system()} {platform.release()}"
+        )
+    except Exception:
+        _detected_os = None
+        _os_version_str = f"{platform.system()} {platform.release()}"
+
     shared_data = {
         "hostname": socket.gethostname(),
-        "os_version": f"{platform.system()} {platform.release()}",
+        "os_version": _os_version_str,
+        "os_info": _detected_os,
         "ip_addresses": get_system_ip_addresses(),
         "scan_date": start_time,
         "is_root": is_root,
         "script_path": SCRIPT_PATH,
         "cache": cache,  # SharedDataCache instance (may be None for backward compat)
     }
+
+    # v3.7: Cross-module correlation. Compute the canonical HostFacts record
+    # once at audit start. Modules that opt in read from
+    # shared_data["host_facts"] instead of re-deriving from raw helpers.
+    # This reduces duplicate logic across modules and standardizes the
+    # interpretation of facts (e.g., "FIM is present" means the same thing
+    # across HIPAA, PCI, ISO27001, GDPR).
+    try:
+        from shared_components import host_facts as _host_facts_mod
+        from shared_components import module_helpers as _module_helpers_mod
+        if _detected_os is not None:
+            shared_data["host_facts"] = _host_facts_mod.compute_host_facts(
+                _detected_os, _module_helpers_mod,
+            )
+    except Exception as _hf_exc:  # noqa: BLE001
+        # Host facts are an optimization; on any failure, modules fall back
+        # to raw helpers (which still benefit from v3.6 caching).
+        log_and_print(
+            f"[!] HostFacts computation failed (modules will fall back "
+            f"to raw helpers): {_hf_exc!r}",
+            Colors.YELLOW,
+        )
     
     # ================================================================
     # Execute Modules (Sequential or Parallel)
@@ -3313,11 +3937,159 @@ def main():
     
     # Sort results by module
     all_results.sort(key=lambda r: r.module)
+
+    # v3.9: Normalize remediation guidance across frameworks. The same
+    # underlying fix (e.g. enable ASLR, disable IP forwarding, no
+    # world-writable files) must read identically regardless of which
+    # framework module raised it. This replaces a check's remediation with
+    # the canonical, most-detailed version ONLY when the check is classified
+    # with high confidence into a value-independent topic; framework-specific
+    # values (e.g. PASS_MAX_DAYS) are left untouched.
+    try:
+        from shared_components.canonical_remediations import normalize_remediation
+        _norm_count = 0
+        for _r in all_results:
+            _orig = _r.remediation or ""
+            _new = normalize_remediation(_r.message or "", _r.category or "", _orig)
+            if _new != _orig:
+                _r.remediation = _new
+                _norm_count += 1
+        if _norm_count:
+            logger.info(f"Normalized remediation guidance on {_norm_count} "
+                        f"findings for cross-framework consistency")
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning(f"Remediation normalization skipped: {_exc!r}")
     
     if not all_results:
         print_colored("\n[!] No results generated", Colors.RED)
         return
     
+    # ================================================================
+    # v3.0 Audit Pipeline (correlation enrichment, risk scoring, drift)
+    # ================================================================
+    pipeline_outcome = None
+    try:
+        from shared_components.v3_pipeline import (
+            AuditPipeline, render_pipeline_summary, resolve_bundle_to_findings,
+            build_metadata, export_json_v3,
+        )
+        from shared_components.os_detection import detect_os
+        from shared_components.remediation_bundles import (
+            list_bundles as v3_list_bundles, format_bundle_summary, get_bundle,
+        )
+
+        # Handle --list-bundles short-circuit
+        if getattr(args, 'list_bundles', False):
+            print_banner()
+            print("\nAvailable Remediation Bundles:\n")
+            for bundle_name in v3_list_bundles():
+                bundle = get_bundle(bundle_name)
+                if bundle:
+                    print(format_bundle_summary(bundle))
+                    print()
+            return
+
+        os_info_v3 = detect_os()
+        pipeline = AuditPipeline(
+            threshold=getattr(args, 'threshold', 70.0),
+            validation_strict=getattr(args, 'validate_results', False),
+        )
+        pipeline_outcome = pipeline.run_pipeline(
+            results=all_results,
+            os_info=os_info_v3,
+            baseline_path=getattr(args, 'baseline', '') or '',
+            asset_criticality=getattr(args, 'asset_criticality', 5),
+        )
+
+        # Replace all_results with the enriched (cross-references applied)
+        # version so report generators see the correlations
+        all_results = pipeline_outcome.results
+
+        # Display pipeline summary unless quiet
+        if not getattr(args, 'quiet', False):
+            print()
+            print(render_pipeline_summary(pipeline_outcome))
+
+        # Optional risk priority display
+        if getattr(args, 'show_risk_priority', False):
+            top = sorted(
+                pipeline_outcome.risk_scores.items(),
+                key=lambda kv: kv[1].total, reverse=True
+            )[:25]
+            if top:
+                print("\nTop 25 findings by risk priority:")
+                print("-" * 78)
+                for idx, score in top:
+                    if idx >= len(all_results):
+                        continue
+                    r = all_results[idx]
+                    print(f"  [{score.total:>3}] {r.severity:>13} {r.module:>10} | {r.message[:55]}")
+                print()
+
+        # Optional cross-correlation display
+        if getattr(args, 'show_correlations', False):
+            print("\nCross-framework correlations:")
+            print("-" * 78)
+            shown = 0
+            for r in all_results:
+                if r.cross_references and shown < 50:
+                    print(f"  [{r.module}] {r.message[:60]}")
+                    for fw, cid in sorted(r.cross_references.items()):
+                        print(f"      {fw}: {cid}")
+                    shown += 1
+            if shown >= 50:
+                print(f"  ... output truncated at 50 results")
+            print()
+
+        # Drift report display
+        if pipeline_outcome.drift_report and not getattr(args, 'quiet', False):
+            from shared_components.baseline_compare import format_console_summary
+            print(format_console_summary(pipeline_outcome.drift_report))
+
+        # Bundle resolution feedback
+        if getattr(args, 'remediation_bundle', ''):
+            bundle, matched = resolve_bundle_to_findings(
+                args.remediation_bundle, all_results
+            )
+            if bundle is None:
+                print_colored(
+                    f"\n[!] Unknown remediation bundle: {args.remediation_bundle}",
+                    Colors.RED,
+                )
+                print("    Run with --list-bundles to see available bundles.")
+            else:
+                print(f"\n[*] Bundle '{bundle.name}' matched {len(matched)} findings")
+                if bundle.impact.ssh_continuity_risk:
+                    print_colored(
+                        "    *** WARNING: This bundle may disrupt SSH sessions ***",
+                        Colors.YELLOW,
+                    )
+                if bundle.impact.reboot_required:
+                    print_colored(
+                        "    *** Reboot required for full effect ***",
+                        Colors.YELLOW,
+                    )
+
+    except ImportError as exc:
+        # v3 pipeline modules unavailable; fall through to v2.x behaviour
+        if not getattr(args, 'quiet', False):
+            print(f"[note] v3.0 pipeline unavailable: {exc}; using v2.x flow")
+
+    # v3.7: Apply distribution profile category filter (subtractive only).
+    # This drops AuditResult entries whose category starts with any of the
+    # profile's exclude_categories prefixes. Modules execute fully; the
+    # filter only affects what's reported and counted in statistics.
+    if selected_profile is not None and selected_profile.exclude_categories:
+        before = len(all_results)
+        all_results = _profiles.filter_results(selected_profile, all_results)
+        dropped = before - len(all_results)
+        if dropped > 0 and not getattr(args, 'quiet', False):
+            print_colored(
+                f"[*] Profile '{selected_profile.name}' filtered "
+                f"{dropped} result(s) by category prefix",
+                Colors.CYAN,
+            )
+
     # Calculate execution info
     end_time = datetime.datetime.now()
     duration = end_time - start_time
@@ -3338,7 +4110,7 @@ def main():
     )
 
     # ================================================================
-    # Compliance Scoring
+    # Compliance Scoring (Phase 3.5)
     # ================================================================
     module_compliance = {}
     for mod_name in successful_modules:
@@ -3360,7 +4132,7 @@ def main():
         score.compute(severity_distribution=sev_dist)
         module_compliance[mod_name] = score
 
-    # Overall compliance score
+    # Overall compliance score (3.5.3)
     overall_sev_dist = {'Critical': 0, 'High': 0, 'Medium': 0, 'Low': 0, 'Informational': 0}
     for r in all_results:
         sev = r.severity if r.severity in overall_sev_dist else 'Medium'
@@ -3414,9 +4186,9 @@ def main():
         print_colored(f"\nValidation: {statistics.normalized_results} results normalized", Colors.YELLOW)
     
     # ================================================================
-    # Performance Profile
+    # Performance Profile (NEW in v2.0)
     # ================================================================
-    if args.profile or args.verbose:
+    if args.perf_profile or args.verbose:
         print_colored("\n  Performance Profile:", Colors.WHITE, bold=True)
         
         # Cache statistics
@@ -3461,10 +4233,80 @@ def main():
     
     # Export results
     if args.output_format != "Console":
-        output_path = export_results(all_results, execution_info, args.output_format, args.output_path)
-        if output_path and output_path.exists():
-            print_colored(f"[*] Report saved to: {output_path.absolute()}", Colors.CYAN)
-    
+        split_reports_requested = (
+            getattr(args, 'split_reports', False) or
+            getattr(args, 'split_only', False)
+        )
+        # Combined all-in-one report (unless --split-only)
+        if not getattr(args, 'split_only', False):
+            output_path = export_results(all_results, execution_info, args.output_format, args.output_path)
+            if output_path and output_path.exists():
+                print_colored(f"[*] Report saved to: {output_path.absolute()}", Colors.CYAN)
+
+        # v3.8: Per-framework split reports
+        if split_reports_requested:
+            split_paths = export_split_reports(
+                all_results, execution_info, args.output_format,
+                module_compliance=module_compliance,
+            )
+            if split_paths:
+                print_colored(
+                    f"[*] {len(split_paths)} per-framework report(s) saved to: "
+                    f"{(REPORT_DIR / 'by-framework').absolute()}",
+                    Colors.CYAN,
+                )
+                for p in split_paths:
+                    print_colored(f"      - {p.name}", Colors.GRAY)
+            elif getattr(args, 'split_only', False):
+                print_colored(
+                    "[!] --split-only: only one framework was selected; "
+                    "no split needed (use the combined report).",
+                    Colors.YELLOW,
+                )
+
+    # v3.8: Attack-surface assessment report
+    if getattr(args, 'attack_surface', False):
+        try:
+            from shared_components import attack_surface as _as_mod
+            surface = _as_mod.build_attack_surface(
+                all_results, shared_data.get("host_facts"),
+            )
+            hostname = get_safe_hostname()
+            timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            REPORT_DIR.mkdir(mode=0o755, exist_ok=True)
+            as_html_path = REPORT_DIR / (
+                f"Attack-Surface-{hostname}-{timestamp}.html"
+            )
+            as_json_path = REPORT_DIR / (
+                f"Attack-Surface-{hostname}-{timestamp}.json"
+            )
+            with open(as_html_path, 'w', encoding='utf-8') as f:
+                f.write(_as_mod.render_attack_surface_html(
+                    surface, execution_info))
+            import json as _json
+            with open(as_json_path, 'w', encoding='utf-8') as f:
+                _json.dump(_as_mod.attack_surface_to_dict(surface), f, indent=2)
+            for p in (as_html_path, as_json_path):
+                try:
+                    os.chmod(p, 0o644)
+                except OSError:
+                    pass
+            print_colored(
+                f"[*] Attack-surface assessment: "
+                f"{surface.overall_rating} exposure "
+                f"({surface.overall_score:.0f}/100)",
+                Colors.CYAN,
+            )
+            print_colored(
+                f"[*] Attack-surface report saved to: {as_html_path.absolute()}",
+                Colors.CYAN,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print_colored(
+                f"[!] Attack-surface report generation failed: {exc!r}",
+                Colors.YELLOW,
+            )
+
     log_and_print("\n[+] Audit completed successfully!", Colors.GREEN)
     if not is_root:
         print_colored("[*] Tip: Run with 'sudo' for complete security assessment and remediation", Colors.CYAN)
@@ -3485,7 +4327,3 @@ if __name__ == "__main__":
         print_colored("\nStack Trace:", Colors.YELLOW)
         traceback.print_exc()
         sys.exit(1)
-
-# ============================================================================
-# End of linux_security_audit.py
-# ============================================================================
