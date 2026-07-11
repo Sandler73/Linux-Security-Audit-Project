@@ -97,7 +97,7 @@ Whether you're conducting compliance audits, hardening systems, maintaining secu
 * [x] **Helper Caching Layer (v3.6)** - per-process cache on `command_available`, `systemd_active`, `run_command`, `read_sysctl`, `read_file_safe`, `file_exists`, `directory_exists` for 5-30x speedup on multi-module runs
 * [x] **Cross-Module Correlation (v3.7)** - `HostFacts` registry computes ~80 derived host facts (FIM presence, FIPS state, MAC enforcement, firewall tool, container runtime, K8s indicators, tool inventories) once at audit start; modules consume from `shared_data["host_facts"]` instead of re-deriving
 
-### **Per-Framework Split Reports (v3.8)**
+### **Per-Framework Split Reports**
 
 * [x] **`--split-reports`** - one focused report per framework in `reports/by-framework/`, alongside the combined report
 * [x] **`--split-only`** - generate only the per-framework reports
@@ -135,7 +135,7 @@ no duplicate checks.
   * **AS-010 Shared objects / linker** - insecure `ld.so` configuration and
     writable library paths
 
-### **Distribution Profiles (v3.7)**
+### **Distribution Profiles**
 
 * [x] **Eight Built-in Profiles** - `generic`, `rhel9`, `rhel8`, `ubuntu24`, `ubuntu22`, `debian12`, `alpine`, `suse15`
 * [x] **Subtractive-Only Filtering** - profiles exclude inapplicable categories; never add or modify checks
