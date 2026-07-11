@@ -36,19 +36,19 @@ We are committed to providing a welcoming and inspiring community for all. We pl
 
 **Positive behaviors include:**
 
-- ✅ Using welcoming and inclusive language
-- ✅ Being respectful of differing viewpoints and experiences
-- ✅ Gracefully accepting constructive criticism
-- ✅ Focusing on what is best for the community
-- ✅ Showing empathy towards other community members
-- ✅ Providing helpful and actionable feedback
+- [x] Using welcoming and inclusive language
+- [x] Being respectful of differing viewpoints and experiences
+- [x] Gracefully accepting constructive criticism
+- [x] Focusing on what is best for the community
+- [x] Showing empathy towards other community members
+- [x] Providing helpful and actionable feedback
 
 **Unacceptable behaviors include:**
 
-- ❌ Trolling, insulting/derogatory comments, and personal or political attacks
-- ❌ Public or private harassment
-- ❌ Publishing others' private information without explicit permission
-- ❌ Other conduct which could reasonably be considered inappropriate
+- [ ] Trolling, insulting/derogatory comments, and personal or political attacks
+- [ ] Public or private harassment
+- [ ] Publishing others' private information without explicit permission
+- [ ] Other conduct which could reasonably be considered inappropriate
 
 ### Enforcement
 
@@ -58,7 +58,7 @@ Project maintainers have the right and responsibility to remove, edit, or reject
 
 There are many ways to contribute to this project:
 
-### 🐛 Reporting Bugs
+### Reporting Bugs
 
 Found a bug? Help us fix it!
 
@@ -103,7 +103,7 @@ Paste error messages here
 Screenshots, logs, or other relevant information.
 ```
 
-### 💡 Suggesting Features
+### Suggesting Features
 
 Have an idea? We'd love to hear it!
 
@@ -140,7 +140,7 @@ How does this help the community?
 Mockups, examples, or related features.
 ```
 
-### 📝 Improving Documentation
+### Improving Documentation
 
 Documentation improvements are always welcome!
 
@@ -158,7 +158,7 @@ Documentation improvements are always welcome!
 3. Submit pull request with clear description
 4. Reference specific sections changed
 
-### 💻 Writing Code
+### Writing Code
 
 Contributing code? Awesome! Here's how:
 
@@ -175,7 +175,7 @@ Look for issues labeled [`good first issue`](https://github.com/Sandler73/Linux-
 - **Testing**: Add unit or integration tests
 - **Features**: Implement requested enhancements
 
-### 🧪 Testing
+### Testing
 
 Help us maintain quality by testing:
 
@@ -185,7 +185,7 @@ Help us maintain quality by testing:
 - **Performance Testing**: Test on large systems
 - **Security Testing**: Look for security issues
 
-### 🌐 Community Support
+### Community Support
 
 Help others in the community:
 
@@ -209,10 +209,10 @@ Help others in the community:
    ```bash
    # Python 3.7+
    python3 --version
-   
+
    # Git
    git --version
-   
+
    # Text editor (your choice)
    vim, nano, VS Code, PyCharm, etc.
    ```
@@ -248,6 +248,8 @@ Help others in the community:
 
 2. **Verify setup**:
    ```bash
+   ls modules/ shared_components/
+   ls modules/ shared_components/
    ls modules/ shared_components/
    python3 linux_security_audit.py --list-modules
    ```
@@ -431,10 +433,10 @@ MAX_RETRIES = 3
 
 class SecurityChecker:
     """Security check implementation"""
-    
+
     def __init__(self, config: Dict):
         self.config = config
-    
+
     def check_setting(self, name: str) -> bool:
         """Check a specific setting"""
         return True
@@ -464,7 +466,7 @@ PARAMETERS:
     shared_data : Dictionary containing shared data
 
 USAGE:
-    python3 module_name.py
+    python3 modules/module_name.py
 
 NOTES:
     Version, standards, references
@@ -476,14 +478,14 @@ NOTES:
 def function_name(param1: str, param2: int) -> List[AuditResult]:
     """
     Brief description of function purpose
-    
+
     Args:
         param1: Description of first parameter
         param2: Description of second parameter
-        
+
     Returns:
         Description of return value
-        
+
     Raises:
         ExceptionType: When this exception is raised
     """
@@ -557,6 +559,38 @@ def check_function(shared_data: Dict[str, Any]) -> List[AuditResult]:
 
 ## Testing Guidelines
 
+### Automated Mock Tests (v3.4+)
+
+The `tests/` directory contains stdlib-only test runners - no external
+dependencies required. Run them before submitting changes that touch
+`shared_components/os_detection.py` or
+`shared_components/remediation_library.py`:
+
+```bash
+# Run OS detection mock tests (25 tests covering 23 distributions)
+python3 tests/test_os_detection.py
+
+# Run remediation library tests (12 tests covering per-family parity)
+python3 tests/test_remediation_library.py
+
+# Run the full-suite end-to-end smoke test (all 16 modules, asserts no
+# mid-run aborts and per-module check floors)
+python3 tests/test_end_to_end.py
+```
+
+When adding a new distribution to `os_detection.py`, also add a mock
+fixture in `tests/test_os_detection.py` so the family classification is
+regression-tested.
+
+When adding a new tool to `remediation_library.py`, ensure that:
+
+- `primary_packages` is set for at least one family
+- If the tool is a daemon, `services` is set and `verify` includes a
+  `systemctl is-active` line for each systemd family
+- If the tool is service-named differently across families
+  (e.g. clamav-daemon vs clamd), the `services` list and `verify`
+  dict reflect the per-family difference
+
 ### Manual Testing Checklist
 
 Before submitting, test your changes:
@@ -564,23 +598,37 @@ Before submitting, test your changes:
 - [ ] Module runs standalone: `python3 modules/module_name.py`
 - [ ] Module discovered: `python3 linux_security_audit.py --list-modules`
 - [ ] Module integrates: `python3 linux_security_audit.py -m NAME`
-- [ ] Module works with caching: `python3 linux_security_audit.py -m NAME --profile`
+- [ ] Module works with caching: `python3 linux_security_audit.py -m NAME --perf-profile`
 - [ ] Works without root (graceful degradation)
 - [ ] Works with root (full functionality)
 - [ ] All output formats work (HTML, CSV, JSON, XML, Console)
 - [ ] Compliance scores compute correctly
-- [ ] Remediation commands are valid
+- [ ] Remediation commands are valid and OS-aware - use the library
+      wrappers rather than hardcoded package-manager strings:
+        - `remediation_for("tool_id")` to install/enable a tool
+        - `removal_for("canonical_token")` to remove an insecure package
+          (resolves the correct per-distro package name)
+        - `patch_for()` to apply security updates
+      Overlapping checks across frameworks (e.g. a CIS check and a Core
+      check for the same control) MUST emit identical guidance - this is
+      guaranteed automatically when both route through the library.
 - [ ] No hardcoded paths
 - [ ] No security vulnerabilities
 - [ ] Documentation updated
+- [ ] Mock tests still pass (`python3 tests/test_os_detection.py`,
+      `python3 tests/test_remediation_library.py`)
 
 ### Testing on Multiple Distributions
 
 If possible, test on:
-- Ubuntu/Debian
-- RHEL/CentOS
+
+- Ubuntu/Debian (apt family)
+- RHEL/Rocky/AlmaLinux (dnf family)
 - Fedora
-- At least one non-systemd system (if relevant)
+- openSUSE Leap or Tumbleweed (zypper family)
+- Arch or Manjaro (pacman family)
+- Alpine (apk family)
+- At least one non-systemd system (Alpine + OpenRC)
 
 ### Test Cases to Consider
 
@@ -668,7 +716,7 @@ docs: Update troubleshooting guide
 3. **Feedback**: You may receive change requests
 4. **Iteration**: Make requested changes, push updates
 5. **Approval**: Once approved, maintainers merge
-6. **Recognition**: You're added as a contributor! 🎉
+6. **Recognition**: You're added as a contributor! 
 
 ### Responding to Feedback
 
@@ -784,14 +832,16 @@ If you have questions about contributing:
 
 ---
 
-## Thank You! 🙏
+## Thank You! 
 
 Your contributions make this project better for everyone. Whether you're fixing a typo, adding a feature, or helping others, your time and effort are greatly appreciated.
 
-**Happy Contributing!** 🚀
+**Happy Contributing!** 
 
 ---
 
-**Last Updated**: March 2, 2026  
+**Last Updated**: March 2, 2026
 **Maintained By**: Sandler73
+**Version**: 2.0
+**Version**: 2.0
 **Version**: 2.0
