@@ -1,98 +1,161 @@
 #!/usr/bin/env python3
 """
 linux_security_audit.py
-Comprehensive Linux Security Audit Script
-Version: 2.0
+Linux Security Audit Script - Orchestrator
+Version: 3.9
 GitHub: https://github.com/Sandler73/Linux-Security-Audit-Project.git
+License: MIT
+Maintained by: Sandler73
 
 SYNOPSIS:
-    Comprehensive module-based Linux security audit script supporting multiple compliance frameworks.
+    Module-based Linux security and compliance audit orchestrator supporting
+    16 security frameworks, five output formats, cross-framework correlation,
+    risk scoring, an attack-surface assessment, per-framework split reports,
+    per-distribution profiles, and automated/interactive remediation with
+    rollback generation.
 
 DESCRIPTION:
-    This script audits Linux systems against multiple security frameworks including:
-    - Core Security (baseline checks)
-    - CIS Benchmarks
-    - CISA Best Practices
-    - DISA STIGs
-    - ENISA Cybersecurity Guidelines
-    - ISO/IEC 27001 Information Security Management
-    - NIST Cybersecurity Framework
-    - NSA Cybersecurity Guidance
-  - PCI DSS v4.0.1
-    
+    This orchestrator discovers and runs the framework modules in modules/,
+    aggregates their AuditResult objects, runs the post-execution pipeline
+    (validation, cross-framework correlation, risk scoring, compliance
+    scoring, optional baseline diff), and produces reports. It audits Linux
+    systems against the following 16 frameworks:
+
+    - Core         : Foundational Linux security baseline + attack surface
+    - CIS          : CIS Benchmarks + CIS Controls v8 IG3
+    - CISA         : CISA CPGs, ZTMM, KEV, Stop Ransomware, Secure by Design
+    - ENISA        : ENISA guidelines + NIS2 + Cyber Resilience Act + DORA
+    - ISO27001     : ISO/IEC 27001:2022 Annex A (+ 27017/27018/27701)
+    - NIST         : NIST 800-53 R5, CSF 2.0, 800-171, 800-207, SSDF 800-218
+    - NSA          : NSA guidance + CNSA 2.0 + K8s hardening + encrypted DNS
+    - STIG         : DISA STIGs (V-numbers) + SRG-APP families
+    - ACSC         : ACSC Essential Eight (ML1-ML3) + ISM
+    - CMMC         : CMMC 2.0 (L1/L2/L3) + NIST 800-171/800-172 + DFARS
+    - DistBaseline : Per-distribution hardening (Debian/RHEL/SUSE/Arch)
+    - EDR          : EDR posture + MITRE ATT&CK technique coverage
+    - GDPR         : GDPR Article 32 technical measures + breach detection
+    - HIPAA        : HIPAA Security Rule (45 CFR Part 164) + 405(d) HICP
+    - PCI-DSS      : PCI DSS v4.0.1 (Requirements 1-12)
+    - SOC2         : AICPA SOC 2 Trust Services Criteria (CC1-CC9 + A/C/PI/P)
+
     Features:
-    - Multi-format output (HTML, CSV, JSON, XML, Console)
-    - Interactive HTML reports with filtering, sorting, and export
-    - Automated and interactive remediation
-    - Selective issue remediation from exported JSON
-    - Dark/Light theme support in HTML reports
-    - Comprehensive logging and statistics
-    - SharedDataCache for performance (reads configs/commands once, shares across modules)
-    - Parallel module execution for faster audits
-    - Structured logging with file and console output
-    - Severity levels and cross-framework control mapping
+    - Five output formats: HTML, CSV, JSON, XML, Console (+ companion JSON)
+    - Interactive HTML report (dark/light theme, filtering, sorting, column
+      controls, client-side search, and CSV/JSON/XML export)
+    - Per-module summary tiles and priority-ranked top findings in HTML
+    - Three compliance scores (simple, status-weighted, severity-adjusted)
+      with a configurable pass/fail threshold
+    - Cross-framework control correlation (correlation registry, 158 topics)
+    - Risk prioritization (1-100 risk scoring with asset criticality)
+    - Attack-surface assessment report (10 exposure domains) via
+      --attack-surface
+    - Per-framework split reports via --split-reports / --split-only
+    - Per-distribution audit profiles (18 built-in) via --profile
+    - Canonical cross-framework remediation normalization
+    - Automated and interactive remediation, remediation bundles, and
+      generated rollback scripts
+    - Baseline drift comparison between audit runs
+    - SharedDataCache and a per-process helper cache for performance
+    - Parallel module execution
+    - Structured logging (console + file, optional JSON for SIEM)
+    - Zero external dependencies (Python standard library only)
 
 PARAMETERS:
-    --modules, -m          : Comma-separated list of modules (Core,CIS,NIST,STIG,NSA,CISA,PCIDSS,...,All)
-    --output-format, -f    : Output format (HTML,CSV,JSON,XML,Console)
-    --output-path, -o      : Path for output file
+    Module selection and output:
+    -m, --modules LIST     : Comma-separated modules to run, or All (default:
+                             All). Accepts module names and aliases, e.g.
+                             Core,CIS,NIST,STIG,NSA,CISA,PCIDSS,HIPAA,SOC2
+    --list-modules         : List all discovered modules and exit
+    -f, --output-format FMT: HTML | CSV | JSON | XML | Console (default: HTML)
+    -o, --output-path PATH : Output file path (default: auto-generated)
+
+    Reports:
+    --split-reports        : Also write one focused report per framework into
+                             reports/by-framework/, alongside the combined one
+    --split-only           : Write only the per-framework reports
+    --attack-surface       : Generate the attack-surface assessment report
+                             (HTML + JSON) synthesizing exposure across domains
+
+    Profiles and performance:
+    --profile NAME         : Apply a per-distribution audit profile (e.g.
+                             generic, rhel9, rhel8, ubuntu24, ubuntu22,
+                             debian12, alpine, suse15, fedora, rocky, ...)
+    --list-profiles        : List all available --profile values and exit
+    --parallel             : Execute modules in parallel
+    --workers N            : Number of parallel workers (default: auto)
+    --no-cache             : Disable the shared/helper caches (debugging)
+    --perf-profile         : Show per-module timing/performance breakdown
+                             (alias: --profile-perf)
+
+    Scoring, correlation, and validation:
+    --threshold PCT        : Compliance pass/fail threshold (default: 70.0)
+    --asset-criticality N  : Asset criticality 1-10 for risk scoring
+                             (default: 5)
+    --show-risk-priority   : Print the risk-prioritized findings list
+    --show-correlations    : Include cross-framework correlations in output
+    --validate-results     : Run strict result validation in the pipeline
+
+    Remediation, bundles, baseline, rollback:
     --remediate            : Interactively remediate failed checks
     --remediate-fail       : Remediate only FAIL status issues
     --remediate-warning    : Remediate only WARNING status issues
     --remediate-info       : Remediate only INFO status issues
-    --auto-remediate       : Automatically remediate without prompting
-    --remediation-file     : JSON file with specific issues to remediate
-    --parallel             : Execute modules in parallel for faster completion
-    --workers N            : Number of parallel workers (default: 4, max: 16)
-    --no-cache             : Disable shared data caching (for debugging)
-    --perf-profile         : Show detailed timing/performance breakdown
-    --profile NAME         : Apply per-distribution audit profile (rhel9, ubuntu24, etc.)
-    --list-profiles        : List all available --profile values
-    --log-level LEVEL      : Logging verbosity (DEBUG, INFO, WARNING, ERROR)
-    --log-file PATH        : Write detailed log to file
-    --json-log             : Use JSON format for log file (for SIEM)
-    -v, --verbose          : Enable verbose output (log level DEBUG)
-    -q, --quiet            : Suppress informational output (log level WARNING)
+    --auto-remediate       : Remediate without prompting (with safety checks)
+    --remediation-file F   : JSON file listing specific issues to remediate
+    --remediation-bundle B : Apply a predefined remediation bundle
+    --list-bundles         : List available remediation bundles and exit
+    --baseline PATH        : Prior audit JSON to compare against (drift report)
+    --rollback-path PATH   : Path to write the generated rollback script
+
+    Logging:
+    --log-level LEVEL      : DEBUG | INFO | WARNING | ERROR (default: INFO)
+    --log-file PATH        : Write a detailed log to this file
+    --json-log             : Use JSON-structured log output (for SIEM)
+    -v, --verbose          : Verbose output (log level DEBUG)
+    -q, --quiet            : Suppress non-essential output (log level WARNING)
 
 EXAMPLES:
     python3 linux_security_audit.py
         Run all modules with default HTML output
-    
-    python3 linux_security_audit.py -m Core,NIST,CISA -f CSV
+
+    sudo python3 linux_security_audit.py -m Core,NIST,CISA -f CSV
         Run specific modules and output to CSV
-    
-    python3 linux_security_audit.py --parallel --workers 8
+
+    sudo python3 linux_security_audit.py --parallel --workers 8
         Run all modules in parallel with 8 workers
-    
-    python3 linux_security_audit.py --perf-profile -v
-        Run with verbose output and performance profiling
-    
-    python3 linux_security_audit.py -f XML
-        Generate XML report suitable for SIEM ingestion
-    
-    python3 linux_security_audit.py --remediate-fail --auto-remediate
-        Automatically remediate all FAIL status issues with safety confirmations
-    
-    python3 linux_security_audit.py --auto-remediate --remediation-file selected-issues.json
-        Automatically remediate only specific issues from exported JSON file
-    
-    python3 linux_security_audit.py --log-file audit.log --json-log
-        Run with JSON-structured log file for SIEM ingestion
+
+    sudo python3 linux_security_audit.py --profile rhel9 --threshold 80
+        Apply the RHEL 9 profile and require 80% to pass
+
+    sudo python3 linux_security_audit.py --modules CIS,STIG,PCIDSS --split-reports
+        Produce the combined report plus one report per framework
+
+    sudo python3 linux_security_audit.py --attack-surface
+        Generate the attack-surface assessment report
+
+    sudo python3 linux_security_audit.py --baseline prior-audit.json
+        Compare this run against a previous audit and report drift
+
+    sudo python3 linux_security_audit.py --auto-remediate --remediation-file selected.json
+        Automatically remediate specific issues exported from a report
 
 NOTES:
-    Requires: Linux (Ubuntu/Debian/RHEL/CentOS/Fedora), Python 3.6+
-    Run with sudo/root for complete results and remediation capabilities
-    
+    Requires: Linux, Python 3.7+ (uses dataclasses). Zero external
+    dependencies (standard library only).
+    Run with sudo/root for complete results and for remediation.
+
     PERFORMANCE:
-    When audit_common.py is present, the SharedDataCache pre-reads common
-    configuration files and commands once, then shares them across all modules.
-    This typically reduces execution time by 50-70%.
-    
+    The SharedDataCache pre-reads common configuration files and commands
+    once and shares them across modules; a per-process helper cache further
+    deduplicates command/file/sysctl lookups. Together these substantially
+    reduce execution time on multi-module runs.
+
     REMEDIATION WORKFLOW:
-    1. Run audit: python3 linux_security_audit.py
-    2. Review HTML report and select specific issues to fix
-    3. Export selected issues to JSON using "Export Selected" button
-    4. Run auto-remediation: python3 linux_security_audit.py --auto-remediate --remediation-file Selected-Report.json
+    1. Run the audit and review the HTML report.
+    2. Select specific findings and use "Export Selected" to write a JSON file.
+    3. Apply fixes: python3 linux_security_audit.py --auto-remediate
+       --remediation-file <exported>.json
+    4. A rollback script can be generated (--rollback-path) to reverse changes.
 """
 
 import os
@@ -145,7 +208,7 @@ except ImportError:
 # ============================================================================
 # Configuration
 # ============================================================================
-SCRIPT_VERSION = "2.0"
+SCRIPT_VERSION = "3.9"
 SCRIPT_PATH = Path(__file__).parent.absolute()
 LOG_DIR = SCRIPT_PATH / "logs"
 REPORT_DIR = SCRIPT_PATH / "reports"
@@ -503,7 +566,7 @@ def print_banner():
     print()
     print_colored("=" * 100, Colors.CYAN)
     print_colored(f"                     Linux Security Audit Script v{SCRIPT_VERSION}", Colors.CYAN)
-    print_colored("                  Comprehensive Multi-Framework Security Assessment", Colors.CYAN)
+    print_colored("                  Multi-Framework Security Assessment", Colors.CYAN)
     print_colored("=" * 100, Colors.CYAN)
     print_colored("\nSupported Frameworks:", Colors.WHITE, bold=True)
     print_colored("  - Core Security Baseline", Colors.GRAY)
@@ -1140,7 +1203,7 @@ def invoke_remediation(results: List[AuditResult], args: argparse.Namespace):
 # ============================================================================
 # HTML Report Generation
 # ============================================================================
-def generate_html_report(all_results: List[AuditResult], execution_info: ExecutionInfo) -> str:
+def generate_html_report(all_results: List[AuditResult], execution_info: ExecutionInfo, subtitle: str = "Multi-Framework Security Assessment") -> str:
     """
     Generate comprehensive interactive HTML security audit report.
 
@@ -2567,7 +2630,7 @@ def generate_html_report(all_results: List[AuditResult], execution_info: Executi
     <!-- 3.2.17: Full-width header -->
     <div class="page-header">
         <h1>Linux Security Audit Report</h1>
-        <div class="subtitle">Comprehensive Multi-Framework Security Assessment</div>
+        <div class="subtitle">{subtitle}</div>
     </div>
 
     <div class="container">
@@ -3381,7 +3444,9 @@ def export_split_reports(all_results: List[AuditResult],
             f"{safe_mod}-Audit-{hostname}-{timestamp}.{extension}"
         )
         if output_format == "HTML":
-            content = generate_html_report(mod_results, mod_info)
+            content = generate_html_report(
+                mod_results, mod_info,
+                subtitle=f"{mod_name}-Oriented Security Assessment")
             with open(out_path, 'w', encoding='utf-8') as f:
                 f.write(content)
         elif output_format == "CSV":
@@ -3498,7 +3563,7 @@ def main():
         pass  # Older module_helpers without v3.6 caches; harmless.
 
     parser = argparse.ArgumentParser(
-        description='Comprehensive Linux Security Audit Script',
+        description='Linux Security Audit Script - multi-framework Linux security and compliance assessment',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
