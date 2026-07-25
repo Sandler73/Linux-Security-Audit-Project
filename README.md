@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/header-lsap.png" alt="Linux Security Audit Project" width="75%" />
+  <img src="assets/Linux-Security-Audit-Project-Banner.png" alt="Linux Security Audit Project" width="75%" />
 </p>
 
 ---
