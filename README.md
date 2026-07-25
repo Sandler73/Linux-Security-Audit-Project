@@ -4,7 +4,7 @@
 
 ---
 
-# Linux Security Audit Project
+<h1 align="center">Linux Security Audit Project</h1>
 
 <div align="center">
   
